@@ -18,9 +18,10 @@ The `deploy_agent` steps name no agent, so agent-env deploys your configured def
 default_a2a_agent_id` in `.agentenv/config.toml`); it must take the env's MCP server
 (`urn:agentenv:mcp-config/v1`).
 
-`wc3-verifier` grades a game: a win counts three times as much as not being defeated or outscoring the AI on the
-game's own score total, and two gates zero the grade: the game stopped working, or the agent gave no orders (or the
-harness played part of its game).
+`rts_grade` (rubric `melee`) grades a game: a win counts three times as much as not being defeated or outscoring the
+AI on the game's own score total (`at_time_limit: draw`: an undecided game is no win), and two gates zero the grade:
+the game stopped working, or the agent gave no orders (or the harness played part of its game). `smoke` is graded
+by the `smoke` rubric.
 
 - `macro-micro-quick`, `macro-micro` and `macro-micro-realtime`: the `wc3-macro-micro` agent (wc3env's wc3agent:
   a macro model plans, a micro model controls the army) plays through the env's `urn:rts` session, Haiku 4.5 for both

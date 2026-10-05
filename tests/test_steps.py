@@ -1,9 +1,7 @@
-"""The task steps and verifiers against the env served over HTTP (on wc3env's fake game), with agent-env's local
-stores."""
+"""The task steps against the env served over HTTP (on wc3env's fake game), with agent-env's local stores."""
 
 import asyncio
 import base64
-import importlib.util
 import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,19 +15,13 @@ from agent_env.task_step.registry import get_task_step_registry
 from agentenv_protocol import AgentEnvEnvironment, client, environment_card, extension
 from agentenv_protocol.types import WELL_KNOWN_PATH
 
+from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_wc3.server import IDLE_EXTENSION, WC3Env
 from agentenv_wc3.steps import REPLAY_EXTENSION, SaveWC3ReplayTaskStep, WC3MatchTaskStep, read_license
 
 pytestmark = pytest.mark.anyio
 
 BUNDLE = Path(__file__).resolve().parents[1] / "src/agentenv_wc3/bundles/wc3"
-
-
-def verifier(name: str):
-    spec = importlib.util.spec_from_file_location(name, BUNDLE / "artifacts" / name / "verify.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 @asynccontextmanager
@@ -66,7 +58,7 @@ def test_the_steps_are_registered():
     assert step.to_dict()["ai_difficulty"] == "easy" and step.to_dict()["map"] == "(2)EchoIsles.w3x"
 
 
-async def test_match_then_idle_passes_the_smoke_verifier(env_vars, license_dir):
+async def test_match_then_idle_passes_the_smoke_rubric(env_vars, license_dir):
     env = WC3Env()
     step = WC3MatchTaskStep(id="match", version=None, env_id="wc3", seed=4, time_limit_seconds=90)
     async with deployed(env) as record:
@@ -76,12 +68,15 @@ async def test_match_then_idle_passes_the_smoke_verifier(env_vars, license_dir):
         result = await client.invoke_extension(record.environment_url, record.environment_card, IDLE_EXTENSION,
                                                {"seconds": 300})
         assert result["played_seconds"] == 90 and result["result"] == "time_limit"
-        rows = await verifier("smoke-verifier").verify(record.mcp_url)
-        assert all(r["result"] for r in rows), rows
-        # The agents' verifier sees a game the harness played, and gives it nothing.
-        rows = await verifier("wc3-verifier").verify(record.mcp_url)
-        gate = next(r for r in rows if r["criterion"].startswith("the agent played"))
-        assert gate["result"] is False and gate["weight"] < 0
+        smoke = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3", rubric="smoke").execute(
+            run_context(record))
+        [verification] = smoke.metadata["verifications"].values()
+        assert verification["score"] == 1 and all(r["result"] for r in verification["results"]), verification
+        # The agents' rubric sees a game the harness played, and gives it nothing.
+        melee = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3").execute(run_context(record))
+        [verification] = melee.metadata["verifications"].values()
+        gate = next(r for r in verification["results"] if r["name"] == "agent_played")
+        assert gate["result"] is False and verification["score"] == 0
 
 
 async def test_a_match_without_activation_files_plays_the_fake_game_and_the_real_one_refuses(
@@ -125,19 +120,6 @@ async def test_the_replay_becomes_a_file_artifact(local_stores):
     assert FileArtifact.get(saved[0]["artifact_id"], saved[0]["version"]).load() == b"W3G replay"
 
 
-def test_the_verifier_rewards_a_win_most():
-    grade = verifier("wc3-verifier").grade
-    base = {"game_over": True, "score": {"total": 900}, "opponent_score": {"total": 1800}, "engine_failed": False,
-            "harness": {"orders_sent": 40, "idle_seconds": 0}}
-    won = grade({**base, "result": "victory"})
-    lost = grade({**base, "result": "defeat"})
-    undecided = grade({**base, "result": "time_limit"})
-    assert all(r["result"] for r in won if r["criterion"] != "outscored the AI on the game's score total")
-    assert not next(r for r in lost if r["criterion"] == "not defeated")["result"]
-    outscored = next(r for r in undecided if r["criterion"].startswith("outscored"))
-    assert outscored["score"] == 0.5 and outscored["result"] is False
-
-
 async def test_a_game_without_a_replay_saves_nothing_and_says_why(env_vars, license_dir, local_stores, caplog):
     env = WC3Env()
     async with deployed(env) as record:
@@ -151,7 +133,7 @@ async def test_a_game_without_a_replay_saves_nothing_and_says_why(env_vars, lice
 
 
 @pytest.mark.parametrize("task", sorted(p.stem for p in (BUNDLE / "tasks").glob("*.json")))
-def test_every_bundle_task_loads_and_saves_its_replay_and_recording(local_stores, task):
+def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(local_stores, task):
     import json
 
     steps = json.loads((BUNDLE / "tasks" / f"{task}.json").read_text())
@@ -163,6 +145,9 @@ def test_every_bundle_task_loads_and_saves_its_replay_and_recording(local_stores
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
     by_type = {s["type"]: s for s in steps}
     assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
+    grade = by_type["rts_grade"]
+    assert grade["id"] == "grade" and (grade["rubric"], grade["verifier_id"]) == (
+        ("smoke", "smoke") if task == "smoke" else ("melee", "wc3"))
     if task.startswith("macro-micro"):
         agent = by_type["deploy_agent"]
         assert agent["a2a_agent_id"] == "wc3-macro-micro" and agent["env_vars"]["WC3_MICRO_MODEL"]

@@ -143,8 +143,10 @@ To go out live, drop `--offline` and give it a stream key: `--to twitch`, `--to 
   self-contained HTML replay), as file artifacts. `macro-micro-realtime` also saves the game's own video, with a
   chapter at each major moment, and a highlight reel of at most two minutes cut from it; its HTML replay plays the
   video beside the map when both files are in one folder.
-- **Grading:** `wc3-verifier` grades the game.
+- **Grading:** `rts_grade`'s `melee` rubric grades the game (`smoke` has its own rubric).
   - A win counts three times as much as not being defeated or as outscoring the AI.
+  - An undecided game at the time limit is a draw: outscoring the AI earns its part, a win needs every enemy building
+    destroyed.
   - The grade is 0 if the game stopped working, if the agent gave no orders, or if the harness played part of the
     game.
 
@@ -275,9 +277,9 @@ flowchart LR
 | AgentEnv piece | Here |
 |---|---|
 | Environment | `src/agentenv_wc3/server.py`: six MCP tools; `data/get` (result, both sides' score counters, the harness's counters); the extensions `urn:wc3:new-game/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1` and `urn:rts:debug/v1`; `urn:rts:recording/v1`; and `/live` |
-| Task steps | `wc3_match` (starts the game in `stepping` or `realtime` mode and sends any activation files) and `save_wc3_replay`, in `steps.py`; `save_rts_recording`, in `agentenv_rts/steps.py` |
+| Task steps | `wc3_match` (starts the game in `stepping` or `realtime` mode and sends any activation files) and `save_wc3_replay`, in `steps.py`; `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
 | Agent | `agents/wc3-player`: `wc3-macro-micro` |
-| Tasks and verifiers | `src/agentenv_wc3/bundles/wc3/` |
+| Tasks | `src/agentenv_wc3/bundles/wc3/` |
 | CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch`, `stream`, `recordings` |
 
 [docs/protocol.md](docs/protocol.md) is the worker's protocol.
@@ -296,6 +298,7 @@ flowchart LR
 | `highlights.py` | A match's major moments on its video's clock: chapters embedded in the video and a highlight reel (ffmpeg) |
 | `streamer/` | The streamer image: any env's `/live?stream` to RTMP servers and a recording, encoded once, with the casters |
 | `steps.py` | `save_rts_recording`: the recording as file artifacts |
+| `grade.py` | `rts_grade`: grades each agent seat from the env's `data/get` summary with a rubric set in the task (`melee`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets, time-limit rule and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 
 A game supplies an adapter from its observations to the timeline (here `agentenv_wc3/frames.py`), serves the session
@@ -304,7 +307,8 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
 ## Not done yet
 
 [docs/task-design.md](docs/task-design.md) is the target for tasks: seats for any mix of agents and the
-game's AI, staged drills (wc3agent's 25 scenarios as tasks), and grading configured in the task.
+game's AI, and staged drills (wc3agent's 25 scenarios as tasks). Grading configured in the task (`rts_grade`) is
+done; its per-seat metrics wait for the env's per-seat summary.
 
 - **Container options.** wc3env runs its worker with `--shm-size 256m` and `--init`; agent-env's `server`
   provider sets neither, and the real game has run without them so far.

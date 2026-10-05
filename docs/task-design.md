@@ -1,7 +1,7 @@
 # Task design (target)
 
-The target for how Warcraft III tasks are built. Not implemented yet: today's tasks are the two-seat case of it
-(the shorthand below) and are graded by `wc3-verifier`. The phases at the end say what lands when.
+The target for how Warcraft III tasks are built. Not implemented yet but for `rts_grade`, which grades today's tasks:
+they are the two-seat case of it (the shorthand below). The phases at the end say what lands when.
 
 ## Principles
 
@@ -37,7 +37,7 @@ deploy_env ─┬─ deploy_agent (one per agent seat, the scripted opponent inc
 | `wc3_match` | plugin | extended: seats, lockstep, `step_ms` |
 | `apply_server_config` with `urn:wc3:stage/v1` | agent-env step, plugin extension | new extension: stage the game before play |
 | `prompt_agent` | agent-env | as today; the prompt carries a drill's goal |
-| `rts_grade` | plugin (`agentenv_rts`) | new; replaces `env_outcome_verifier` with `wc3-verifier` |
+| `rts_grade` | plugin (`agentenv_rts`) | done; replaced `env_outcome_verifier` with `wc3-verifier` |
 | `save_wc3_replay` | plugin | as today |
 | `save_rts_recording` | plugin (`agentenv_rts`) | as today: `mp4`, `html`, `client`, `highlights` |
 | broadcast | `agent-env wc3 stream` | as today; an `rts_broadcast` step later, optionally |
