@@ -19,7 +19,7 @@ default_a2a_agent_id` in `.agentenv/config.toml`); it must take the env's MCP se
 (`urn:agentenv:mcp-config/v1`).
 
 `rts_grade` (rubric `melee`) grades a game: a win counts three times as much as not being defeated or outscoring the
-AI on the game's own score total (`at_time_limit: draw`: an undecided game is no win), and two gates zero the grade:
+AI on the game's own score total (an undecided game is no win: `rts_grade`'s `at_time_limit` is `draw`), and two gates zero the grade:
 the game stopped working, or the agent gave no orders (or the harness played part of its game). `smoke` is graded
 by the `smoke` rubric.
 

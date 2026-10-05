@@ -37,7 +37,7 @@ METRICS = frozenset((
     "buildings_destroyed gold_mined lumber_total items_picked_up items_used items_bought researches_done hero_time "
     "expansion_started_time upgrade_started_time enemy_base_seen_time idle_worker_seconds supply_blocked_seconds "
     "average_unspent_gold uprooted_seconds fewest_workers army_kept_percent enemy_army_destroyed_percent "
-    "camp_cleared seconds").split())
+    "camp_cleared camp_cleared_time seconds structures").split())
 BY_TYPE = {"count": 0, "first_time": None, "present_seconds": 0}
 PARAMS = ("seats", "rubric", "weights", "targets", "checks", "at_time_limit", "gates", "verifier_id",
           "timeout_seconds")
@@ -243,7 +243,7 @@ class RTSGradeTaskStep(TaskStep):
 
     def __init__(self, id: str, version: int | None, env_id: str, seats: list[str] | None = None,
                  rubric: str = "melee", weights: dict | None = None, targets: dict | None = None,
-                 checks: list[dict] | None = None, at_time_limit: str = "score", gates: list[str] | None = None,
+                 checks: list[dict] | None = None, at_time_limit: str = "draw", gates: list[str] | None = None,
                  verifier_id: str | None = None, timeout_seconds: int = 300, depends_on: list | None = None,
                  fail_task_on_error: bool = True):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)

@@ -138,16 +138,14 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
 
     steps = json.loads((BUNDLE / "tasks" / f"{task}.json").read_text())
     registry = get_task_step_registry()
-    if task.startswith("drill-") and "rts_grade" not in registry:
-        pytest.skip("drills grade with rts_grade, which is being built in parallel (feat/rts-grade) and is not "
-                    "registered on this branch yet")
     for s in steps:
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
     by_type = {s["type"]: s for s in steps}
     assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
     grade = by_type["rts_grade"]
-    assert grade["id"] == "grade" and (grade["rubric"], grade["verifier_id"]) == (
-        ("smoke", "smoke") if task == "smoke" else ("melee", "wc3"))
+    expected = (("smoke", "smoke") if task == "smoke" else ("checks", "drill") if task.startswith("drill-")
+                else ("dense", "duel") if task.startswith("duel") else ("melee", "wc3"))
+    assert grade["id"] == "grade" and (grade["rubric"], grade["verifier_id"]) == expected
     if task.startswith("macro-micro"):
         agent = by_type["deploy_agent"]
         assert agent["a2a_agent_id"] == "wc3-macro-micro" and agent["env_vars"]["WC3_MICRO_MODEL"]

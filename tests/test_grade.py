@@ -130,7 +130,7 @@ def test_a_level_score_at_the_limit_is_no_win():
 
 
 def test_dense_grades_every_agent_seat_against_the_other_team():
-    grades = step(rubric="dense", verifier_id="wc3").grade(DUEL)
+    grades = step(rubric="dense", verifier_id="wc3", at_time_limit="score").grade(DUEL)
     assert set(grades) == {"wc3:alice", "wc3:bob"}
     alice, bob = by_name(grades["wc3:alice"]), by_name(grades["wc3:bob"])
     assert list(alice) == ["reached_end", "win", "survive", "outscore", "army_ratio", "kills_ratio",
@@ -151,7 +151,7 @@ def test_dense_grades_every_agent_seat_against_the_other_team():
 def test_allies_are_not_opponents_and_computer_seats_are_not_graded():
     summary = game(seat("alice", total=1000), seat("bob", total=5000), seat(computer="easy", team=2, total=800),
                    seat(computer="easy", team=2, total=900))
-    grades = step(verifier_id="wc3").grade(summary)
+    grades = step(verifier_id="wc3", at_time_limit="score").grade(summary)
     assert set(grades) == {"wc3:alice", "wc3:bob"}
     alice = by_name(grades["wc3:alice"])
     assert alice["outscore"]["evidence"] == "score 1000 vs 900" and alice["win"]["result"] is True
@@ -280,7 +280,7 @@ def test_the_step_round_trips_and_is_registered(local_stores):
     defaults = RTSGradeTaskStep.from_dict({"id": "grade", "type": "rts_grade", "env_id": "wc3"}).to_dict()
     assert {k: defaults[k] for k in ("seats", "rubric", "at_time_limit", "gates", "verifier_id",
                                      "fail_task_on_error")} == {
-        "seats": None, "rubric": "melee", "at_time_limit": "score", "gates": ["game_ran", "agent_played"],
+        "seats": None, "rubric": "melee", "at_time_limit": "draw", "gates": ["game_ran", "agent_played"],
         "verifier_id": "grade", "fail_task_on_error": True}
 
 

@@ -204,7 +204,7 @@ Today's top-level fields (`result`, `score`, `opponent_score`, ...) stay for com
 | `weights` | `{criterion: weight}`; 0 drops one | the preset's |
 | `targets` | `{criterion: full-credit value}` | the preset's |
 | `checks` | `[{metric, op, value, weight}]` | for `checks`; added to any rubric |
-| `at_time_limit` | `score`, `draw`, `loss` | `score` |
+| `at_time_limit` | `score`, `draw`, `loss` | `draw`: a win is a conquest; a lead in score earns `outscore` |
 | `gates` | `game_ran`, `agent_played` | both |
 | `verifier_id` | string | the step's id |
 

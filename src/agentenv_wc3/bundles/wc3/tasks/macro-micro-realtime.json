@@ -47,7 +47,6 @@
     "type": "rts_grade",
     "env_id": "wc3",
     "rubric": "melee",
-    "at_time_limit": "draw",
     "verifier_id": "wc3",
     "depends_on": [
       "play"
