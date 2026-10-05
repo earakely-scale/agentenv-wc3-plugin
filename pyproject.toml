@@ -42,6 +42,7 @@ wc3 = "agentenv_wc3.cli:wc3"
 wc3_match = "agentenv_wc3.steps:WC3MatchTaskStep"
 save_wc3_replay = "agentenv_wc3.steps:SaveWC3ReplayTaskStep"
 save_rts_recording = "agentenv_rts.steps:SaveRTSRecordingTaskStep"
+rts_grade = "agentenv_rts.grade:RTSGradeTaskStep"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentenv_wc3", "src/agentenv_rts"]

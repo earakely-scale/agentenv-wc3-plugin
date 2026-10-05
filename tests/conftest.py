@@ -1,5 +1,7 @@
+import json
 import shlex
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agentenv_wc3.server import WORKER, WC3Env  # noqa: E402
 
 FAKE_CMD = f"{shlex.quote(sys.executable)} {shlex.quote(str(WORKER))} --fake"
+STEPS = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())["project"][
+    "entry-points"]["agent_env.task_steps"]
 
 
 @pytest.fixture
@@ -56,13 +60,14 @@ def tools(env):
 
 @pytest.fixture
 def local_stores(monkeypatch, tmp_path):
-    """agent-env on its local default stores under tmp_path, whatever config the machine has."""
+    """agent-env on its local default stores under tmp_path, whatever config the machine has. The config names the
+    checkout's task steps too, so they register when the installed entry points are older than the checkout."""
     import os
 
     from agent_env.config import reset_config
 
     config = tmp_path / "config.toml"
-    config.write_text("")
+    config.write_text(f"[task_steps]\nimpls = {json.dumps(sorted(STEPS.values()))}\n")
     for var in [v for v in os.environ if v.startswith("AGENT_ENV_")]:
         monkeypatch.delenv(var)
     monkeypatch.setenv("AGENT_ENV_CONFIG", str(config))
