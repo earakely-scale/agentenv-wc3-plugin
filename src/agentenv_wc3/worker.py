@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -56,21 +57,27 @@ class Worker:
     def __init__(self, fake: bool = False):
         self.fake = fake
         self.session = None
+        self.wall_clock: float | None = None   # the fake game in realtime: its clock follows the wall's
 
     # ---- commands ----
 
     def start(self, map: str, players: list[dict], step_ms: int = 1000, seed: int | None = None,
-              randomize_starts: bool = False, ai_difficulty: int | None = None, render: bool = False) -> dict:
+              randomize_starts: bool = False, ai_difficulty: int | None = None, render: bool = False,
+              mode: str = "stepping") -> dict:
         """A new game: closes the one before, launches the game with these players, and returns every player's
-        first observation and the accepted setup."""
+        first observation and the accepted setup. In `realtime` mode the game runs on its own clock."""
         from wc3env.session import GameConfig, GameSession, MatchSetup, PlayerConfig
 
         self.close()
+        # The fake game only moves when stepped, so realtime on it is stepping by the wall time that has passed.
+        self.wall_clock = time.monotonic() if self.fake and mode == "realtime" else None
+        if self.wall_clock is not None:
+            mode = "stepping"
         try:
             config = GameConfig(
                 map=map,
                 players=tuple(PlayerConfig(p["slot"], p.get("race"), p.get("control", "agent")) for p in players),
-                step_ms=step_ms, render=render, sound=False, ai_difficulty=ai_difficulty,
+                mode=mode, step_ms=step_ms, render=render, sound=False, ai_difficulty=ai_difficulty,
                 setup=MatchSetup(seed=seed, randomize_starts=randomize_starts),
                 output_dir=os.environ.get("WC3_OUTPUT_DIR") or None,
             )
@@ -99,6 +106,9 @@ class Worker:
 
         session = self._session()
         batches = {slot: actions.get(str(slot), []) for slot in session.config.agent_slots}
+        if self.wall_clock is not None:
+            now = time.monotonic()
+            ms, self.wall_clock = max(25, min(60000, round((now - self.wall_clock) * 1000) // 25 * 25)), now
         try:
             observations, done, info = session.step(batches, ms)
         except ProtocolError as e:

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spectator</title>
+<style>/*CSS*/</style>
+</head>
+<body>
+<header>
+  <div class="title"><b id="title">Spectator</b><small id="sub"></small></div>
+  <div class="clock"><span id="badge" class="badge"></span><b id="clock">0:00</b><small id="limit"></small></div>
+</header>
+<main>
+  <section class="map"><canvas id="map"></canvas></section>
+  <aside>
+    <h2>Players</h2>
+    <div id="players"></div>
+    <h2>What happened</h2>
+    <ol id="events"></ol>
+  </aside>
+</main>
+<footer>
+  <button id="play" title="Play / pause (space)">▶</button>
+  <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Game time">
+  <span id="pos"></span>
+  <label class="follow"><input id="follow" type="checkbox" checked> follow live</label>
+</footer>
+<script>/*DATA*/</script>
+<script>/*JS*/</script>
+</body>
+</html>

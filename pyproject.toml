@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "anyio>=4", "httpx>=0.27,<1", "uvicorn>=0.30", "ruff>=0.16,<0.17"]
+dev = ["pytest>=8,<10", "anyio>=4", "httpx>=0.27,<1", "uvicorn>=0.30", "ruff>=0.16,<0.17", "pillow>=10.1"]
 
 [project.urls]
 Source = "https://github.com/earakely-scale/agentenv-wc3-plugin"
@@ -41,9 +41,10 @@ wc3 = "agentenv_wc3.cli:wc3"
 [project.entry-points."agent_env.task_steps"]
 wc3_match = "agentenv_wc3.steps:WC3MatchTaskStep"
 save_wc3_replay = "agentenv_wc3.steps:SaveWC3ReplayTaskStep"
+save_rts_recording = "agentenv_rts.steps:SaveRTSRecordingTaskStep"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentenv_wc3"]
+packages = ["src/agentenv_wc3", "src/agentenv_rts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

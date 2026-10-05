@@ -1,66 +1,146 @@
 # Warcraft III for AgentEnv
 
-An LLM agent plays a melee game of Warcraft III: The Frozen Throne against the game's own AI, through raw
-[wc3env](https://github.com/pwang724/wc3env) orders served as MCP tools. Games are graded and their native
-replays saved. This repository is an environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com).
+AI agents play melee games of Warcraft III: The Frozen Throne against the game's own AI, through
+[wc3env](https://github.com/pwang724/wc3env). An LLM can play through MCP tools, or wc3env's own two-model agent,
+`wc3agent`, can play: a macro model plans the economy and the army, and a fast micro model controls each unit. The
+micro model is Jev or any chat model, such as Claude Haiku. Spectators follow the game live, and every game is graded,
+saved as a native `.w3g` replay and recorded as a video. This repository is an environment plugin for the
+[AgentEnv Framework](https://www.agentenvframework.com). Its RTS-generic half, `agentenv_rts`, is meant for the next
+real-time strategy game too.
 
 > **Unofficial, offline, and bring your own game.** This project is not affiliated with or endorsed by Blizzard
 > Entertainment; Warcraft is their trademark. It contains no game files: wc3env runs your own licensed Warcraft III
 > Legacy (1.29.2) installation, offline only, never on Battle.net. The env image you build holds your game files:
 > keep it private. Whether this use fits your license agreement is your responsibility.
 
-**Status: first milestone.** One agent against the built-in AI. Everything below the game is tested against
-wc3env's fake game: the unit tests (`tests/`), and the image and a whole `agent-env run wc3 --task smoke` on a
-stand-in for wc3env's image (`scripts/standin.sh`, in CI). The real game has not yet been run through this plugin.
+**Status:**
+- **Not yet run on the real game.** Everything above the game is tested against wc3env's **fake game**, on macOS
+  (Apple Silicon) and x86-64 Linux: the unit tests, and whole `agent-env run`s of `smoke` and `macro-micro-quick`
+  through Docker.
+- **What the fake game simulates:** a town hall, five peasants and a distant enemy hall. Units move and stop;
+  building, combat and score are not simulated.
 
-## What it needs
-
-- An **x86-64 Linux** Docker host whose kernel runs Wine (wc3env's `docker/platform_probe.py` checks it). Apple
-  Silicon and arm64 hosts can't run it.
-- **wc3env's worker image**, built from your own installation as its
-  [docker/README.md](https://github.com/pwang724/wc3env/blob/main/docker/README.md) describes. That needs a Windows
-  machine once, for the game hook and the prepared data, then any Linux builder:
-  `docker build --platform linux/amd64 --target environment -t wc3-worker:local build/docker-context`.
-- Your **activation files**, `roc.w3k` and `tft.w3k`, from the same installation, in `~/.wc3-license` (or the
-  directory `license_dir` names in `[plugins.agentenv-wc3]` of `.agentenv/config.toml`, or `$WC3_LICENSE_DIR`).
-  They never enter an image: the `wc3_match` step sends them to the env when a game starts.
-
-## Run it
+## Try it without Warcraft III (Mac or Linux)
 
 ```bash
 uv tool install agentenv-framework --with-editable ./agentenv-wc3-plugin
 cd agentenv-wc3-plugin
-agent-env wc3 check                      # the host, your wc3env image, your activation files
-agent-env wc3 setup                      # build the env on top of wc3-worker:local and register it as "wc3"
-agent-env run wc3 --task smoke           # no model: a 2-minute game runs with no orders, is graded and replayed
-agent-env run wc3 --task vs-ai-quick     # your default agent against the easy AI, 5 game minutes
+agent-env wc3 setup --fake --agent        # the env on wc3env's fake game, and the wc3-macro-micro agent, for this machine
+agent-env run wc3 --task smoke             # no model: the game runs, is graded and recorded
+agent-env run wc3 --task macro-micro-quick # wc3agent, Haiku for macro and micro: 5 game minutes, ~8 min, ~$1.20
+agent-env wc3 watch --open                 # the live view of the running game
 ```
 
-`agent-env wc3 serve` serves the env on this machine against wc3env's **fake game** (a Town Hall, five Peasants
-and a distant enemy hall), to try the tools or an agent without Warcraft III.
+The agent's models go through agent-env's model endpoint (`[model]` `base_url` and `api_key` in
+`.agentenv/config.toml`, e.g. a LiteLLM proxy).
+
+## With the real game (x86-64 Linux)
+
+**What it needs:**
+- **An x86-64 Linux Docker host whose kernel runs Wine.** wc3env's `docker/platform_probe.py` checks it. Apple
+  Silicon and other arm64 hosts can't run the game itself; see the fake game above, or run the env on a remote
+  Linux host.
+- **wc3env's worker image**, built from your own installation as its
+  [docker/README.md](https://github.com/pwang724/wc3env/blob/main/docker/README.md) describes:
+  1. Once, on a Windows machine, build the hook and prepare the data.
+  2. Then, on any Linux builder:
+     `docker build --platform linux/amd64 --target environment -t wc3-worker:local build/docker-context`.
+- **Your activation files**, `roc.w3k` and `tft.w3k`, from the same installation, in `~/.wc3-license`. You can also
+  name another directory with `license_dir` in `[plugins.agentenv-wc3]` of `.agentenv/config.toml`, or with
+  `$WC3_LICENSE_DIR`. They never enter an image: the `wc3_match` step sends them to the env when a game starts.
+
+```bash
+agent-env wc3 check                        # the host, your wc3env image, your activation files
+agent-env wc3 setup --agent                # the env on top of wc3-worker:local, as "wc3", and the agent
+agent-env run wc3 --task smoke
+agent-env run wc3 --task macro-micro-quick
+```
+
+## Tasks
 
 | Task | Who plays | Game |
 |---|---|---|
-| `smoke` | nobody: the harness lets the game run | 2 minutes, Echo Isles |
-| `vs-ai-quick` | your default agent, Human | 5 minutes against the easy Orc AI |
-| `vs-ai` | your default agent, Human | 20 minutes against the normal Orc AI |
+| `smoke` | nobody: the harness lets the game run | 2 minutes |
+| `vs-ai-quick` | your default agent over MCP tools, Human | 5 minutes against the easy Orc AI |
+| `vs-ai` | your default agent over MCP tools, Human | 20 minutes against the normal Orc AI |
+| `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped |
+| `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped |
+| `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime |
+
+- **Map and side:** every game is on Echo Isles, with the agent playing Human.
+- **What every task saves:** the game's native replay, and the spectator recording (an MP4 of the map and a
+  self-contained HTML replay), as file artifacts.
+- **Grading:** `wc3-verifier` grades the game.
+  - A win counts three times as much as not being defeated or as outscoring the AI.
+  - The grade is 0 if the game stopped working, if the agent gave no orders, or if the harness played part of the
+    game.
+
+## The wc3-macro-micro agent
+
+`agents/wc3-player` wraps wc3env's own agent, `wc3agent`, in A2A, unchanged. It runs the same prompts, order parsing,
+fixed policies and cadence:
+- **Macro (System 2)** reads a text snapshot and writes orders (`train`, `build`, `group … attack at X Y`, …) at least
+  5 game seconds apart.
+- **Micro (System 1)** answers one multiple-choice question per army unit, at most once a second per group.
+
+It plays the game the task's `wc3_match` started, through the env's `urn:rts` session (raw observations in, raw
+wc3env actions out). It plays stepped (the game waits for the models) or in realtime (the game runs on, and slow
+answers just mean fewer decisions), as the match's `mode` says.
+
+| Setting | Where | Default |
+|---|---|---|
+| Macro model | the `prompt_agent` step's `model` | `anthropic/claude-sonnet-5-5` |
+| Micro model | `WC3_MICRO_MODEL` in the `deploy_agent` step's `env_vars` | `anthropic/claude-haiku-4-5` |
+| Macro reasoning effort | `WC3_MACRO_REASONING` | `low` |
+| Game seconds between macro turns | `WC3_TURN_SECONDS` (5 or more) | `5` |
+| Stop after this much game time | `WC3_MAX_GAME_SECONDS` | the match's time limit |
+
+**The micro model:**
+- **A chat model** (the default) is asked through the same OpenAI-compatible endpoint. The answers come back in
+  Jev's shape, so wc3agent's checks, records and reports work as they do on Jev. A missing or invalid answer falls
+  back to "keep doing what you're doing".
+- **Measured on Haiku 4.5**, on a real wc3agent fight request (an archmage and two footmen against grunts): valid
+  answers for every unit in 1.1 s, for about 2k input tokens, or a quarter of a cent.
+- **`jev`** (or a `jev-…` model name) asks TypeSafe's Jev instead, with `TYPESAFE_API_KEY` in the agent's
+  environment. **`off`** plays without micro.
+
+**The result** reports the macro turns, the micro calls, and the tokens and cost per model. Its trajectory is
+wc3agent's call log, with each decision and its cost.
+
+## Watch it live
+
+While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 watch --open` prints and opens it.
+
+- **The map:** Echo Isles' terrain from wc3env's pathing grid, trees, gold mines, start locations, creep camps and
+  shops, with every unit and building any player sees, in its owner's colour.
+- **The sidebar:** each player's gold, lumber, food, units, buildings and score, and the event feed.
+- **The timeline:** scrub through every step played so far.
+- **`/live?stream`:** lays the page out at 1920×1080 for a broadcast. The OpenCiv3 plugin's streamer sends any
+  such page to Twitch or X: `agent-env openciv3 stream --url http://127.0.0.1:<port>/live --no-cast --to twitch`.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    agent["agent (A2A)"] -- "MCP: get_state, act, advance ..." --> server
+    llm["LLM agent (A2A)"] -- "MCP: get_state, act, advance ..." --> server
+    macro["wc3-macro-micro (A2A):<br/>wc3agent"] -- "urn:rts:observe / step" --> server
     subgraph env["the env container: your wc3env image + this plugin"]
         server["agentenv_wc3.server<br/>(Linux Python)"] -- "JSON lines" --> worker["worker.py<br/>(Windows Python, Wine)"]
         worker -- "wc3env GameSession" --> game["Warcraft III + wc3hook.dll"]
     end
-    runner["agent-env"] -- "new-game, idle, replay, data/get" --> server
+    runner["agent-env"] -- "new-game, replay, recording, data/get" --> server
+    viewer["spectators"] -- "/live" --> server
 ```
 
-wc3env holds the game's clock, so **time passes only when the agent calls `advance`**: an agent may think as long as
-it likes between steps. Orders given with `act` are checked against wc3env's own rules (the unit is yours, the target
-is in view, the arguments are well formed) and wait in a queue; `advance` sends them with the step and reports what
-the game refused, the sites it chose for buildings, and what happened.
+**Who holds the clock:** wc3env holds the game's clock. In `stepping` mode, time passes only when the agent steps:
+`advance` for the tools, `urn:rts:step/v1` for a program. An agent may think as long as it likes between steps. In
+`realtime` mode, the game runs on its own clock, and a step only sends orders and observes.
+
+**How orders are checked:**
+- Orders given with `act` are checked against wc3env's own rules: the unit is yours, the target is in view, and the
+  arguments are well formed.
+- `advance` sends them and reports what the game refused, the sites it chose for buildings, and what happened.
+- A program's batch is checked the same way. Orders that no longer apply are reported as rejected, by their index.
 
 | Tool | What it does |
 |---|---|
@@ -73,34 +153,55 @@ the game refused, the sites it chose for buildings, and what happened.
 
 | AgentEnv piece | Here |
 |---|---|
-| Environment | `src/agentenv_wc3/server.py`: six tools, `data/get` (result, both sides' score counters, the harness's counters), and the extensions `urn:wc3:new-game/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1` |
-| Task steps | `wc3_match` (starts the game, sends the activation files) and `save_wc3_replay`, in `steps.py` |
+| Environment | `src/agentenv_wc3/server.py`: six MCP tools; `data/get` (result, both sides' score counters, the harness's counters); the extensions `urn:wc3:new-game/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1` and `urn:rts:debug/v1`; `urn:rts:recording/v1`; and `/live` |
+| Task steps | `wc3_match` (starts the game in `stepping` or `realtime` mode and sends any activation files) and `save_wc3_replay`, in `steps.py`; `save_rts_recording`, in `agentenv_rts/steps.py` |
+| Agent | `agents/wc3-player`: `wc3-macro-micro` |
 | Tasks and verifiers | `src/agentenv_wc3/bundles/wc3/` |
-| CLI | `agent-env wc3 check`, `setup`, `serve` |
+| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch` |
 
 [docs/protocol.md](docs/protocol.md) is the worker's protocol.
 
+## Reusable for other RTS games: `agentenv_rts`
+
+`src/agentenv_rts` never imports Warcraft III. A new RTS env reuses all of it:
+
+| Module | What it gives a game |
+|---|---|
+| `session.py` | The `urn:rts:*` session contract: observe, step and debug extensions an env serves. `RemoteSession`, a stdlib-only gym-style client, lets an existing RTS agent play an AgentEnv env unchanged |
+| `timeline.py` | The spectator schema: the map once (bounds, terrain grid, trees, points of interest, players) and a compact frame per step (units, resources, events) |
+| `live.py`, `viewer/` | The live view at `/live` and `/live/data.json?since=T`, with its `?stream` layout and a self-contained HTML replay |
+| `recording.py` | The MP4 of the map from the timeline (Pillow and ffmpeg) and `urn:rts:recording/v1` |
+| `steps.py` | `save_rts_recording`: the recording as file artifacts |
+| `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
+
+A game supplies an adapter from its observations to the timeline (here `agentenv_wc3/frames.py`), serves the session
+and recording extensions and `/live`, and brings its agent's policy (here `wc3agent`).
+
 ## Not done yet
 
-- **A run against the real game.** The worker drives wc3env's `GameSession` as wc3env's own tests and Docker
-  smoke do, but this plugin has only met the fake game. The first `smoke` run on a real setup is the test.
+- **A run against the real game.** The first `smoke` run on a real setup is the test. Then come the macro/micro
+  tasks, stepped and realtime.
 - **Container options.** wc3env runs its worker with `--shm-size 256m` and `--init`; agent-env's `server`
   provider sets neither, and whether Wine needs them here is untested.
-- **Several agents in one game**, seats and a turn barrier, as the OpenCiv3 plugin has.
-- **Video and streaming**: the game draws to Xvfb inside the container; recording it, or a replay played back, is
-  the next step after a working game.
+- **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
+- **wc3agent's 25 scenarios**, staged and graded by the env. `urn:rts:debug/v1` already lets a match allow staging.
+- **Several agents in one game:** wc3agent's duels, and model against model.
+- **Broadcast:** casters for RTS games, and video of the real game's own picture from the container's display.
+- **Upstream seams in wc3agent:** an injectable session and micro transport, so the agent needs no patching.
 - **A Linux-only build of wc3env's inputs**, so no Windows machine is needed (the hook with MinGW, StormLib on
   Linux).
 
 ## Development
 
-`scripts/standin.sh path/to/wc3env` builds `wc3-worker:standin`, wc3env's image layout on its fake game, so
-`agent-env wc3 setup --base wc3-worker:standin` and `agent-env run wc3 --task smoke` run anywhere with Docker.
-
-`scripts/ci.yml` is the CI workflow (the tests, and the image and `smoke` on the stand-in); copy it to `.github/workflows/` to turn it on.
+The tests need wc3env and wc3agent importable. Put a wc3env checkout's sources on the path; its wheel is
+Windows-only.
 
 ```bash
-uv venv && uv pip install -e ".[dev]" -e path/to/wc3env   # wc3env from a checkout: tests use its fake game
-.venv/bin/pytest
+uv venv && uv pip install -e ".[dev]"
+PYTHONPATH=path/to/wc3env/src:path/to/wc3env/wc3agent/src .venv/bin/pytest
 .venv/bin/ruff check .
 ```
+
+`scripts/ci.yml` is the CI workflow: the tests, then the images and `smoke` on the fake game. Copy it to
+`.github/workflows/` to turn it on. `scripts/standin.sh path/to/wc3env` builds `wc3-worker:standin`, wc3env's
+image layout on its fake game, as `agent-env wc3 setup --fake` does.

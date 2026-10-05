@@ -51,5 +51,13 @@
     "depends_on": [
       "grade"
     ]
+  },
+  {
+    "id": "recording",
+    "type": "save_rts_recording",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
   }
 ]

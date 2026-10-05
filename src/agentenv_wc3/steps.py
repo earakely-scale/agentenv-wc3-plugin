@@ -17,6 +17,9 @@ from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.task_step import TaskStep
 from agentenv_protocol import client
+from httpx import HTTPStatusError
+
+from agentenv_rts.session import error_message
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +28,8 @@ NEW_GAME_EXTENSION = "urn:wc3:new-game/v1"
 REPLAY_EXTENSION = "urn:wc3:replay/v1"
 LICENSE_FILES = ("roc.w3k", "tft.w3k")
 DEFAULT_LICENSE_DIR = "~/.wc3-license"
-MATCH_OPTIONS = ("map", "race", "opponent_race", "ai_difficulty", "seed", "randomize_starts", "time_limit_seconds")
+MATCH_OPTIONS = ("map", "race", "opponent_race", "ai_difficulty", "seed", "randomize_starts", "time_limit_seconds",
+                 "mode", "allow_debug")
 
 
 def _deployed_env(context: TaskStepContext, env_id: str) -> DeployedEnv:
@@ -57,18 +61,23 @@ def license_dir(given: str | None = None) -> Path:
     return Path(given or os.environ.get("WC3_LICENSE_DIR") or DEFAULT_LICENSE_DIR).expanduser()
 
 
-def read_license(directory: Path) -> dict[str, str]:
-    """The activation files as the new-game extension takes them: {name: base64}."""
+def read_license(directory: Path) -> dict[str, str] | None:
+    """The activation files as the new-game extension takes them: {name: base64}; None when they are not there,
+    which the fake game doesn't mind and the real one refuses with a clear error."""
     missing = [n for n in LICENSE_FILES if not (directory / n).is_file() or not (directory / n).stat().st_size]
     if missing:
-        raise RuntimeError(f"no Warcraft III activation files at {directory} (missing {', '.join(missing)}): copy "
-                           "roc.w3k and tft.w3k from your own Warcraft III Legacy installation there, or name "
-                           "their directory with license_dir in [plugins.agentenv-wc3] of .agentenv/config.toml")
+        log.warning("wc3_match: no Warcraft III activation files at %s (missing %s); the fake game needs none, the "
+                    "real one does: copy roc.w3k and tft.w3k from your own installation there, or name their "
+                    "directory with license_dir in [plugins.agentenv-wc3] of .agentenv/config.toml", directory,
+                    ", ".join(missing))
+        return None
     return {n: base64.b64encode((directory / n).read_bytes()).decode() for n in LICENSE_FILES}
 
 
 class WC3MatchTaskStep(TaskStep):
-    """Start a game in a deployed env: the agent's race against the game's AI, on a map, with a time limit."""
+    """Start a game in a deployed env: the agent's race against the game's AI, on a map, with a time limit.
+    `mode` is `stepping` (time passes when the agent steps) or `realtime` (the game runs on its own clock);
+    `allow_debug` lets the session's debug extension stage the game (scenarios)."""
 
     type: ClassVar[str] = "wc3_match"
     entity_refs = (EntityRef.env("env_id"),)
@@ -76,13 +85,15 @@ class WC3MatchTaskStep(TaskStep):
     def __init__(self, id: str, version: int | None, env_id: str, map: str = "(2)EchoIsles.w3x",
                  race: str = "human", opponent_race: str = "orc", ai_difficulty: str = "normal",
                  seed: int | None = None, randomize_starts: bool = False, time_limit_seconds: int = 1200,
-                 license_dir: str | None = None, timeout_seconds: int = 900, depends_on: list | None = None,
-                 fail_task_on_error: bool = True):
+                 mode: str = "stepping", allow_debug: bool = False, license_dir: str | None = None,
+                 timeout_seconds: int = 900, depends_on: list | None = None, fail_task_on_error: bool = True):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
         self.env_id, self.map, self.race, self.opponent_race = env_id, map, race, opponent_race
         self.ai_difficulty, self.seed, self.randomize_starts = ai_difficulty, seed, randomize_starts
         self.time_limit_seconds, self.license_dir = time_limit_seconds, license_dir
-        self.timeout_seconds = timeout_seconds
+        self.mode, self.allow_debug, self.timeout_seconds = mode, allow_debug, timeout_seconds
+        if mode not in ("stepping", "realtime"):
+            raise ValueError(f"wc3_match mode must be stepping or realtime, got {mode!r}")
 
     def to_dict(self) -> dict:
         return {**super().to_dict(), "env_id": self.env_id, **{k: getattr(self, k) for k in MATCH_OPTIONS},
@@ -97,14 +108,22 @@ class WC3MatchTaskStep(TaskStep):
         deployed = _deployed_env(context, self.env_id)
         card = _extension_card(deployed, NEW_GAME_EXTENSION)
         files = await asyncio.to_thread(read_license, license_dir(self.license_dir))
-        args = {k: getattr(self, k) for k in MATCH_OPTIONS if getattr(self, k) is not None} | {"license": files}
-        result = await client.invoke_extension(deployed.environment_url, card, NEW_GAME_EXTENSION, args,
-                                               timeout=self.timeout_seconds)
+        args = {k: getattr(self, k) for k in MATCH_OPTIONS if getattr(self, k) is not None}
+        if files is not None:
+            args["license"] = files
+        try:
+            result = await client.invoke_extension(deployed.environment_url, card, NEW_GAME_EXTENSION, args,
+                                                   timeout=self.timeout_seconds)
+        except HTTPStatusError as e:
+            raise RuntimeError(f"env {self.env_id!r} did not start the game: {error_message(e.response.text)}") from e
         scenario = (result or {}).get("scenario") or {k: v for k, v in args.items() if k != "license"}
         context.metadata["wc3_match"] = {"scenario": scenario, "setup": (result or {}).get("setup")}
-        log.info("wc3_match: %s on %s against the %s %s AI, %d game seconds", scenario.get("race"),
-                 scenario.get("map"), scenario.get("ai_difficulty"), scenario.get("opponent_race"),
-                 scenario.get("time_limit_seconds", 0))
+        base_url = deployed.mcp_url.removesuffix("/mcp")
+        context.metadata["wc3_match"]["live_url"] = f"{base_url}/live"
+        log.info("wc3_match: %s on %s against the %s %s AI, %d game seconds, %s; watch it live at %s/live",
+                 scenario.get("race"), scenario.get("map"), scenario.get("ai_difficulty"),
+                 scenario.get("opponent_race"), scenario.get("time_limit_seconds", 0), scenario.get("mode", "stepping"),
+                 base_url)
         return context
 
 

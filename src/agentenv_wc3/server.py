@@ -4,6 +4,11 @@ through raw wc3env orders (docs/tools.md).
 The game runs in a worker process (worker.py): in the image, Windows Python under Wine driving wc3env, which
 holds the game's clock. Time only passes when the agent calls `advance`, so the agent may think as long as it
 likes between steps. Orders given with `act` wait in a queue and go to the game with the next `advance`.
+
+A program plays the same game through the `urn:rts:*` session extensions (agentenv_rts.session): raw observations
+in, raw wc3env actions out, as wc3env's own `wc3agent` plays (agents/wc3-player). In `realtime` mode the game runs on
+its own clock and a step only sends orders and observes. Spectators follow the game at `/live` (agentenv_rts.live),
+and `urn:rts:recording/v1` gives its recording once it is played.
 """
 
 from __future__ import annotations
@@ -29,8 +34,15 @@ from agentenv_protocol import (
 )
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from . import render
+from agentenv_rts import live as rts_live
+from agentenv_rts import recording as rts_recording
+from agentenv_rts.session import DEBUG, OBSERVE, STEP
+from agentenv_rts.timeline import Timeline
+
+from . import frames, render
 from .bridge import DEAD, Bridge, WorkerError
 
 log = logging.getLogger(__name__)
@@ -46,7 +58,13 @@ WORKER = Path(__file__).with_name("worker.py")
 DEFAULT_WORKER_CMD = ["wine", "C:\\Python311\\python.exe", "Z:" + str(WORKER).replace("/", "\\")]
 MAX_ADVANCE_SECONDS = 60
 DEFAULT_SCENARIO = {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race": "orc", "ai_difficulty": "normal",
-                    "seed": None, "randomize_starts": False, "time_limit_seconds": 1200}
+                    "seed": None, "randomize_starts": False, "time_limit_seconds": 1200, "mode": "stepping",
+                    "allow_debug": False}
+MODES = ("stepping", "realtime")
+# Debug ops that change only how the game is shown or how fast its clock runs: any session may send them (wc3agent
+# sets the speed when it starts). Every other op stages the game, so it needs the match's allow_debug.
+VIEW_DEBUG_OPS = ("speed", "camera", "overlay", "render")
+DEFAULT_STEP_MS = 1000
 
 NEW_GAME_EXTENSION = "urn:wc3:new-game/v1"
 REPLAY_EXTENSION = "urn:wc3:replay/v1"
@@ -91,6 +109,10 @@ def check_scenario(s: dict) -> dict:
         raise ValueError("time_limit_seconds must be an integer from 60 to 14400 (game seconds)")
     if not isinstance(s["map"], str) or not s["map"].strip():
         raise ValueError("map must be a map name or path, e.g. (2)EchoIsles.w3x")
+    if s["mode"] not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}, got {s['mode']!r}")
+    if not isinstance(s["allow_debug"], bool):
+        raise ValueError("allow_debug must be true or false")
     return s
 
 
@@ -144,8 +166,9 @@ class WC3Env(AgentEnvEnvironment):
         self.names = render.Names()
         self.result = ""
         self.failed: str | None = None
+        self.timeline: Timeline | None = None
         self.stats = {"games": 0, "tool_calls": 0, "invalid_calls": 0, "advances": 0, "orders_sent": 0,
-                      "orders_rejected": 0, "extension_calls": 0, "idle_seconds": 0}
+                      "orders_rejected": 0, "extension_calls": 0, "idle_seconds": 0, "session_steps": 0}
 
     # ---- the game ----
 
@@ -170,7 +193,8 @@ class WC3Env(AgentEnvEnvironment):
                    {"slot": COMPUTER, "race": scenario["opponent_race"], "control": "computer"}]
         result = await self.bridge.call("start", map=scenario["map"], players=players,
                                         seed=scenario["seed"], randomize_starts=scenario["randomize_starts"],
-                                        ai_difficulty=DIFFICULTIES[scenario["ai_difficulty"]])
+                                        ai_difficulty=DIFFICULTIES[scenario["ai_difficulty"]],
+                                        mode=scenario["mode"])
         self.scenario, self.setup = scenario, result.get("setup")
         self.obs = {int(k): v for k, v in result["observations"].items()}
         self.queue, self.recent, self.result, self.failed = [], [], "", None
@@ -178,6 +202,9 @@ class WC3Env(AgentEnvEnvironment):
         for o in self.obs.values():
             self.names.see(o)
         self.stats["games"] += 1
+        self.timeline = Timeline(frames.static(f"g-{self.stats['games']}", scenario, self.setup, self.obs,
+                                               self.ref))
+        self._record()
         log.warning("NEW GAME %s: %s vs the %s %s AI, seed %s", scenario["map"], scenario["race"],
                     scenario["ai_difficulty"], scenario["opponent_race"], (self.setup or {}).get("match_setup"))
 
@@ -197,6 +224,17 @@ class WC3Env(AgentEnvEnvironment):
 
     def _seconds(self) -> float:
         return self._me().get("game_time_seconds", 0.0)
+
+    def _record(self, events: list[str] | None = None) -> None:
+        if self.timeline is not None and self.obs:
+            self.timeline.add(frames.frame(self.obs, self.result, events))
+
+    def _observed(self, result: dict) -> None:
+        """A step's observations become the game's state: its result (or the time limit) and a spectator frame."""
+        self.obs = {int(k): v for k, v in result["observations"].items()}
+        me = self._me()
+        self.result = me.get("result") or ("time_limit" if self._seconds() >= self.scenario["time_limit_seconds"]
+                                           else "")
 
     def _footer(self) -> str:
         return render.footer(self._me(), limit=self.scenario["time_limit_seconds"], queued=len(self.queue),
@@ -318,7 +356,7 @@ class WC3Env(AgentEnvEnvironment):
             ms = max(25, min(seconds * 1000, round((limit - start) * 1000) // 25 * 25))
             result = await self.bridge.call("step", actions={str(AGENT): batch}, ms=ms)
             self.queue = []
-            self.obs = {int(k): v for k, v in result["observations"].items()}
+            self._observed(result)
             self.stats["advances"] += 1
             self.stats["orders_sent"] += len(batch)
             me = self._me()
@@ -328,7 +366,7 @@ class WC3Env(AgentEnvEnvironment):
             for o in self.obs.values():
                 self.names.see(o)
             self.recent = events
-            self.result = me.get("result") or ("time_limit" if self._seconds() >= limit else "")
+            self._record(events)
             lines = [f"Advanced {render.clock(start)} → {render.clock(self._seconds())}."]
             if dropped:
                 lines.append(f"Dropped {len(dropped)} queued order{'s' if len(dropped) != 1 else ''} that no longer "
@@ -459,6 +497,7 @@ class WC3Env(AgentEnvEnvironment):
                                                                                     for u in units),
                 "opponent_units": sum(not u.get("structure") for u in ai.get("units") or ()),
                 "opponent_structures": sum(bool(u.get("structure")) for u in ai.get("units") or ()),
+                "mode": self.scenario["mode"],
                 "harness": dict(self.stats), "engine_failed": self.failed is not None, "error": self.failed,
             }
         return [DataPart(data=summary)]
@@ -469,14 +508,18 @@ class WC3Env(AgentEnvEnvironment):
                description="Start a new game against the game's own AI; omitted args keep the current scenario. "
                            "map: a stock map, e.g. (2)EchoIsles.w3x; race and opponent_race: human, orc, undead, "
                            "night_elf or random; ai_difficulty: easy, normal or insane; seed (null: a new one); "
-                           "time_limit_seconds: game seconds before the game ends undecided; license: the "
+                           "time_limit_seconds: game seconds before the game ends undecided; mode: stepping "
+                           "(time passes when the agent steps) or realtime (the game runs on its own clock); "
+                           "allow_debug: the session's debug extension may stage the game; license: the "
                            "activation files {\"roc.w3k\": base64, \"tft.w3k\": base64}, needed once per env.")
     async def new_game(self, map: str | None = None, race: str | None = None, opponent_race: str | None = None,
                        ai_difficulty: str | None = None, seed: int | None = None, randomize_starts: bool | None = None,
-                       time_limit_seconds: int | None = None, license: dict | None = None) -> dict:
+                       time_limit_seconds: int | None = None, mode: str | None = None,
+                       allow_debug: bool | None = None, license: dict | None = None) -> dict:
         self.stats["extension_calls"] += 1
         given = {"map": map, "race": race, "opponent_race": opponent_race, "ai_difficulty": ai_difficulty,
-                 "seed": seed, "randomize_starts": randomize_starts, "time_limit_seconds": time_limit_seconds}
+                 "seed": seed, "randomize_starts": randomize_starts, "time_limit_seconds": time_limit_seconds,
+                 "mode": mode, "allow_debug": allow_debug}
         scenario = check_scenario({**self.scenario, **{k: v for k, v in given.items() if v is not None}})
         async with self.lock:
             if license is not None and not self.fake:
@@ -501,8 +544,10 @@ class WC3Env(AgentEnvEnvironment):
                 while not self.game_over and self._seconds() - start < seconds:
                     step = min(MAX_ADVANCE_SECONDS, seconds - (self._seconds() - start), limit - self._seconds())
                     result = await self.bridge.call("step", actions={}, ms=max(25, round(step * 1000) // 25 * 25))
-                    self.obs = {int(k): v for k, v in result["observations"].items()}
-                    self.result = self._me().get("result") or ("time_limit" if self._seconds() >= limit else "")
+                    self._observed(result)
+                    self._record()
+                    if self.scenario["mode"] == "realtime":   # the game runs on its own: just look in now and then
+                        await asyncio.sleep(1)
                 played = self._seconds() - start
             except WorkerError as e:
                 self.failed = self.failed or (e.message if e.code in DEAD or e.code == "game_failed" else None)
@@ -526,6 +571,141 @@ class WC3Env(AgentEnvEnvironment):
                     raise RuntimeError(f"{e.code}: {e.message}") from e
                 return {"files": [], "notes": [f"no replay: {e.message}"]}   # e.g. the fake game records none
         return {"files": [{"name": f["name"], "content_type": "application/octet-stream", "base64": f["base64"]}]}
+
+    # ---- the urn:rts:* session (agentenv_rts.session): a program plays through raw observations and actions ----
+
+    @extension(OBSERVE, description="The game as a program plays it: every player's raw wc3env observation by slot, "
+                                    "whether it is over, and the scenario and setup it was started with.")
+    async def session_observe(self) -> dict:
+        self.stats["extension_calls"] += 1
+        async with self.lock:
+            await self._session_game()
+            return self._session_state()
+
+    @extension(STEP, description="Send raw wc3env actions ({slot: [action]}) and step the game `ms` milliseconds "
+                                 "(default 1000; in realtime the game runs on its own clock and this only sends and "
+                                 "observes). Orders that no longer apply are dropped and reported as rejected, like "
+                                 "the game's own refusals, by their index in the batch.")
+    async def session_step(self, actions: dict | None = None, ms: int | None = None) -> dict:
+        self.stats["extension_calls"] += 1
+        async with self.lock:
+            await self._session_game()
+            if self.game_over:
+                return {**self._session_state(), "rejected": {}, "placements": {}, "elapsed_ms": 0}
+            limit = self.scenario["time_limit_seconds"]
+            ms = DEFAULT_STEP_MS if ms is None else int(ms)
+            if not 25 <= ms <= MAX_ADVANCE_SECONDS * 1000:
+                raise ValueError(f"ms must be 25 to {MAX_ADVANCE_SECONDS * 1000}")
+            ms = max(25, min(ms, round((limit - self._seconds()) * 1000) // 25 * 25))
+            sent, dropped = {}, {}
+            for slot, batch in (actions or {}).items():
+                if int(slot) not in self.obs:
+                    raise ValueError(f"slot {slot} is not a player in this game")
+                kept, gone = await self._still_valid_indexed(int(slot), list(batch or ()))
+                sent[str(slot)], dropped[str(slot)] = kept, gone
+            try:
+                result = await self.bridge.call("step", actions={k: [a for _, a in v] for k, v in sent.items()},
+                                                ms=ms)
+            except WorkerError as e:
+                if e.code in DEAD or e.code == "game_failed":
+                    self.failed = self.failed or e.message
+                raise RuntimeError(f"{e.code}: {e.message}") from e
+            self._observed(result)
+            rejected, placements = {}, {}
+            for slot, kept in sent.items():
+                index = [i for i, _ in kept]
+                rejected[slot] = sorted(
+                    [{**r, "index": index[r["index"]]} for r in (result.get("rejected") or {}).get(slot, [])
+                     if 0 <= r.get("index", -1) < len(index)] + dropped[slot], key=lambda r: r["index"])
+                placements[slot] = [{**p, "index": index[p["index"]]}
+                                    for p in (result.get("placements") or {}).get(slot, [])
+                                    if 0 <= p.get("index", -1) < len(index)]
+                self.stats["orders_sent"] += len(kept)
+                self.stats["orders_rejected"] += len(rejected[slot])
+            self.stats["session_steps"] += 1
+            me = self._me()
+            for o in self.obs.values():
+                self.names.see(o)
+            self.recent = render.events_text(me.get("events") or [], self.ref, self.names, AGENT)
+            self._record(self.recent)
+            return {**self._session_state(), "rejected": rejected, "placements": placements,
+                    "elapsed_ms": result.get("elapsed_ms")}
+
+    @extension(DEBUG, description="A wc3env debug op ({op, args}). speed, camera, overlay and render are always "
+                                  "allowed; ops that stage the game (resources, spawn, ai, ...) only in a match "
+                                  "started with allow_debug.")
+    async def session_debug(self, op: str, args: dict | None = None) -> dict:
+        self.stats["extension_calls"] += 1
+        async with self.lock:
+            await self._session_game()
+            if op not in VIEW_DEBUG_OPS and not self.scenario["allow_debug"]:
+                raise ValueError(f"debug op {op!r} stages the game: the match must allow it (allow_debug)")
+            if self.fake and op in VIEW_DEBUG_OPS:
+                return {"ignored": True, "reason": "the fake game has no display or clock to change"}
+            try:
+                return await self.bridge.call("debug", op=op, args=args or {})
+            except WorkerError as e:
+                raise RuntimeError(f"{e.code}: {e.message}") from e
+
+    async def _session_game(self) -> None:
+        try:
+            await self._ensure_game()
+        except WorkerError as e:
+            raise RuntimeError(f"{e.code}: {e.message}") from e
+
+    def _session_state(self) -> dict:
+        return {"observations": {str(k): v for k, v in self.obs.items()}, "done": self.game_over,
+                "result": self.result, "scenario": self.scenario, "setup": self.setup,
+                "time_limit_seconds": self.scenario["time_limit_seconds"]}
+
+    async def _still_valid_indexed(self, slot: int, batch: list[dict]) -> tuple[list[tuple[int, dict]], list[dict]]:
+        """The batch's orders that still apply, with their indexes, and the others as rejections (as `step` reports
+        the game's): wc3env refuses a whole batch for one bad order."""
+        if not batch:
+            return [], []
+        try:
+            await self.bridge.call("validate", slot=slot, actions=batch)
+            return list(enumerate(batch)), []
+        except WorkerError as e:
+            if e.code != "bad_actions":
+                raise RuntimeError(f"{e.code}: {e.message}") from e
+        kept, dropped = [], []
+        for i, action in enumerate(batch):
+            try:
+                await self.bridge.call("validate", slot=slot, actions=[action])
+                kept.append((i, action))
+            except WorkerError as e:
+                if e.code != "bad_actions":
+                    raise RuntimeError(f"{e.code}: {e.message}") from e
+                dropped.append({"index": i, "reason": f"dropped: {e.message}"})
+        return kept, dropped
+
+    # ---- spectators: the live view and the recording (agentenv_rts) ----
+
+    @extension(rts_recording.RECORDING, description="The game played so far as spectators see it: an MP4 of the "
+                                                    "map and a self-contained HTML replay, as base64 files.")
+    async def recording(self, formats: list[str] | None = None) -> dict:
+        self.stats["extension_calls"] += 1
+        async with self.lock:
+            timeline = self.timeline
+            if timeline is None or not timeline.frames:
+                return {"files": [], "notes": ["no game has been played"]}
+            stem = f"wc3-{Path(self.scenario['map']).stem}-{timeline.static['game']}".replace(" ", "")
+        files, notes = await asyncio.to_thread(rts_recording.files, timeline, stem, tuple(formats or ("mp4", "html")))
+        return {"files": files, "notes": notes}
+
+    def create_app(self):
+        app = super().create_app()
+        app.custom_route("/live", methods=["GET"])(self._live_page)
+        app.custom_route("/live/data.json", methods=["GET"])(self._live_data)
+        return app
+
+    async def _live_page(self, request: Request) -> Response:
+        return HTMLResponse(rts_live.page(), headers={"Cache-Control": "no-cache"})
+
+    async def _live_data(self, request: Request) -> Response:
+        return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since")),
+                            headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
 
     async def close(self) -> None:
         if self.bridge is not None:

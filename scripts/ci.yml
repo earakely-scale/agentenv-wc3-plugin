@@ -3,6 +3,8 @@ name: CI
 on: [push, pull_request]
 permissions:
   contents: read
+env:
+  WC3ENV_REF: eb660aa558fb6e5c639a1ff404082f7dc0ee483e   # the commit agents/wc3-player/Dockerfile pins
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -11,11 +13,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pwang724/wc3env
+          ref: ${{ env.WC3ENV_REF }}
           path: wc3env
       - uses: astral-sh/setup-uv@v6
-      - run: uv venv --python 3.11 && uv pip install -e ".[dev]" -e ./wc3env
+      - run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: uv venv --python 3.11 && uv pip install -e ".[dev]"
       - run: .venv/bin/ruff check .
-      - run: .venv/bin/pytest
+      # wc3env's wheel is Windows-only: the tests take its sources (the fake game, wc3agent) from the checkout
+      - run: PYTHONPATH=wc3env/src:wc3env/wc3agent/src .venv/bin/pytest
       - run: .venv/bin/agent-env plugin check
   image:
     runs-on: ubuntu-latest
@@ -24,13 +29,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pwang724/wc3env
+          ref: ${{ env.WC3ENV_REF }}
           path: wc3env
       - uses: astral-sh/setup-uv@v6
       - run: uv venv --python 3.11 && uv pip install -e .
-      - name: The image on the stand-in for wc3env's, and the smoke task through agent-env
+      - name: The env and the agent on the fake game, and the smoke task through agent-env
         run: |
-          scripts/standin.sh wc3env
-          mkdir -p "$RUNNER_TEMP/lic" && printf roc > "$RUNNER_TEMP/lic/roc.w3k" && printf tft > "$RUNNER_TEMP/lic/tft.w3k"
-          export WC3_LICENSE_DIR="$RUNNER_TEMP/lic"
-          .venv/bin/agent-env wc3 setup --base wc3-worker:standin
+          docker run -d -p 5000:5000 --name registry public.ecr.aws/docker/library/registry:2
+          .venv/bin/agent-env wc3 setup --fake --wc3env wc3env --agent
           .venv/bin/agent-env run wc3 --task smoke

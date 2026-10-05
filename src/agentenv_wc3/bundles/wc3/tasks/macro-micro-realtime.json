@@ -13,32 +13,43 @@
     "opponent_race": "orc",
     "ai_difficulty": "normal",
     "seed": 1,
-    "time_limit_seconds": 120
+    "time_limit_seconds": 600,
+    "mode": "realtime"
   },
   {
-    "id": "idle",
-    "type": "apply_server_config",
-    "env_id": "wc3",
-    "timeout_seconds": 600,
-    "directives": [
-      {
-        "service": "wc3",
-        "uri": "urn:wc3:idle/v1",
-        "args": {
-          "seconds": 120
-        }
-      }
+    "id": "agent",
+    "type": "deploy_agent",
+    "agent_name": "wc3",
+    "a2a_agent_id": "wc3-macro-micro",
+    "env_ids": [
+      "wc3"
+    ],
+    "env_vars": {
+      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
+    }
+  },
+  {
+    "id": "play",
+    "type": "prompt_agent",
+    "agent_name": "wc3",
+    "model": "anthropic/claude-sonnet-5-5",
+    "prompt_id": "macro-micro-realtime",
+    "prompt": "Play the game the env has started to its end.",
+    "timeout_seconds": 3600,
+    "depends_on": [
+      "match",
+      "agent"
     ]
   },
   {
     "id": "grade",
     "type": "env_outcome_verifier",
     "env_id": "wc3",
-    "file_artifact_id": "smoke-verifier",
-    "verifier_id": "smoke",
+    "file_artifact_id": "wc3-verifier",
+    "verifier_id": "wc3",
     "score_aggregator": "weighted_average",
     "depends_on": [
-      "idle"
+      "play"
     ]
   },
   {

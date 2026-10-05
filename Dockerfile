@@ -8,13 +8,14 @@ FROM ${BASE}
 
 USER root
 RUN apt-get -o Acquire::Retries=5 update \
- && apt-get -o Acquire::Retries=5 install -y --no-install-recommends python3-venv \
+ && apt-get -o Acquire::Retries=5 install -y --no-install-recommends python3-venv ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 # The server runs in the image's Linux Python; the game worker it starts runs in Wine's Windows Python, which
 # already has wc3env. The Linux side reads wc3env's prepared game data from the sources the image keeps in /opt/host.
+# Pillow and ffmpeg render the spectator recording (agentenv_rts.recording).
 RUN python3 -m venv /opt/agentenv \
  && /opt/agentenv/bin/pip install --no-cache-dir "agentenv-framework-protocol>=0.1.275,<0.2" "mcp>=1.25,<2" \
-    "pydantic>=2,<3" \
+    "pydantic>=2,<3" "pillow>=10.1" \
  && echo /opt/host > "$(/opt/agentenv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/wc3env-host.pth"
 COPY pyproject.toml README.md LICENSE /tmp/plugin/
 COPY src/ /tmp/plugin/src/

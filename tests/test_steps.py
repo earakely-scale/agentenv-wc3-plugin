@@ -84,11 +84,20 @@ async def test_match_then_idle_passes_the_smoke_verifier(env_vars, license_dir):
         assert gate["result"] is False and gate["weight"] < 0
 
 
-async def test_match_needs_the_activation_files(env_vars, tmp_path, monkeypatch):
+async def test_a_match_without_activation_files_plays_the_fake_game_and_the_real_one_refuses(
+        env_vars, tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("WC3_LICENSE_DIR", str(tmp_path / "nowhere"))
-    step = WC3MatchTaskStep(id="match", version=None, env_id="wc3")
+    step = WC3MatchTaskStep(id="match", version=None, env_id="wc3", time_limit_seconds=120)
     async with deployed(WC3Env()) as record:
-        with pytest.raises(RuntimeError, match="no Warcraft III activation files"):
+        context = await step.execute(run_context(record))
+    assert context.metadata["wc3_match"]["scenario"]["time_limit_seconds"] == 120
+    assert context.metadata["wc3_match"]["live_url"].endswith("/live")
+    assert "no Warcraft III activation files" in caplog.text
+    real = WC3Env()
+    real.fake, real.game_dir, real.license_mount = False, tmp_path / "game", tmp_path / "no-mount"
+    (tmp_path / "game").mkdir()
+    async with deployed(real) as record:
+        with pytest.raises(Exception, match="activation files"):
             await step.execute(run_context(record))
 
 
@@ -96,8 +105,7 @@ def test_read_license(license_dir):
     assert read_license(license_dir) == {"roc.w3k": base64.b64encode(b"roc key").decode(),
                                          "tft.w3k": base64.b64encode(b"tft key").decode()}
     (license_dir / "tft.w3k").write_bytes(b"")
-    with pytest.raises(RuntimeError, match="tft.w3k"):
-        read_license(license_dir)
+    assert read_license(license_dir) is None
 
 
 @environment_card(name="wc3")
@@ -140,3 +148,19 @@ async def test_a_game_without_a_replay_saves_nothing_and_says_why(env_vars, lice
         context = await SaveWC3ReplayTaskStep(id="replay", version=None, env_id="wc3").execute(run_context(record))
     assert context.metadata["replays"]["replay"] == []
     assert any("save_wc3_replay: no replay" in m for m in caplog.messages)
+
+
+@pytest.mark.parametrize("task", sorted(p.stem for p in (BUNDLE / "tasks").glob("*.json")))
+def test_every_bundle_task_loads_and_saves_its_replay_and_recording(local_stores, task):
+    import json
+
+    steps = json.loads((BUNDLE / "tasks" / f"{task}.json").read_text())
+    registry = get_task_step_registry()
+    for s in steps:
+        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    by_type = {s["type"]: s for s in steps}
+    assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
+    if task.startswith("macro-micro"):
+        agent = by_type["deploy_agent"]
+        assert agent["a2a_agent_id"] == "wc3-macro-micro" and agent["env_vars"]["WC3_MICRO_MODEL"]
+        assert by_type["wc3_match"]["mode"] == ("realtime" if task.endswith("realtime") else "stepping")

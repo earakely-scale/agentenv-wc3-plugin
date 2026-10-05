@@ -1,0 +1,141 @@
+"use strict";
+// The RTS spectator: the map and every unit in view, step by step, live from data.json or from the data a
+// recording embeds (window.RTS_DATA). Game-agnostic: it draws timeline.py's static map and frames.
+const $ = id => document.getElementById(id);
+const QUERY = new URLSearchParams(location.search);
+const STREAM = QUERY.has("stream");
+const TERRAIN = ["#2f4a2a", "#46452f", "#1f4466", "#121418"];
+const NEUTRAL = "#b8b8b8";
+const S = {static: null, frames: [], idx: -1, follow: true, playing: false, terrain: null, scale: 1, last: null};
+
+if (STREAM) document.body.classList.add("stream");
+
+function clock(t) {
+  if (t == null) return "0:00";
+  const s = Math.max(0, Math.floor(t)), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = s % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + ":" + String(sec).padStart(2, "0");
+}
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const players = () => (S.static && S.static.players) || [];
+const colorOf = owner => (players().find(p => p.slot === owner) || {}).color || NEUTRAL;
+
+function terrainCanvas(t) {
+  if (!t || !t.codes) return null;
+  const bytes = Uint8Array.from(atob(t.codes), c => c.charCodeAt(0));
+  const c = document.createElement("canvas");
+  c.width = t.width; c.height = t.height;
+  const ctx = c.getContext("2d"), img = ctx.createImageData(t.width, t.height);
+  const rgb = TERRAIN.map(h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)));
+  for (let j = 0; j < t.height; j++) for (let i = 0; i < t.width; i++) {
+    const code = rgb[Math.min(3, bytes[j * t.width + i] || 0)], p = ((t.height - 1 - j) * t.width + i) * 4;
+    img.data[p] = code[0]; img.data[p + 1] = code[1]; img.data[p + 2] = code[2]; img.data[p + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+function setStatic(st) {
+  S.static = st;
+  S.terrain = terrainCanvas(st.terrain);
+  const b = st.bounds, w = b.max_x - b.min_x, h = b.max_y - b.min_y, side = STREAM ? 1000 : 900;
+  S.scale = side / Math.max(w, h);
+  const canvas = $("map");
+  canvas.width = Math.round(w * S.scale); canvas.height = Math.round(h * S.scale);
+  $("title").textContent = st.title || "Spectator";
+  document.title = st.title || "Spectator";
+  $("sub").textContent = [st.map, players().map(p => `${p.label} (${p.race})`).join(" vs ")].filter(Boolean).join(" · ");
+  $("limit").textContent = st.time_limit ? ` / ${clock(st.time_limit)}` : "";
+}
+
+function toPx(x, y) {
+  const b = S.static.bounds;
+  return [(x - b.min_x) * S.scale, (b.max_y - y) * S.scale];
+}
+
+function draw() {
+  const st = S.static, frame = S.frames[S.idx];
+  if (!st) return;
+  const canvas = $("map"), ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#0b0d10"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (S.terrain) {
+    const t = st.terrain, [x0, y1] = toPx(t.origin[0], t.origin[1] + t.height * t.cell);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(S.terrain, x0, y1, t.width * t.cell * S.scale, t.height * t.cell * S.scale);
+  }
+  ctx.fillStyle = "rgba(10, 40, 18, .8)";
+  for (const [x, y] of st.trees || []) { const [px, py] = toPx(x, y); ctx.fillRect(px - 1, py - 1, 2, 2); }
+  for (const p of st.points || []) {
+    const [px, py] = toPx(p.x, p.y);
+    if (p.kind === "gold") { ctx.fillStyle = "#f2c84b"; ctx.beginPath(); ctx.moveTo(px, py - 6); ctx.lineTo(px + 6, py);
+      ctx.lineTo(px, py + 6); ctx.lineTo(px - 6, py); ctx.fill(); }
+    else if (p.kind === "start") { ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 1.5; ctx.beginPath();
+      ctx.arc(px, py, 14, 0, 2 * Math.PI); ctx.stroke(); }
+    else if (p.kind === "camp") { ctx.fillStyle = "rgba(230,90,70,.7)"; ctx.fillRect(px - 2.5, py - 2.5, 5, 5); }
+    else if (p.kind === "shop") { ctx.fillStyle = "#b07ce8"; ctx.fillRect(px - 4, py - 4, 8, 8); }
+  }
+  for (const [, owner, , x, y, hp, kind] of (frame && frame.units) || []) {
+    const [px, py] = toPx(x, y), color = colorOf(owner);
+    ctx.globalAlpha = 0.45 + 0.55 * Math.max(0, Math.min(100, hp)) / 100;
+    ctx.fillStyle = color; ctx.strokeStyle = "rgba(0,0,0,.7)"; ctx.lineWidth = 1;
+    if (kind === 1) { ctx.fillRect(px - 6, py - 6, 12, 12); ctx.strokeRect(px - 6, py - 6, 12, 12); }
+    else { const r = kind === 2 ? 6.5 : kind === 3 ? 3 : 4.5; ctx.beginPath(); ctx.arc(px, py, r, 0, 2 * Math.PI); ctx.fill();
+      if (kind === 2) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; } ctx.stroke(); }
+  }
+  ctx.globalAlpha = 1;
+  sidebar(frame);
+}
+
+function sidebar(frame) {
+  $("clock").textContent = clock(frame && frame.t);
+  const result = frame && frame.result, live = !S.embedded && !result;
+  $("badge").className = "badge " + (result ? "over" : live ? "live" : "");
+  $("badge").textContent = result ? result.replace(/_/g, " ").toUpperCase() : live ? "● LIVE" : "REPLAY";
+  const stats = (frame && frame.players) || {};
+  $("players").innerHTML = players().map(p => {
+    const s = stats[p.slot] || stats[String(p.slot)] || {}, food = s.food ? `${s.food[0]}/${s.food[1]}` : "–";
+    return `<div class="player" style="--c:${p.color}"><div class="name">${esc(p.label)}</div>
+      <div class="meta">${esc(p.race || "")} · ${esc(p.controller || "")}</div>
+      <div class="stats"><div><span>gold</span>${s.gold ?? "–"}</div><div><span>lumber</span>${s.lumber ?? "–"}</div>
+      <div><span>food</span>${food}</div><div><span>units</span>${s.units ?? "–"}</div>
+      <div><span>buildings</span>${s.structures ?? "–"}</div><div><span>score</span>${s.score ?? "–"}</div></div></div>`;
+  }).join("");
+  const lines = [];
+  for (let i = S.idx; i >= 0 && lines.length < (STREAM ? 14 : 40); i--)
+    for (const e of (S.frames[i].events || []).slice().reverse()) if (lines.length < 40) lines.push([S.frames[i].t, e]);
+  $("events").innerHTML = lines.map(([t, e]) => `<li><time>${clock(t)}</time>${esc(e)}</li>`).join("")
+    || '<li class="dim">Nothing yet.</li>';
+  $("scrub").max = Math.max(0, S.frames.length - 1); $("scrub").value = Math.max(0, S.idx);
+  $("pos").textContent = `${S.idx + 1} / ${S.frames.length} steps`;
+}
+
+function show(idx) { S.idx = Math.max(0, Math.min(S.frames.length - 1, idx)); draw(); }
+
+async function poll() {
+  try {
+    const since = S.frames.length ? S.frames[S.frames.length - 1].t : -1;
+    const r = await fetch(`${location.pathname.replace(/\/$/, "")}/data.json?since=${since}`, {cache: "no-store"});
+    const doc = await r.json();
+    if (!S.static || (doc.static && doc.static.game !== S.static.game)) { S.frames = []; setStatic(doc.static); }
+    S.frames.push(...doc.frames);
+    if (S.follow || STREAM) show(S.frames.length - 1);
+  } catch (e) { /* the env is restarting or gone: try again */ }
+  setTimeout(poll, 1000);
+}
+
+function tick() {
+  if (S.playing && S.idx < S.frames.length - 1) show(S.idx + 1); else S.playing = false;
+  $("play").textContent = S.playing ? "❚❚" : "▶";
+  setTimeout(tick, 100);
+}
+
+$("scrub").addEventListener("input", e => { S.follow = false; $("follow").checked = false; show(+e.target.value); });
+$("follow").addEventListener("change", e => { S.follow = e.target.checked; if (S.follow) show(S.frames.length - 1); });
+$("play").addEventListener("click", () => { S.playing = !S.playing; if (S.playing && S.idx >= S.frames.length - 1) show(0);
+  S.follow = false; $("follow").checked = false; });
+document.addEventListener("keydown", e => { if (e.key === " ") { e.preventDefault(); $("play").click(); }
+  if (e.key === "ArrowRight") show(S.idx + 1); if (e.key === "ArrowLeft") show(S.idx - 1); });
+
+if (window.RTS_DATA) {
+  S.embedded = true; S.follow = false; $("follow").parentElement.style.display = "none";
+  setStatic(window.RTS_DATA.static); S.frames = window.RTS_DATA.frames || []; show(0); S.playing = !STREAM; tick();
+} else { poll(); tick(); }
