@@ -120,8 +120,37 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
   shops, with every unit and building any player sees, in its owner's colour.
 - **The sidebar:** each player's gold, lumber, food, units, buildings and score, and the event feed.
 - **The timeline:** scrub through every step played so far.
-- **`/live?stream`:** lays the page out at 1920×1080 for a broadcast. The OpenCiv3 plugin's streamer sends any
-  such page to Twitch or X: `agent-env openciv3 stream --url http://127.0.0.1:<port>/live --no-cast --to twitch`.
+- **`/live?stream`:** lays the page out at 1920×1080 for a broadcast, which `agent-env wc3 stream` sends out.
+
+### Stream it to Twitch or X
+
+`agent-env wc3 stream` sends a game's broadcast layout to Twitch while the agent plays it: a headless browser in
+Docker shows `/live?stream` on a virtual display, and ffmpeg sends it at 1080p and 30 fps with its sound. It waits for
+a game to start in the newest wc3 env in Docker, and ends the stream a minute after GAME OVER, so it can run beside
+any task:
+
+```bash
+read -rs TWITCH_STREAM_KEY && export TWITCH_STREAM_KEY   # paste the key: it stays out of your shell history
+agent-env wc3 stream &                                  # waits for a game, streams it, stops after GAME OVER
+agent-env run wc3 --task macro-micro-quick
+```
+
+- **The key** is read from agent-env's secret store (`[stores.secret]` in `.agentenv/config.toml`, e.g. a secrets
+  file), else the environment variable `TWITCH_STREAM_KEY` (`--key-secret` names another). It reaches the container in
+  its environment, never on a command line, and the streamer's output shows `<stream key>` in its place.
+- **X too:** `--to twitch --to x` sends one stream, encoded once, to both; if one drops, the other goes on. Store the
+  server URL and stream key of a Live Studio source as `X_STREAM_SERVER` and `X_STREAM_KEY`, and press Go Live in
+  Live Studio once the stream has started.
+- **The casters:** two AI casters talk over the game, voiced and captioned (`--no-cast` leaves them out).
+  `--caster-model` picks the model that writes their lines (default Haiku 4.5); they use agent-env's model endpoint.
+- **Other options:** `--server` sends to any other RTMP server (YouTube's is `rtmp://a.rtmp.youtube.com/live2`),
+  `--size 1280x720 --bitrate 3000k` suits a slower uplink, `--title` names the broadcast, and `--test` sends to Twitch
+  without going live (its bandwidth test, visible only in Twitch Inspector).
+- **Recording:** `--record DIR` also writes the stream to `DIR/stream-<UTC time>.mp4`, and `--offline --record DIR`
+  only records, with no stream key.
+- **The image** (`agentenv_rts/streamer`, about 1.5 GB) is built on first use and tagged with a digest of its files,
+  so a changed streamer builds a new one. On Linux it shares the host's network; on macOS it reaches the env at
+  `host.docker.internal`.
 
 ## How it works
 
@@ -162,7 +191,7 @@ flowchart LR
 | Task steps | `wc3_match` (starts the game in `stepping` or `realtime` mode and sends any activation files) and `save_wc3_replay`, in `steps.py`; `save_rts_recording`, in `agentenv_rts/steps.py` |
 | Agent | `agents/wc3-player`: `wc3-macro-micro` |
 | Tasks and verifiers | `src/agentenv_wc3/bundles/wc3/` |
-| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch` |
+| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch`, `stream` |
 
 [docs/protocol.md](docs/protocol.md) is the worker's protocol.
 
@@ -177,6 +206,7 @@ flowchart LR
 | `live.py`, `viewer/` | The live view at `/live` and `/live/data.json?since=T`, with its `?stream` layout and a self-contained HTML replay |
 | `recording.py` | The MP4 of the map from the timeline (Pillow and ffmpeg) and `urn:rts:recording/v1` |
 | `display.py` | The game's own picture from an X display: one ffmpeg writes the match's video and the live JPEG stream |
+| `streamer/` | The streamer image: any env's `/live?stream` to RTMP servers and a recording, encoded once, with the casters |
 | `steps.py` | `save_rts_recording`: the recording as file artifacts |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 
@@ -190,7 +220,6 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
 - **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
 - **wc3agent's 25 scenarios**, staged and graded by the env. `urn:rts:debug/v1` already lets a match allow staging.
 - **Several agents in one game:** wc3agent's duels, and model against model.
-- **Broadcast:** casters for RTS games, and sending `/live?stream` to Twitch or X from the env's host.
 - **Upstream seams in wc3agent:** an injectable session and micro transport, so the agent needs no patching.
 - **A Linux-only build of wc3env's inputs**, so no Windows machine is needed (the hook with MinGW, StormLib on
   Linux).
