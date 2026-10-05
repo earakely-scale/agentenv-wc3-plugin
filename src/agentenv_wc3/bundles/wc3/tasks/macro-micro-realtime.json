@@ -70,6 +70,7 @@
     ],
     "formats": [
       "client",
+      "highlights",
       "mp4",
       "html"
     ]

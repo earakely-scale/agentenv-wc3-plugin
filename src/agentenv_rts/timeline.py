@@ -9,8 +9,9 @@ from the bottom), "trees": [[x, y]], "points": [{"kind": "gold" | "start" | "cam
 frame: {"t": game seconds, "players": {slot: {"gold", "lumber", "food": [used, cap], "score", "units",
 "structures", "army" (the army's value in resources), "agent": a player's own stats note}}, "units": [[id, owner slot,
 type id, x, y, hp %, kind]] (kind: 0 unit, 1 structure, 2 hero, 3 worker), "events": [{"text", "side": slot or null,
-"kind", "major"}] (or plain text), "notes": [{"slot", "kind", "text"}] (what players told the spectators: their
-plans), "result", and "w": wall seconds since the game's picture began, when there is one}
+"kind", "major"}] (or plain text; a later "fight_end" closes a "fight", its text naming the same place), "notes":
+[{"slot", "kind", "text"}] (what players told the spectators: their plans), "result", and "w": wall seconds since the
+game's picture began, when there is one}
 """
 
 from __future__ import annotations

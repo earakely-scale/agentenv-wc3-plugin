@@ -814,8 +814,10 @@ class WC3Env(AgentEnvEnvironment):
 
     @extension(rts_recording.RECORDING, description="The game played so far as spectators see it: an MP4 of the "
                                                     "map (mp4), a self-contained HTML replay (html) and, for a match "
-                                                    "with client_view, the game's own video (client; that ends it), "
-                                                    "as base64 files.")
+                                                    "with client_view, the game's own video with chapters (client; "
+                                                    "the replay plays it beside the map) and a highlight reel cut "
+                                                    "from it (highlights), as base64 files. Asking for either ends "
+                                                    "the capture.")
     async def recording(self, formats: list[str] | None = None) -> dict:
         self.stats["extension_calls"] += 1
         formats = tuple(formats or ("mp4", "html"))
@@ -825,7 +827,7 @@ class WC3Env(AgentEnvEnvironment):
                 return {"files": [], "notes": ["no game has been played"]}
             stem = f"wc3-{Path(self.scenario['map']).stem}-{timeline.static['game']}".replace(" ", "")
             client = (await asyncio.to_thread(self.capture.stop)
-                      if "client" in formats and self.capture is not None else None)
+                      if {"client", "highlights"} & set(formats) and self.capture is not None else None)
         files, notes = await asyncio.to_thread(rts_recording.files, timeline, stem, formats, client)
         return {"files": files, "notes": notes}
 
