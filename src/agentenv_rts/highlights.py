@@ -23,6 +23,7 @@ FIRST = ("death", "tier", "expand")   # the kinds a reel keeps before any other 
 SHORTEST = 4.0                 # a clip the reel's length would cut shorter than this is left out
 FADE = 0.3
 ESCAPE = re.compile(r"([=;#\\\n])")
+WORD = re.compile(r"[\w'-]+")
 
 
 class HighlightsError(RuntimeError):
@@ -32,7 +33,8 @@ class HighlightsError(RuntimeError):
 def moments(timeline: Timeline) -> list[dict]:
     """The major events in game order as `{"t", "w", "kind", "side", "text"}`, `w` None for a frame without video
     time. A fight also has `end` (the video time of the fight_end that closes it, None if none did) and `outcome`
-    (that event's text); a fight_end closes the open fight its text shares most with, as feeds name both by place."""
+    (that event's text); a fight_end closes the open fight whose text opens with the most of its words, as feeds name
+    both by place (whole words, so "the north" is not "the north-east")."""
     out, fighting = [], []
     for f in timeline.frames:
         for e in f.get("events") or ():
@@ -40,7 +42,8 @@ def moments(timeline: Timeline) -> list[dict]:
                 continue
             if e.get("kind") == "fight_end":
                 if fighting:
-                    fight = max(fighting, key=lambda m: len(os.path.commonprefix([m["text"], e.get("text") or ""])))
+                    words = WORD.findall(e.get("text") or "")
+                    fight = max(fighting, key=lambda m: len(os.path.commonprefix([WORD.findall(m["text"]), words])))
                     fighting.remove(fight)
                     fight.update(end=f.get("w"), outcome=e.get("text"))
             elif e.get("major"):

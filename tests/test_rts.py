@@ -261,10 +261,11 @@ async def test_the_games_picture_is_a_video_and_a_live_stream(tmp_path):
 EXPANSION = "Claude expanded: a Town Hall at the gold mine; east = far from home, and then some"
 
 
-def played() -> Timeline:
-    def major(text, kind, side=0, major=True):
-        return {"text": text, "side": side, "kind": kind, "major": major}
+def major(text, kind, side=0, major=True):
+    return {"text": text, "side": side, "kind": kind, "major": major}
 
+
+def played() -> Timeline:
     timeline = Timeline({"game": "g"})
     for t, events in ((0.0, []), (10.0, [major("Claude summoned a Archmage", "hero")]),
                       (30.0, [major("Fight at the north: Claude vs Orc AI", "fight"),
@@ -287,6 +288,13 @@ def test_the_highlights_are_the_major_moments_on_the_videos_clock():
                                                       (None, "level")]
     assert [(m["end"], m["outcome"][:24]) for m in moments if m["kind"] == "fight"] == [
         (40.0, "Fight at the north over "), (38.0, "Fight at the north-east ")]
+    crossed = Timeline({"game": "g"})
+    for t, events in ((30.0, [major("Fight at the north-east: Claude vs the creeps", "fight"),
+                              major("Fight at the north: Claude vs Orc AI", "fight")]),
+                      (38.0, [major("Fight at the north over after 8 s, no losses", "fight_end", None, False)]),
+                      (50.0, [major("Fight at the north-east over after 20 s, no losses", "fight_end", None, False)])):
+        crossed.add({"t": t, "w": t, "units": [], "events": events, "result": ""})
+    assert [m["end"] for m in highlights.moments(crossed)] == [50.0, 38.0]
     chapters = highlights.chapters(played(), 100.0)
     assert [(c["start"], c["end"]) for c in chapters] == [(0.0, 30.0), (30.0, 70.0), (70.0, 95.0), (95.0, 100.0)]
     assert [c["title"] for c in chapters] == ["Start", "Fight at the north: Claude vs Orc AI",
@@ -299,6 +307,17 @@ def test_the_highlights_are_the_major_moments_on_the_videos_clock():
 def ffprobe(path, *show) -> dict:
     return json.loads(subprocess.run(["ffprobe", "-v", "error", *show, "-of", "json", str(path)], capture_output=True,
                                      check=True).stdout)
+
+
+def packets(path) -> str:
+    """The MD5 of a video's encoded stream: equal for a copy, not for a re-encode."""
+    return subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-map", "0:v", "-c", "copy", "-f", "md5", "-"],
+                          capture_output=True, check=True, text=True).stdout
+
+
+def gray(path, at: float) -> bytes:
+    return subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{at:.3f}", "-i", str(path), "-frames:v", "1", "-f",
+                           "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, check=True).stdout
 
 
 def embedded(html: bytes) -> dict:
@@ -320,8 +339,13 @@ def test_the_recording_has_chapters_a_highlight_reel_and_a_replay_beside_the_vid
     assert [(c["start"], c["tags"]["title"]) for c in chapters] == [
         (0, "Start"), (30000, "Fight at the north: Claude vs Orc AI"), (70000, "Claude reached tier 2: Keep"),
         (95000, "Claude expanded: a Town Hall at the gold mine; east = far…")]
-    assert ffprobe(tmp_path / "g-client.mp4", "-show_streams")["streams"][0]["codec_name"] == "h264"
+    assert packets(tmp_path / "g-client.mp4") == packets(video)
     assert abs(highlights.duration(tmp_path / "g-highlights.mp4") - 50) < 0.2
+    at = 0.0
+    for a, b in highlights.clips(played(), 100.0):
+        shown, source = gray(tmp_path / "g-highlights.mp4", at + (b - a) / 2), gray(video, a + (b - a) / 2)
+        assert sum(abs(p - q) for p, q in zip(shown, source, strict=True)) / len(source) < 4
+        at += b - a
     assert embedded((tmp_path / "g.html").read_bytes())["video"] == "g-client.mp4"
     assert highlights.reel(played(), video, tmp_path / "short.mp4", max_seconds=30) == [(26.0, 49.0), (65.0, 72.0)]
     assert highlights.duration(tmp_path / "short.mp4") <= 30.05
@@ -330,6 +354,10 @@ def test_the_recording_has_chapters_a_highlight_reel_and_a_replay_beside_the_vid
     assert "video" not in embedded(base64.b64decode(files[1]["base64"]))
     files, notes = recording.files(played(), "g", ("highlights",))
     assert files == [] and notes == ["no highlights: they are cut from the client video (client_view)"]
+    (broken := tmp_path / "broken.mp4").write_bytes(b"no video")
+    files, notes = recording.files(played(), "g", ("client", "highlights"), broken)
+    assert [(f["name"], base64.b64decode(f["base64"])) for f in files] == [("g-client.mp4", b"no video")]
+    assert [n.partition(": ")[0] for n in notes] == ["client video without chapters", "no highlights"]
 
 
 def test_the_camera_follows_the_agents_fighting():
