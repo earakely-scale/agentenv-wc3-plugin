@@ -1,0 +1,36 @@
+# CI: copy to .github/workflows/ci.yml to turn it on.
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: pwang724/wc3env
+          path: wc3env
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv --python 3.11 && uv pip install -e ".[dev]" -e ./wc3env
+      - run: .venv/bin/ruff check .
+      - run: .venv/bin/pytest
+      - run: .venv/bin/agent-env plugin check
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: pwang724/wc3env
+          path: wc3env
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv --python 3.11 && uv pip install -e .
+      - name: The image on the stand-in for wc3env's, and the smoke task through agent-env
+        run: |
+          scripts/standin.sh wc3env
+          mkdir -p "$RUNNER_TEMP/lic" && printf roc > "$RUNNER_TEMP/lic/roc.w3k" && printf tft > "$RUNNER_TEMP/lic/tft.w3k"
+          export WC3_LICENSE_DIR="$RUNNER_TEMP/lic"
+          .venv/bin/agent-env wc3 setup --base wc3-worker:standin
+          .venv/bin/agent-env run wc3 --task smoke

@@ -1,0 +1,52 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "wc3"
+  },
+  {
+    "id": "match",
+    "type": "wc3_match",
+    "env_id": "wc3",
+    "map": "(2)EchoIsles.w3x",
+    "race": "human",
+    "opponent_race": "orc",
+    "ai_difficulty": "normal",
+    "seed": 1,
+    "time_limit_seconds": 120
+  },
+  {
+    "id": "idle",
+    "type": "apply_server_config",
+    "env_id": "wc3",
+    "timeout_seconds": 600,
+    "directives": [
+      {
+        "service": "wc3",
+        "uri": "urn:wc3:idle/v1",
+        "args": {
+          "seconds": 120
+        }
+      }
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "env_outcome_verifier",
+    "env_id": "wc3",
+    "file_artifact_id": "smoke-verifier",
+    "verifier_id": "smoke",
+    "score_aggregator": "weighted_average",
+    "depends_on": [
+      "idle"
+    ]
+  },
+  {
+    "id": "replay",
+    "type": "save_wc3_replay",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  }
+]
