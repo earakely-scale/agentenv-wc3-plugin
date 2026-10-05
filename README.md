@@ -3,8 +3,8 @@
 AI agents play melee games of Warcraft III: The Frozen Throne against the game's own AI, through
 [wc3env](https://github.com/pwang724/wc3env). An LLM can play through MCP tools, or wc3env's own two-model agent,
 `wc3agent`, can play: a macro model plans the economy and the army, and a fast micro model controls each unit. The
-micro model is Jev or any chat model, such as Claude Haiku. Spectators follow the game live, and every game is graded,
-saved as a native `.w3g` replay and recorded as a video. This repository is an environment plugin for the
+micro model is Jev or any chat model, such as Claude Haiku. Spectators follow the game live, in the game's own
+picture or on a map, and every game is graded, saved as a native `.w3g` replay and recorded as a video. This repository is an environment plugin for the
 [AgentEnv Framework](https://www.agentenvframework.com). Its RTS-generic half, `agentenv_rts`, is meant for the next
 real-time strategy game too.
 
@@ -14,11 +14,11 @@ real-time strategy game too.
 > keep it private. Whether this use fits your license agreement is your responsibility.
 
 **Status:**
-- **Not yet run on the real game.** Everything above the game is tested against wc3env's **fake game**, on macOS
-  (Apple Silicon) and x86-64 Linux: the unit tests, and whole `agent-env run`s of `smoke` and `macro-micro-quick`
-  through Docker.
-- **What the fake game simulates:** a town hall, five peasants and a distant enemy hall. Units move and stop;
-  building, combat and score are not simulated.
+- **Played on the real game** (Warcraft III Legacy 1.29.2 under Wine, x86-64 Linux, Docker): `smoke` passes, and
+  `macro-micro-quick` (Haiku for macro and micro) built a base, trained a hero and fought creeps in 60 macro turns and
+  302 micro calls, for $2.40. `macro-micro-realtime` plays with the game's own picture live and recorded.
+- **Without the game:** everything above it also runs on wc3env's **fake game**, on macOS (Apple Silicon) and Linux.
+  The fake game simulates a town hall, five peasants and a distant enemy hall; units move and stop, nothing else.
 
 ## Try it without Warcraft III (Mac or Linux)
 
@@ -69,7 +69,7 @@ agent-env run wc3 --task macro-micro-quick
 
 - **Map and side:** every game is on Echo Isles, with the agent playing Human.
 - **What every task saves:** the game's native replay, and the spectator recording (an MP4 of the map and a
-  self-contained HTML replay), as file artifacts.
+  self-contained HTML replay), as file artifacts. `macro-micro-realtime` also saves the game's own video.
 - **Grading:** `wc3-verifier` grades the game.
   - A win counts three times as much as not being defeated or as outscoring the AI.
   - The grade is 0 if the game stopped working, if the agent gave no orders, or if the harness played part of the
@@ -111,6 +111,11 @@ wc3agent's call log, with each decision and its cost.
 
 While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 watch --open` prints and opens it.
 
+- **The game's own picture:** with `client_view` in `wc3_match`, the game draws itself in a 960×540 window on the
+  container's display, the env captures it with ffmpeg, and the page shows it as the main view (`/live/client`, an
+  MJPEG stream; `/live/client.jpg` is the newest frame) with the map beside it. The camera follows the agent's
+  fighting, as wc3agent films a game. `save_rts_recording` with the `client` format stores the match's video.
+  Drawing makes stepping about three times slower, so the other tasks leave it off.
 - **The map:** Echo Isles' terrain from wc3env's pathing grid, trees, gold mines, start locations, creep camps and
   shops, with every unit and building any player sees, in its owner's colour.
 - **The sidebar:** each player's gold, lumber, food, units, buildings and score, and the event feed.
@@ -171,6 +176,7 @@ flowchart LR
 | `timeline.py` | The spectator schema: the map once (bounds, terrain grid, trees, points of interest, players) and a compact frame per step (units, resources, events) |
 | `live.py`, `viewer/` | The live view at `/live` and `/live/data.json?since=T`, with its `?stream` layout and a self-contained HTML replay |
 | `recording.py` | The MP4 of the map from the timeline (Pillow and ffmpeg) and `urn:rts:recording/v1` |
+| `display.py` | The game's own picture from an X display: one ffmpeg writes the match's video and the live JPEG stream |
 | `steps.py` | `save_rts_recording`: the recording as file artifacts |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 
@@ -179,14 +185,12 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
 
 ## Not done yet
 
-- **A run against the real game.** The first `smoke` run on a real setup is the test. Then come the macro/micro
-  tasks, stepped and realtime.
 - **Container options.** wc3env runs its worker with `--shm-size 256m` and `--init`; agent-env's `server`
-  provider sets neither, and whether Wine needs them here is untested.
+  provider sets neither, and the real game has run without them so far.
 - **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
 - **wc3agent's 25 scenarios**, staged and graded by the env. `urn:rts:debug/v1` already lets a match allow staging.
 - **Several agents in one game:** wc3agent's duels, and model against model.
-- **Broadcast:** casters for RTS games, and video of the real game's own picture from the container's display.
+- **Broadcast:** casters for RTS games, and sending `/live?stream` to Twitch or X from the env's host.
 - **Upstream seams in wc3agent:** an injectable session and micro transport, so the agent needs no patching.
 - **A Linux-only build of wc3env's inputs**, so no Windows machine is needed (the hook with MinGW, StormLib on
   Linux).

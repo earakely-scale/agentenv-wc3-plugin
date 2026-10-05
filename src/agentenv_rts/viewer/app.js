@@ -114,7 +114,7 @@ function sidebar(frame) {
 
 function showClient() {
   S.client = true;
-  document.body.classList.add("client");
+  document.body.classList.add("has-client");
   $("client").src = `${BASE}/client`;
   if (S.static) setStatic(S.static);
 }
