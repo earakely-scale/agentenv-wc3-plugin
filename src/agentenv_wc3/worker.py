@@ -63,10 +63,10 @@ class Worker:
 
     def start(self, map: str, players: list[dict], step_ms: int = 1000, seed: int | None = None,
               randomize_starts: bool = False, ai_difficulty: int | None = None, render: bool = False,
-              visible: bool = False, mode: str = "stepping") -> dict:
+              visible: bool = False, window: list[int] | None = None, mode: str = "stepping") -> dict:
         """A new game: closes the one before, launches the game with these players, and returns every player's
         first observation and the accepted setup. In `realtime` mode the game runs on its own clock; `render` and
-        `visible` draw the game in a window on the display, for its picture."""
+        `visible` draw the game in a window on the display, for its picture, `window` [width, height] big."""
         from wc3env.session import GameConfig, GameSession, MatchSetup, PlayerConfig
 
         self.close()
@@ -87,6 +87,8 @@ class Worker:
             raise WorkerError("bad_config", str(e)) from e
         self.session = GameSession(config, **({"game_factory": FakeGame} if self.fake else {}))
         observations = self.session.reset()
+        if visible and window and not self.fake:
+            self.session.game.resize(*window)
         return {"observations": _keyed(observations), "setup": self.session.setup}
 
     def validate(self, slot: int, actions: list[dict]) -> dict:

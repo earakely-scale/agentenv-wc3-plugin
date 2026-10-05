@@ -7,8 +7,10 @@ from the bottom), "trees": [[x, y]], "points": [{"kind": "gold" | "start" | "cam
 "players": [{"slot", "label", "race", "controller", "color"}], "types": {type id: name}, "time_limit"}
 
 frame: {"t": game seconds, "players": {slot: {"gold", "lumber", "food": [used, cap], "score", "units",
-"structures"}}, "units": [[id, owner slot, type id, x, y, hp %, kind]] (kind: 0 unit, 1 structure, 2 hero, 3
-worker), "events": [text], "result"}
+"structures", "army" (the army's value in resources), "agent": a player's own stats note}}, "units": [[id, owner slot,
+type id, x, y, hp %, kind]] (kind: 0 unit, 1 structure, 2 hero, 3 worker), "events": [{"text", "side": slot or null,
+"kind", "major"}] (or plain text), "notes": [{"slot", "kind", "text"}] (what players told the spectators: their
+plans), "result", and "w": wall seconds since the game's picture began, when there is one}
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ COLORS = ["#e0473d", "#3d7fe0", "#22b0a0", "#8a45c4", "#e6c83c", "#e8892e", "#55
           "#7fb6e6", "#2a6e3e", "#7a5232"]
 NEUTRAL = "#b8b8b8"
 MIN_FRAME_SECONDS = 0.5
+KEPT = ("events", "notes", "result")
 
 
 class Timeline:
@@ -35,7 +38,7 @@ class Timeline:
             return
         kept = self.frames[-2] if len(self.frames) > 1 else None   # the newest frame no later one replaces
         if (kept is not None and frame["t"] - kept["t"] < MIN_FRAME_SECONDS
-                and not any(f.get(k) for f in (frame, last) for k in ("events", "result"))):
+                and not any(f.get(k) for f in (frame, last) for k in KEPT)):
             self.frames[-1] = frame
         else:
             self.frames.append(frame)
@@ -56,3 +59,18 @@ class Timeline:
 
 def player_color(slot: int) -> str:
     return COLORS[slot % len(COLORS)] if slot >= 0 else NEUTRAL
+
+
+def model_name(model: str) -> str:
+    """A model id as people say it: anthropic/claude-sonnet-5-5 → Claude Sonnet 5.5, openai/gpt-6-sol → GPT-6 Sol."""
+    words = model.rpartition("/")[2].split("-")
+    out = []
+    for w in words:
+        if out and w.isdigit() and out[-1][-1].isdigit():
+            out[-1] += "." + w
+        elif w.lower() in ("gpt", "glm", "ai"):
+            out.append(w.upper())
+        else:
+            out.append(w[:1].upper() + w[1:])
+    name = " ".join(out)
+    return name.replace("GPT ", "GPT-", 1) if name.startswith("GPT ") else name

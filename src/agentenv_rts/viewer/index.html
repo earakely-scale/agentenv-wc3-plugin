@@ -12,11 +12,17 @@
   <div class="clock"><span id="badge" class="badge"></span><b id="clock">0:00</b><small id="limit"></small></div>
 </header>
 <main>
-  <section class="client"><img id="client" alt="The game, live"></section>
+  <section class="client"><img id="client" alt="The game, live"><div id="bug" class="bug"></div>
+    <div id="chyron" class="chyron"></div><div id="caption" class="caption" hidden></div></section>
   <section class="map"><canvas id="map"></canvas></section>
   <aside>
+    <h2 id="planhead" hidden>Thinking</h2>
+    <div id="plans"></div>
     <h2>Players</h2>
     <div id="players"></div>
+    <h2>Momentum</h2>
+    <canvas id="momentum"></canvas>
+    <div id="ahead" class="ahead"></div><div id="aheadtext" class="aheadtext"></div>
     <h2>What happened</h2>
     <ol id="events"></ol>
   </aside>

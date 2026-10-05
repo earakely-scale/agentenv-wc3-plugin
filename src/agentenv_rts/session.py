@@ -5,6 +5,9 @@ session, rather than through MCP tools an LLM reads. The env keeps the game; the
 - `urn:rts:step/v1` {"actions": {slot: [action]}, "ms"} → {"observations", "done", "rejected": {slot: [...]},
   "placements": {slot: [...]}, "elapsed_ms"}
 - `urn:rts:debug/v1` {"op", "args"} → the game's debug op result; an env may refuse ops it doesn't allow
+- `urn:rts:note/v1` {"slot", "kind", "text", "data"} → {} : what a player tells the spectators. `plan` is its current
+  plan in a sentence or two, `player` names it (text: "Claude Sonnet 5.5 + Haiku 4.5"), `stats` gives its running
+  costs (data: {"cost_usd", "decisions", "tokens"})
 
 Observations and actions are the game's own (for Warcraft III, wc3env's JSON). JSON keys slots as strings; the
 client gives them back as ints. `RemoteSession` is synchronous and uses only the standard library, so it runs in any
@@ -20,6 +23,8 @@ import urllib.request
 OBSERVE = "urn:rts:observe/v1"
 STEP = "urn:rts:step/v1"
 DEBUG = "urn:rts:debug/v1"
+NOTE = "urn:rts:note/v1"
+NOTE_KINDS = ("plan", "player", "stats")
 CARD_PATH = "/.well-known/agent-env.json"
 
 
@@ -70,6 +75,9 @@ class RemoteSession:
 
     def debug(self, op: str, **args) -> dict:
         return self.call(DEBUG, {"op": op, "args": args})
+
+    def note(self, kind: str, text: str = "", slot: int = 0, data: dict | None = None) -> dict:
+        return self.call(NOTE, {"slot": slot, "kind": kind, "text": text, "data": data or {}})
 
     def call(self, uri: str, params: dict) -> dict:
         endpoint = self.endpoints().get(uri)

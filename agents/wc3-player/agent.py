@@ -11,13 +11,17 @@ WC3_TURN_SECONDS (default 5, at least 5) is the game time between macro requests
 playing that much game time from now (default: the match's time limit).
 
 The prompt is not read: the game's setup (map, races, AI, time limit, mode) is the env's, from the task.
+Spectators hear from it through the env's urn:rts:note/v1: its name (the models), each macro turn's plan, and its
+running cost and decisions.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -35,6 +39,9 @@ from agentenv_protocol.a2a_agent import (
 from remote import RemoteGameSession, chat_micro
 
 from agentenv_rts.session import RemoteSession, SessionError
+from agentenv_rts.timeline import model_name
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MICRO = "anthropic/claude-haiku-4-5"
 RACES = {"human": "human", "orc": "orc", "undead": "undead", "night_elf": "nightelf"}
@@ -82,6 +89,42 @@ def trimmed(record: dict) -> dict:
     return out
 
 
+def plan_of(reply) -> str:
+    """The plan a macro reply opens with ("Plan: ..."), without the orders after it."""
+    found = re.search(r"Plan:\s*(.+?)(?:\n\s*\n|$)", reply if isinstance(reply, str) else "", re.S)
+    return " ".join(found.group(1).split()) if found else ""
+
+
+def player_name(macro: str, micro: str) -> str:
+    """The models that play, as spectators read them: "Claude Sonnet 5.5 + Haiku 4.5"."""
+    big = model_name(macro)
+    if micro == "off":
+        return big
+    small = "Jev" if micro.startswith("jev") else model_name(micro)
+    family = big.split()[0]
+    return f"{big} + {small.removeprefix(family + ' ') if small.startswith(family + ' ') else small}"
+
+
+def telling(run_log, remote: RemoteSession):
+    """wc3agent's RunLog that also tells the env's spectators each macro plan and the running cost (notes are best
+    effort: the game goes on without them)."""
+    class SpectatorLog(run_log):
+        def calls(self, records):
+            super().calls(records)
+            plans = [plan_of(r.get("reply")) for r in records if r["kind"] == "macro"]
+            usage = self.ledger.by_model.values()
+            notes = [("plan", plan, None) for plan in plans if plan]
+            notes.append(("stats", "", {"cost_usd": self.ledger.total(),
+                                        "decisions": self.summary["turns"] + self.summary["micro_calls"],
+                                        "tokens": sum(r["input"] + r["cached"] + r["output"] for r in usage)}))
+            for kind, text, data in notes:
+                try:
+                    remote.note(kind, text, data=data)
+                except SessionError as e:
+                    log.warning("spectator note: %s", e)
+    return SpectatorLog
+
+
 def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Path) -> dict:
     """Play the env's game to its end with wc3agent; wc3agent's summary of it."""
     from wc3agent import play as runner
@@ -105,6 +148,11 @@ def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Pa
         os.environ["TYPESAFE_API_KEY"] = "" if micro_model == "off" else "chat-model"
         micro.timed_call = chat_micro(base_url, key, micro_model)
     runner.GameSession = lambda game_config: RemoteGameSession(game_config, remote)
+    runner.RunLog = telling(runner.RunLog, remote)
+    try:
+        remote.note("player", player_name(config.model, micro_model))
+    except SessionError as e:
+        log.warning("spectator note: %s", e)
     remaining = scenario["time_limit_seconds"] - me.get("game_time_seconds", 0.0)
     if environ.get("WC3_MAX_GAME_SECONDS"):
         remaining = min(remaining, float(environ["WC3_MAX_GAME_SECONDS"]))

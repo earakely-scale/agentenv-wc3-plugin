@@ -10,11 +10,12 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
-FPS = 15
-LIVE_FPS = 5
+FPS = 24
+LIVE_FPS = 12
 BOUNDARY = "frame"
 JPEG_START, JPEG_END = b"\xff\xd8", b"\xff\xd9"
 # xwininfo -tree: `0xa00005 "Warcraft III": ("warcraft iii.exe" ...)  960x540+4+30  +4+30`, the last pair absolute
@@ -58,6 +59,7 @@ class Capture:
         self.frame: bytes | None = None
         self.frames = 0
         self.errors = b""
+        self.started = 0.0   # time.monotonic() when the video began: a frame's "w" is the video time it shows
 
     @classmethod
     def of_display(cls, display: str, region: tuple[int, int, int, int], path: Path, fps: int = FPS) -> Capture:
@@ -72,8 +74,9 @@ class Capture:
         command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostats", "-y", *self.source,
                    "-map", "0:v", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p",
                    "-r", str(self.fps), "-movflags", "+faststart", str(self.path),
-                   "-map", "0:v", "-r", str(self.live_fps), "-c:v", "mjpeg", "-q:v", "5", "-f", "image2pipe", "-"]
+                   "-map", "0:v", "-r", str(self.live_fps), "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "-"]
         self.proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.started = time.monotonic()
         threading.Thread(target=self._read, daemon=True, name="capture-frames").start()
         threading.Thread(target=self._drain, daemon=True, name="capture-errors").start()
 

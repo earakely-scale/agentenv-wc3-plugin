@@ -2,13 +2,17 @@
 // The RTS spectator: the map and every unit in view, step by step, live from data.json or from the data a
 // recording embeds (window.RTS_DATA). Game-agnostic: it draws timeline.py's static map and frames. When the env
 // captures the game's own picture (live.client), that is the main view and the map becomes the minimap beside it.
+// Beside them: what the players say they are planning (notes), the feed, each player's card and the momentum graph.
+// ?stream lays the page out 1920×1080 for a broadcast (a score bug, chyrons for the big moments); &cast=URL voices
+// the casters' lines from that caster service with captions; &title= names the broadcast.
 const $ = id => document.getElementById(id);
 const QUERY = new URLSearchParams(location.search);
 const STREAM = QUERY.has("stream");
+const CAST = (QUERY.get("cast") || "").replace(/\/$/, "");
 const TERRAIN = ["#2f4a2a", "#46452f", "#1f4466", "#121418"];
 const NEUTRAL = "#b8b8b8";
-const S = {static: null, frames: [], idx: -1, follow: true, playing: false, terrain: null, scale: 1, last: null,
-  client: false};
+const S = {static: null, frames: [], idx: -1, follow: true, playing: false, terrain: null, scale: 1, client: false,
+  video: null, chyrons: [], chyronOn: false, seenUpTo: null};
 const BASE = location.pathname.replace(/\/$/, "");
 
 if (STREAM) document.body.classList.add("stream");
@@ -21,6 +25,11 @@ function clock(t) {
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const players = () => (S.static && S.static.players) || [];
 const colorOf = owner => (players().find(p => p.slot === owner) || {}).color || NEUTRAL;
+const labelOf = slot => (players().find(p => p.slot === slot) || {}).label || `player ${slot}`;
+const textOf = e => typeof e === "string" ? e : e.text;
+const majorOf = e => typeof e === "object" && e.major;
+const statsOf = (frame, slot) => ((frame && frame.players) || {})[slot] || ((frame && frame.players) || {})[String(slot)] || {};
+const num = n => n == null ? "–" : n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
 function terrainCanvas(t) {
   if (!t || !t.codes) return null;
@@ -45,8 +54,9 @@ function setStatic(st) {
   S.scale = side / Math.max(w, h);
   const canvas = $("map");
   canvas.width = Math.round(w * S.scale); canvas.height = Math.round(h * S.scale);
-  $("title").textContent = st.title || "Spectator";
-  document.title = st.title || "Spectator";
+  const title = QUERY.get("title") || st.title || "Spectator";
+  $("title").textContent = title;
+  document.title = title;
   $("sub").textContent = [st.map, players().map(p => `${p.label} (${p.race})`).join(" vs ")].filter(Boolean).join(" · ");
   $("limit").textContent = st.time_limit ? ` / ${clock(st.time_limit)}` : "";
 }
@@ -77,16 +87,29 @@ function draw() {
     else if (p.kind === "camp") { ctx.fillStyle = "rgba(230,90,70,.7)"; ctx.fillRect(px - 2.5, py - 2.5, 5, 5); }
     else if (p.kind === "shop") { ctx.fillStyle = "#b07ce8"; ctx.fillRect(px - 4, py - 4, 8, 8); }
   }
+  const small = S.client ? 0.7 : 1;
   for (const [, owner, , x, y, hp, kind] of (frame && frame.units) || []) {
     const [px, py] = toPx(x, y), color = colorOf(owner);
     ctx.globalAlpha = 0.45 + 0.55 * Math.max(0, Math.min(100, hp)) / 100;
     ctx.fillStyle = color; ctx.strokeStyle = "rgba(0,0,0,.7)"; ctx.lineWidth = 1;
-    if (kind === 1) { ctx.fillRect(px - 6, py - 6, 12, 12); ctx.strokeRect(px - 6, py - 6, 12, 12); }
-    else { const r = kind === 2 ? 6.5 : kind === 3 ? 3 : 4.5; ctx.beginPath(); ctx.arc(px, py, r, 0, 2 * Math.PI); ctx.fill();
+    if (kind === 1) { const r = 6 * small; ctx.fillRect(px - r, py - r, 2 * r, 2 * r); ctx.strokeRect(px - r, py - r, 2 * r, 2 * r); }
+    else { const r = (kind === 2 ? 6.5 : kind === 3 ? 3 : 4.5) * small; ctx.beginPath(); ctx.arc(px, py, r, 0, 2 * Math.PI); ctx.fill();
       if (kind === 2) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; } ctx.stroke(); }
   }
   ctx.globalAlpha = 1;
   sidebar(frame);
+  momentum();
+  if (STREAM) bug(frame);
+  syncVideo(frame);
+}
+
+// What each player last said it was planning, as of the frame shown.
+function plans() {
+  const latest = new Map();
+  for (let i = S.idx; i >= 0 && latest.size < players().length; i--)
+    for (const n of (S.frames[i].notes || []).slice().reverse())
+      if (n.kind === "plan" && !latest.has(n.slot)) latest.set(n.slot, [S.frames[i].t, n.text]);
+  return [...latest.entries()].sort((a, b) => a[0] - b[0]);
 }
 
 function sidebar(frame) {
@@ -94,22 +117,96 @@ function sidebar(frame) {
   const result = frame && frame.result, live = !S.embedded && !result;
   $("badge").className = "badge " + (result ? "over" : live ? "live" : "");
   $("badge").textContent = result ? result.replace(/_/g, " ").toUpperCase() : live ? "● LIVE" : "REPLAY";
-  const stats = (frame && frame.players) || {};
+  const said = plans();
+  $("plans").innerHTML = said.map(([slot, [t, text]]) => `<div class="plan" style="--c:${colorOf(slot)}">
+    <div class="who">${esc(labelOf(slot))}<time>${clock(t)}</time></div><p>${esc(text)}</p></div>`).join("");
+  $("planhead").hidden = !said.length;
   $("players").innerHTML = players().map(p => {
-    const s = stats[p.slot] || stats[String(p.slot)] || {}, food = s.food ? `${s.food[0]}/${s.food[1]}` : "–";
+    const s = statsOf(frame, p.slot), food = s.food ? `${s.food[0]}/${s.food[1]}` : "–", a = s.agent;
+    const minutes = Math.max(1, (frame && frame.t) || 0) / 60;
+    const agent = a ? `<div class="agent">${a.cost_usd != null ? `$${a.cost_usd.toFixed(2)} so far` : ""}${
+      a.decisions != null ? ` · ${Math.round(a.decisions / minutes)} decisions/min` : ""}</div>` : "";
     return `<div class="player" style="--c:${p.color}"><div class="name">${esc(p.label)}</div>
       <div class="meta">${esc(p.race || "")} · ${esc(p.controller || "")}</div>
-      <div class="stats"><div><span>gold</span>${s.gold ?? "–"}</div><div><span>lumber</span>${s.lumber ?? "–"}</div>
-      <div><span>food</span>${food}</div><div><span>units</span>${s.units ?? "–"}</div>
-      <div><span>buildings</span>${s.structures ?? "–"}</div><div><span>score</span>${s.score ?? "–"}</div></div></div>`;
+      <div class="stats"><div><span>gold</span>${num(s.gold)}</div><div><span>lumber</span>${num(s.lumber)}</div>
+      <div><span>food</span>${food}</div><div><span>army</span>${num(s.army)}</div>
+      <div><span>buildings</span>${s.structures ?? "–"}</div><div><span>score</span>${num(s.score)}</div></div>${agent}</div>`;
   }).join("");
   const lines = [];
-  for (let i = S.idx; i >= 0 && lines.length < (STREAM ? 14 : 40); i--)
-    for (const e of (S.frames[i].events || []).slice().reverse()) if (lines.length < 40) lines.push([S.frames[i].t, e]);
-  $("events").innerHTML = lines.map(([t, e]) => `<li><time>${clock(t)}</time>${esc(e)}</li>`).join("")
-    || '<li class="dim">Nothing yet.</li>';
+  for (let i = S.idx; i >= 0 && lines.length < (STREAM ? 9 : 40); i--)
+    for (const e of (S.frames[i].events || []).slice().reverse())
+      if (lines.length < (STREAM ? 9 : 40) && (!STREAM || majorOf(e) || typeof e === "string")) lines.push([S.frames[i].t, e]);
+  $("events").innerHTML = lines.map(([t, e]) => {
+    const side = typeof e === "object" && e.side != null ? colorOf(e.side) : "transparent";
+    return `<li class="${majorOf(e) ? "major" : ""}" style="--c:${side}"><time>${clock(t)}</time>${esc(textOf(e))}</li>`;
+  }).join("") || '<li class="dim">Nothing yet.</li>';
   $("scrub").max = Math.max(0, S.frames.length - 1); $("scrub").value = Math.max(0, S.idx);
   $("pos").textContent = `${S.idx + 1} / ${S.frames.length} steps`;
+}
+
+// Each player's score over the game, its army's value dashed, and who is ahead now.
+function momentum() {
+  const canvas = $("momentum"), ctx = canvas.getContext("2d"), ps = players(), frames = S.frames.slice(0, S.idx + 1);
+  const w = canvas.width = canvas.clientWidth * devicePixelRatio, h = canvas.height = canvas.clientHeight * devicePixelRatio;
+  ctx.clearRect(0, 0, w, h);
+  if (frames.length < 2 || !ps.length || !w) { $("ahead").innerHTML = ""; $("aheadtext").textContent = ""; return; }
+  const t0 = frames[0].t, t1 = Math.max(frames.at(-1).t, t0 + 1), step = Math.max(1, Math.floor(frames.length / w));
+  for (const [key, dash] of [["army", [4, 4]], ["score", []]]) {
+    const top = Math.max(1, ...frames.flatMap(f => ps.map(p => statsOf(f, p.slot)[key] || 0)));
+    for (const p of ps) {
+      ctx.strokeStyle = p.color; ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.setLineDash(dash.map(d => d * devicePixelRatio)); ctx.globalAlpha = dash.length ? 0.55 : 1;
+      ctx.beginPath();
+      for (let i = 0; i < frames.length; i += step) {
+        const f = frames[i], x = (f.t - t0) / (t1 - t0) * w, y = h - 4 - (statsOf(f, p.slot)[key] || 0) / top * (h - 8);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]); ctx.globalAlpha = 1;
+  const now = ps.map(p => [p, statsOf(frames.at(-1), p.slot).score || 0]), total = now.reduce((a, [, s]) => a + s, 0) || 1;
+  $("ahead").innerHTML = now.map(([p, s]) => `<span style="flex:${Math.max(s, 1)};background:${p.color}" title="${esc(p.label)}"></span>`).join("");
+  const lead = now.slice().sort((a, b) => b[1] - a[1]);
+  $("aheadtext").textContent = lead.length > 1 && lead[0][1] > lead[1][1]
+    ? `${lead[0][0].label} ahead by ${Math.round((lead[0][1] - lead[1][1]) / total * 100)}% of the score` : "Level on score";
+}
+
+// ?stream: the score bug over the game's picture.
+function bug(frame) {
+  const ps = players().slice(0, 2);
+  if (ps.length < 2) return;
+  const side = p => { const s = statsOf(frame, p.slot), food = s.food ? `${s.food[0]}/${s.food[1]}` : "–";
+    return `<div class="side" style="--c:${p.color}"><b>${esc(p.label)}</b><span>${num(s.score)}</span>
+      <small>army ${num(s.army)} · food ${food}</small></div>`; };
+  $("bug").innerHTML = `${side(ps[0])}<div class="mid"><b>${clock(frame && frame.t)}</b><small>${
+    S.static.time_limit ? `of ${clock(S.static.time_limit)}` : ""}</small></div>${side(ps[1])}`;
+}
+
+// ?stream: a chyron for each big moment as it happens (not the backlog of a page opened late).
+function chyrons(fresh) {
+  if (!STREAM || S.embedded) return;
+  for (const f of fresh) for (const e of f.events || []) if (majorOf(e)) S.chyrons.push(e);
+  S.chyrons = S.chyrons.slice(-3);
+  if (!S.chyronOn) nextChyron();
+}
+function nextChyron() {
+  const e = S.chyrons.shift(), el = $("chyron");
+  if (!e) { S.chyronOn = false; el.classList.remove("on"); return; }
+  S.chyronOn = true;
+  el.style.setProperty("--c", e.side != null ? colorOf(e.side) : "#e6c83c");
+  el.innerHTML = `<b>${esc((e.kind || "").replace(/_/g, " "))}</b>${esc(e.text)}`;
+  el.classList.add("on");
+  setTimeout(() => { el.classList.remove("on"); setTimeout(nextChyron, 500); }, 5000);
+}
+
+// A recording with the game's video beside it plays the video in step with the frames (each frame's "w").
+function syncVideo(frame) {
+  const v = S.video;
+  if (!v || !frame || frame.w == null || !isFinite(v.duration)) return;
+  if (Math.abs(v.currentTime - frame.w) > (S.playing ? 1.5 : 0.25)) v.currentTime = Math.min(frame.w, v.duration - 0.05);
+  if (S.playing && v.paused) v.play().catch(() => {});
+  if (!S.playing && !v.paused) v.pause();
 }
 
 function showClient() {
@@ -127,27 +224,77 @@ async function poll() {
     const r = await fetch(`${BASE}/data.json?since=${since}`, {cache: "no-store"});
     const doc = await r.json();
     if (doc.live && doc.live.client && !S.client) showClient();
-    if (!S.static || (doc.static && doc.static.game !== S.static.game)) { S.frames = []; setStatic(doc.static); }
+    if (!S.static || (doc.static && doc.static.game !== S.static.game)) { S.frames = []; S.seenUpTo = null; setStatic(doc.static); }
+    else if (doc.static) S.static.players = doc.static.players;   // names a player gave itself
+    if (S.seenUpTo != null) chyrons(doc.frames.filter(f => f.t > S.seenUpTo));
+    if (doc.frames.length) S.seenUpTo = doc.frames.at(-1).t; else if (S.seenUpTo == null) S.seenUpTo = -1;
     S.frames.push(...doc.frames);
     if (S.follow || STREAM) show(S.frames.length - 1);
   } catch (e) { /* the env is restarting or gone: try again */ }
   setTimeout(poll, 1000);
 }
 
+// Replays step a frame per 100 ms; beside the game's video, at the video's pace.
 function tick() {
   if (S.playing && S.idx < S.frames.length - 1) show(S.idx + 1); else S.playing = false;
   $("play").textContent = S.playing ? "❚❚" : "▶";
-  setTimeout(tick, 100);
+  const here = S.frames[S.idx] || {}, next = S.frames[S.idx + 1] || {};
+  setTimeout(tick, S.video && here.w != null && next.w != null ? Math.max(20, Math.min(1000, (next.w - here.w) * 1000)) : 100);
+}
+
+// ---- the casters (&cast=URL): their lines in order, voiced, with a caption while each plays ----
+
+const CASTERS = {pbp: ["play-by-play", "#e9c46a"], color: ["analyst", "#8fb4ff"]};
+const voice = {last: 0, queue: [], on: null, first: true};
+async function pollCast() {
+  try {
+    const r = await fetch(`${CAST}/cast.json?since=${voice.last}`, {cache: "no-store"}), doc = await r.json();
+    const lines = (doc.lines || []).filter(l => l.id > voice.last).sort((a, b) => a.id - b.id);
+    if (lines.length) voice.last = lines.at(-1).id;
+    voice.queue.push(...(voice.first ? stillOn(lines, doc.speaking_until) : lines));
+    voice.first = false;
+    speak();
+  } catch (e) { /* the caster isn't up yet: keep asking */ }
+  setTimeout(pollCast, 1000);
+}
+// A page opened mid-broadcast starts with the lines still under way by the caster's clock, not its whole backlog.
+function stillOn(lines, until) {
+  let left = (until || 0) - Date.now() / 1000, k = lines.length;
+  while (k > 0 && left > 0) left -= (lines[--k].seconds || 0) + 0.5;
+  return lines.slice(k);
+}
+function speak() {
+  if (voice.on || !voice.queue.length) return;
+  const line = voice.queue.shift(), el = $("caption"), [role, colour] = CASTERS[line.speaker] || ["", "#b6bac3"];
+  const secs = line.seconds || String(line.text).split(/\s+/).length / 2.6, start = performance.now();
+  voice.on = line;
+  el.style.setProperty("--c", colour);
+  el.innerHTML = `<div class="who"><b>${esc(line.name)}</b><span>${role}</span></div><p>${esc(line.text)}</p>`;
+  el.hidden = false;
+  let timer = setTimeout(done, (secs + 3) * 1000);   // audio that never ends
+  function done() { clearTimeout(timer); if (voice.on !== line) return; voice.on = null; el.hidden = true; setTimeout(speak, 400); }
+  function silent() { clearTimeout(timer); timer = setTimeout(done, Math.max(0, secs * 1000 - (performance.now() - start))); }
+  if (!line.audio) return silent();
+  const audio = new Audio(`${CAST}/${line.audio}`);
+  audio.onended = done; audio.onerror = silent;
+  audio.play().catch(silent);   // autoplay refused: the caption still shows for the line's length
 }
 
 $("scrub").addEventListener("input", e => { S.follow = false; $("follow").checked = false; show(+e.target.value); });
 $("follow").addEventListener("change", e => { S.follow = e.target.checked; if (S.follow) show(S.frames.length - 1); });
 $("play").addEventListener("click", () => { S.playing = !S.playing; if (S.playing && S.idx >= S.frames.length - 1) show(0);
-  S.follow = false; $("follow").checked = false; });
+  S.follow = false; $("follow").checked = false; syncVideo(S.frames[S.idx]); });
 document.addEventListener("keydown", e => { if (e.key === " ") { e.preventDefault(); $("play").click(); }
   if (e.key === "ArrowRight") show(S.idx + 1); if (e.key === "ArrowLeft") show(S.idx - 1); });
 
 if (window.RTS_DATA) {
   S.embedded = true; S.follow = false; $("follow").parentElement.style.display = "none";
+  if (window.RTS_DATA.video) {   // the game's own video, a file beside this page
+    const v = document.createElement("video");
+    v.id = "client"; v.src = window.RTS_DATA.video; v.muted = true; v.playsInline = true; v.preload = "auto";
+    v.onloadedmetadata = () => { S.video = v; S.client = true; document.body.classList.add("has-client"); setStatic(S.static); show(S.idx); };
+    $("client").replaceWith(v);
+  }
   setStatic(window.RTS_DATA.static); S.frames = window.RTS_DATA.frames || []; show(0); S.playing = !STREAM; tick();
 } else { poll(); tick(); }
+if (CAST) pollCast();

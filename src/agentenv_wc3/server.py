@@ -9,8 +9,10 @@ A program plays the same game through the `urn:rts:*` session extensions (agente
 in, raw wc3env actions out, as wc3env's own `wc3agent` plays (agents/wc3-player). In `realtime` mode the game runs on
 its own clock and a step only sends orders and observes. Spectators follow the game at `/live` (agentenv_rts.live),
 and `urn:rts:recording/v1` gives its recording once it is played. With `client_view` the game also draws itself in a
-window on the container's display: the live page shows that picture (`/live/client`), the camera follows the agent's
-fighting, and the recording has the match's video (agentenv_rts.display).
+window on the container's display: the live page shows that picture (`/live/client`), a director points the camera
+at the agent's fights and key moments (frames.Director), and the recording has the match's video
+(agentenv_rts.display). Spectators read a feed of what happened (frames.Feed), and what players tell them through
+`urn:rts:note/v1`: their plans (also shown in the game's picture), their names and their running costs.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import math
 import os
 import shlex
 import sys
+import textwrap
 import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -44,7 +47,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
-from agentenv_rts.session import DEBUG, OBSERVE, STEP
+from agentenv_rts.session import DEBUG, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
 
 from . import frames, render
@@ -64,16 +67,19 @@ DEFAULT_WORKER_CMD = ["wine", "C:\\Python311\\python.exe", "Z:" + str(WORKER).re
 MAX_ADVANCE_SECONDS = 60
 DEFAULT_SCENARIO = {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race": "orc", "ai_difficulty": "normal",
                     "seed": None, "randomize_starts": False, "time_limit_seconds": 1200, "mode": "stepping",
-                    "allow_debug": False, "client_view": False}
+                    "allow_debug": False, "client_view": False, "labels": None}
 MODES = ("stepping", "realtime")
 # Debug ops that change only how the game is shown or how fast its clock runs: any session may send them (wc3agent
 # sets the speed when it starts). Every other op stages the game, so it needs the match's allow_debug.
 VIEW_DEBUG_OPS = ("speed", "camera", "overlay", "render")
 DEFAULT_STEP_MS = 1000
 WINDOW_NAME = "Warcraft III"
+# The game's window with client_view (its frame: the picture inside is 8 by 34 smaller, 1280x720 here).
+WINDOW = [int(n) for n in os.environ.get("WC3_WINDOW", "1288x754").split("x")]
 CLIENT_DIR = Path(os.environ.get("WC3_CLIENT_DIR", "/tmp/wc3-client"))
-CAMERA_SECONDS = 0.5   # the camera moves at most this often (wall time)
-CAMERA_STILL = 300.0   # and stays put while its spot moves less than this
+PAN_SECONDS, PAN_STEPS, PAN_MAX = 0.6, 8, 4000.0   # the camera eases over this; farther than PAN_MAX it cuts
+NOTE_CHARS = 400
+OVERLAY = {"x": -0.30, "y": 0.60, "seconds": 9}   # where and how long a plan shows in the game's picture
 
 NEW_GAME_EXTENSION = "urn:wc3:new-game/v1"
 REPLAY_EXTENSION = "urn:wc3:replay/v1"
@@ -123,6 +129,9 @@ def check_scenario(s: dict) -> dict:
     for key in ("allow_debug", "client_view"):
         if not isinstance(s[key], bool):
             raise ValueError(f"{key} must be true or false")
+    if s["labels"] is not None and not (isinstance(s["labels"], dict) and all(
+            str(k).isdigit() and isinstance(v, str) for k, v in s["labels"].items())):
+        raise ValueError('labels must name players by slot, e.g. {"0": "Claude Opus 5.5", "1": "Orc AI"}')
     return s
 
 
@@ -179,7 +188,10 @@ class WC3Env(AgentEnvEnvironment):
         self.timeline: Timeline | None = None
         self.capture: rts_display.Capture | None = None
         self.camera: tuple[float, float] | None = None
-        self.camera_at = 0.0
+        self.director = frames.Director(AGENT)
+        self.feed: frames.Feed | None = None
+        self.notes: list[dict] = []
+        self.agents: dict[int, dict] = {}
         self.stats = {"games": 0, "tool_calls": 0, "invalid_calls": 0, "advances": 0, "orders_sent": 0,
                       "orders_rejected": 0, "extension_calls": 0, "idle_seconds": 0, "session_steps": 0}
 
@@ -209,7 +221,8 @@ class WC3Env(AgentEnvEnvironment):
                                         seed=scenario["seed"], randomize_starts=scenario["randomize_starts"],
                                         ai_difficulty=DIFFICULTIES[scenario["ai_difficulty"]],
                                         mode=scenario["mode"], render=scenario["client_view"],
-                                        visible=scenario["client_view"])
+                                        visible=scenario["client_view"],
+                                        window=WINDOW if scenario["client_view"] else None)
         self.scenario, self.setup = scenario, result.get("setup")
         self.obs = {int(k): v for k, v in result["observations"].items()}
         self.queue, self.recent, self.result, self.failed = [], [], "", None
@@ -217,12 +230,14 @@ class WC3Env(AgentEnvEnvironment):
         for o in self.obs.values():
             self.names.see(o)
         self.stats["games"] += 1
+        labels = {int(k): v for k, v in (scenario["labels"] or {}).items()}
         self.timeline = Timeline(frames.static(f"g-{self.stats['games']}", scenario, self.setup, self.obs,
-                                               self.ref))
-        self._record()
-        self.camera, self.camera_at = None, 0.0
+                                               self.ref, labels))
+        self.feed = frames.Feed(self.ref, self.timeline.static)
+        self.camera, self.director, self.notes, self.agents = None, frames.Director(AGENT), [], {}
         if scenario["client_view"]:
             await self._start_capture()
+        self._record()
         log.warning("NEW GAME %s: %s vs the %s %s AI, seed %s", scenario["map"], scenario["race"],
                     scenario["ai_difficulty"], scenario["opponent_race"], (self.setup or {}).get("match_setup"))
 
@@ -243,9 +258,16 @@ class WC3Env(AgentEnvEnvironment):
     def _seconds(self) -> float:
         return self._me().get("game_time_seconds", 0.0)
 
-    def _record(self, events: list[str] | None = None) -> None:
-        if self.timeline is not None and self.obs:
-            self.timeline.add(frames.frame(self.obs, self.result, events))
+    def _record(self) -> None:
+        """A spectator frame of the game as it is now, with the feed's new events and the players' new notes."""
+        if self.timeline is None or not self.obs:
+            return
+        notes, self.notes = self.notes, []
+        wall = time.monotonic() - self.capture.started if self.capture is not None and self.capture.running else None
+        frame = frames.frame(self.obs, self.result, self.feed.see(self.obs), self.ref, notes, wall)
+        for slot, stats in self.agents.items():
+            frame["players"].setdefault(str(slot), {})["agent"] = stats
+        self.timeline.add(frame)
 
     def _observed(self, result: dict) -> None:
         """A step's observations become the game's state: its result (or the time limit) and a spectator frame."""
@@ -259,10 +281,12 @@ class WC3Env(AgentEnvEnvironment):
         if self.fake:
             log.warning("client_view: the fake game draws nothing; the live page shows the map only")
             return
-        display, region = os.environ.get("DISPLAY", ":99"), None
-        for _ in range(20):
-            if region := await asyncio.to_thread(rts_display.window_region, display, WINDOW_NAME):
+        display, region, seen = os.environ.get("DISPLAY", ":99"), None, None
+        for _ in range(20):   # until the window is there and done resizing
+            region = await asyncio.to_thread(rts_display.window_region, display, WINDOW_NAME)
+            if region is not None and region == seen:
                 break
+            seen = region
             await asyncio.sleep(0.5)
         if region is None:
             log.warning("client_view: no %r window on %s, so no picture this game", WINDOW_NAME, display)
@@ -283,18 +307,29 @@ class WC3Env(AgentEnvEnvironment):
             capture.path.unlink(missing_ok=True)
 
     async def _aim(self) -> None:
-        """With the game's picture on, its camera follows the agent's fighting (frames.camera_spot), at most every
-        CAMERA_SECONDS and only when the spot moves CAMERA_STILL or more."""
-        if self.capture is None or not self.capture.running or time.monotonic() - self.camera_at < CAMERA_SECONDS:
+        """With the game's picture on, the director picks the camera's next spot (frames.Director)."""
+        if self.capture is None or not self.capture.running or self.feed is None:
             return
-        spot = frames.camera_spot(self._me())
-        if spot is None or (self.camera is not None and math.dist(spot, self.camera) < CAMERA_STILL):
-            return
-        try:
-            await self.bridge.call("debug", op="camera", args={"x": round(spot[0]), "y": round(spot[1])})
-        except WorkerError as e:
-            log.warning("camera: %s", e.message)
-        self.camera, self.camera_at = spot, time.monotonic()
+        if (spot := self.director.choose(self._me(), self.feed.moments, time.monotonic())) is not None:
+            await self._pan(spot)
+
+    async def _pan(self, spot: tuple[float, float]) -> None:
+        """Eases the camera to `spot`; a far one is a cut, since a long pan only blurs the map."""
+        start = self.camera
+        steps = PAN_STEPS if start is not None and math.dist(start, spot) <= PAN_MAX else 1
+        for i in range(1, steps + 1):
+            k = i / steps
+            k = k * k * (3 - 2 * k)
+            x, y = (spot if start is None or steps == 1 else
+                    (start[0] + (spot[0] - start[0]) * k, start[1] + (spot[1] - start[1]) * k))
+            try:
+                await self.bridge.call("debug", op="camera", args={"x": round(x), "y": round(y)})
+            except WorkerError as e:
+                log.warning("camera: %s", e.message)
+                return
+            if i < steps:
+                await asyncio.sleep(PAN_SECONDS / steps)
+        self.camera = spot
 
     def _footer(self) -> str:
         return render.footer(self._me(), limit=self.scenario["time_limit_seconds"], queued=len(self.queue),
@@ -426,7 +461,7 @@ class WC3Env(AgentEnvEnvironment):
             for o in self.obs.values():
                 self.names.see(o)
             self.recent = events
-            self._record(events)
+            self._record()
             await self._aim()
             lines = [f"Advanced {render.clock(start)} → {render.clock(self._seconds())}."]
             if dropped:
@@ -573,17 +608,18 @@ class WC3Env(AgentEnvEnvironment):
                            "(time passes when the agent steps) or realtime (the game runs on its own clock); "
                            "allow_debug: the session's debug extension may stage the game; client_view: draw the "
                            "game for spectators, its picture live and in the recording (stepping is slower); "
+                           "labels: players' names by slot for spectators; "
                            "license: the activation files {\"roc.w3k\": base64, \"tft.w3k\": base64}, needed once "
                            "per env.")
     async def new_game(self, map: str | None = None, race: str | None = None, opponent_race: str | None = None,
                        ai_difficulty: str | None = None, seed: int | None = None, randomize_starts: bool | None = None,
                        time_limit_seconds: int | None = None, mode: str | None = None,
                        allow_debug: bool | None = None, client_view: bool | None = None,
-                       license: dict | None = None) -> dict:
+                       labels: dict | None = None, license: dict | None = None) -> dict:
         self.stats["extension_calls"] += 1
         given = {"map": map, "race": race, "opponent_race": opponent_race, "ai_difficulty": ai_difficulty,
                  "seed": seed, "randomize_starts": randomize_starts, "time_limit_seconds": time_limit_seconds,
-                 "mode": mode, "allow_debug": allow_debug, "client_view": client_view}
+                 "mode": mode, "allow_debug": allow_debug, "client_view": client_view, "labels": labels}
         scenario = check_scenario({**self.scenario, **{k: v for k, v in given.items() if v is not None}})
         async with self.lock:
             if license is not None and not self.fake:
@@ -692,7 +728,7 @@ class WC3Env(AgentEnvEnvironment):
             for o in self.obs.values():
                 self.names.see(o)
             self.recent = render.events_text(me.get("events") or [], self.ref, self.names, AGENT)
-            self._record(self.recent)
+            self._record()
             await self._aim()
             return {**self._session_state(), "rejected": rejected, "placements": placements,
                     "elapsed_ms": result.get("elapsed_ms")}
@@ -712,6 +748,34 @@ class WC3Env(AgentEnvEnvironment):
                 return await self.bridge.call("debug", op=op, args=args or {})
             except WorkerError as e:
                 raise RuntimeError(f"{e.code}: {e.message}") from e
+
+    @extension(NOTE, description="What a player tells the spectators: `plan`, its current plan in a sentence or two "
+                                 "(shown on the live page and in the game's picture); `player`, its name, e.g. the "
+                                 "models that play it; `stats`, data {cost_usd, decisions, tokens} so far.")
+    async def session_note(self, kind: str, text: str = "", slot: int = AGENT, data: dict | None = None) -> dict:
+        self.stats["extension_calls"] += 1
+        if kind not in NOTE_KINDS:
+            raise ValueError(f"kind must be one of {', '.join(NOTE_KINDS)}")
+        text = " ".join(str(text or "").split())[:NOTE_CHARS]
+        async with self.lock:
+            if self.timeline is None or self.feed is None:
+                raise RuntimeError("no game has started")
+            if kind == "player" and text:
+                for player in self.timeline.static["players"]:
+                    if player["slot"] == slot:
+                        player["label"] = text
+                self.feed.labels[slot] = text
+            elif kind == "stats":
+                self.agents[slot] = {k: (data or {})[k] for k in ("cost_usd", "decisions", "tokens")
+                                     if isinstance((data or {}).get(k), int | float)}
+            elif kind == "plan" and text:
+                self.notes.append({"slot": slot, "kind": kind, "text": text})
+                if self.capture is not None and self.capture.running:
+                    try:
+                        await self.bridge.call("debug", op="overlay", args={"panel": wrapped(text), **OVERLAY})
+                    except WorkerError as e:
+                        log.warning("overlay: %s", e.message)
+        return {}
 
     async def _session_game(self) -> None:
         try:
@@ -771,6 +835,8 @@ class WC3Env(AgentEnvEnvironment):
         app.custom_route("/live/data.json", methods=["GET"])(self._live_data)
         app.custom_route("/live/client", methods=["GET"])(self._live_client)
         app.custom_route("/live/client.jpg", methods=["GET"])(self._live_client_frame)
+        app.custom_route("/live/state.json", methods=["GET"])(self._live_state)
+        app.custom_route("/live/casting.json", methods=["GET"])(self._live_casting)
         return app
 
     async def _live_page(self, request: Request) -> Response:
@@ -779,6 +845,30 @@ class WC3Env(AgentEnvEnvironment):
     async def _live_data(self, request: Request) -> Response:
         return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since"), self.capture is not None),
                             headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
+
+    async def _live_state(self, request: Request) -> Response:
+        """Where the game stands, for a streamer deciding when to stop."""
+        last = self.timeline.last if self.timeline is not None else None
+        return JSONResponse({"game_over": self.game_over, "result": self.result, "t": (last or {}).get("t"),
+                             "client": self.capture is not None}, headers={"Cache-Control": "no-store"})
+
+    async def _live_casting(self, request: Request) -> Response:
+        return JSONResponse(rts_live.casting(self.timeline, request.query_params.get("since"), self.desk()),
+                            headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
+
+    def desk(self) -> str:
+        """The casters' brief: what game this is, who plays, and how it is won."""
+        s, names = self.scenario, {p["slot"]: p["label"] for p in (self.timeline.static["players"]
+                                                                   if self.timeline is not None else ())}
+        race = s["race"].replace("_", " ")
+        return (f"Warcraft III: The Frozen Throne, a real-time strategy game. Each side mines gold and cuts lumber, "
+                f"builds a base, trains workers, an army and heroes (heroes level up by killing creeps and enemies), "
+                f"and wins by destroying every building of the other side. Neutral creep camps guard the map and give "
+                f"heroes experience and items. Here {names.get(AGENT, 'an AI agent')} plays {race} against the game's "
+                f"own {s['ai_difficulty']} {s['opponent_race'].replace('_', ' ')} AI on {Path(s['map']).stem}, in "
+                f"{'real time' if s['mode'] == 'realtime' else 'stepped time (the game waits while the agent thinks)'}"
+                f". There is a {s['time_limit_seconds'] // 60}-minute limit: if time runs out, the game is undecided "
+                f"and the score says who was ahead. Score counts units, buildings, heroes and resources gathered.")
 
     def _client_frame(self) -> bytes | None:
         return self.capture.latest() if self.capture is not None else None
@@ -801,6 +891,13 @@ class WC3Env(AgentEnvEnvironment):
 
 async def _now(value):
     return value
+
+
+def wrapped(text: str, width: int = 64, lines: int = 3) -> str:
+    """A plan as the game's overlay shows it: a few short lines."""
+    out = textwrap.wrap(text, width)
+    return "\n".join(out[:lines - 1] + [textwrap.shorten(" ".join(out[lines - 1:]), width)] if len(out) > lines
+                     else out)
 
 
 def main() -> None:

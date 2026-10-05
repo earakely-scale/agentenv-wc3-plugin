@@ -20,8 +20,8 @@ from test_steps import deployed, run_context
 from agentenv_rts import choices, display, recording
 from agentenv_rts.session import RemoteSession, SessionError
 from agentenv_rts.steps import SaveRTSRecordingTaskStep
-from agentenv_rts.timeline import Timeline
-from agentenv_wc3 import frames
+from agentenv_rts.timeline import Timeline, model_name
+from agentenv_wc3 import frames, render
 from agentenv_wc3.server import WC3Env
 from agentenv_wc3.steps import WC3MatchTaskStep
 
@@ -128,6 +128,79 @@ async def test_client_view_on_the_fake_game_leaves_the_map_alone(env_vars, local
         context = await SaveRTSRecordingTaskStep(id="recording", version=None, env_id="wc3",
                                                  formats=["client"]).execute(run_context(record))
     assert context.metadata["recordings"]["recording"] == []
+
+
+async def test_players_tell_spectators_their_names_plans_and_costs(env_vars):
+    async with deployed(WC3Env()) as record:
+        await match(record, labels={"1": "Orc AI (normal)"})
+        session = RemoteSession(base(record))
+        await asyncio.to_thread(session.note, "player", "Claude Sonnet 5.5 + Haiku 4.5")
+        await asyncio.to_thread(session.note, "plan", "Mine gold, then a Barracks.")
+        await asyncio.to_thread(session.note, "stats", data={"cost_usd": 0.42, "decisions": 12, "junk": "x"})
+        await asyncio.to_thread(session.step, {0: []})
+        with pytest.raises(SessionError, match="kind must be"):
+            await asyncio.to_thread(session.note, "gossip", "hi")
+        doc = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/data.json")))
+        cast = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/casting.json")))
+        state = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/state.json")))
+    assert [p["label"] for p in doc["static"]["players"]] == ["Claude Sonnet 5.5 + Haiku 4.5", "Orc AI (normal)"]
+    last = doc["frames"][-1]
+    assert last["notes"] == [{"slot": 0, "kind": "plan", "text": "Mine gold, then a Barracks."}]
+    assert last["players"]["0"]["agent"] == {"cost_usd": 0.42, "decisions": 12}
+    assert cast["players"][0]["label"] == "Claude Sonnet 5.5 + Haiku 4.5" and "Warcraft III" in cast["desk"]
+    assert cast["notes"][0]["text"] == "Mine gold, then a Barracks." and cast["clock"]["limit"] == 60
+    assert cast["history"] and state == {"game_over": False, "result": "", "t": 1.0, "client": False}
+
+
+REF = render.Reference({"units": {"hfoo": {"name": "Footman", "gold": 135, "lumber": 0},
+                                  "ogru": {"name": "Grunt", "gold": 200, "lumber": 0},
+                                  "Hamg": {"name": "Archmage", "gold": 425, "lumber": 100, "hero": True},
+                                  "htow": {"name": "Town Hall", "structure": True}}})
+
+
+def unit(uid, type_id, x, y=0, owner=0, **more):
+    return {"unit_id": uid, "type_id": type_id, "hp": 400, "x": x, "y": y, "owner": owner, **more}
+
+
+def test_the_feed_names_fights_and_the_moments_that_matter():
+    static = {"players": [{"slot": 0, "label": "Claude"}, {"slot": 1, "label": "Orc AI"}], "points": [],
+              "bounds": {"min_x": -8000, "max_x": 8000, "min_y": -8000, "max_y": 8000}}
+    feed = frames.Feed(REF, static)
+    hall = unit(1, "htow", -6000, owner=0, structure=True)
+    footman, grunt = unit(2, "hfoo", 0), unit(9, "ogru", 100, owner=1)
+    blows = [{"kind": "attacked", "unit_id": 9, "attacker_id": 2}, {"kind": "attacked", "unit_id": 2, "attacker_id": 9}]
+    obs = {0: {"game_time_seconds": 10.0, "units": [hall, footman], "visible_enemies": [grunt], "events": blows * 2}}
+    opened = feed.see(obs)
+    assert [(i["kind"], i["major"]) for i in opened] == [("fight", True)]
+    assert opened[0]["text"] == "Fight at the middle of the map: Claude vs Orc AI"
+    assert feed.moments[0]["sides"] == [0, 1]
+    obs[0].update(game_time_seconds=12.0, events=[{"kind": "death", "unit_id": 9, "type_id": "ogru", "owner": 1}])
+    assert feed.see(obs) == []
+    obs[0].update(game_time_seconds=30.0, events=[{"kind": "train_finish", "unit_id": 1, "trained_id": 4,
+                                                   "type_id": "Hamg"}])
+    later = feed.see(obs)
+    assert [i["text"] for i in later] == ["Claude summoned a Archmage",
+                                          "Fight at the middle of the map over after 20 s: Orc AI lost 1 Grunt"]
+    assert frames.army_value([footman, unit(5, "Hamg", 0, hero=True), hall], REF) == 135 + 525
+
+
+def test_the_director_holds_a_shot_and_cuts_to_a_fight():
+    director = frames.Director(0)
+    army = {"units": [unit(2, "hfoo", 0), unit(3, "hfoo", 200)], "visible_enemies": []}
+    assert director.choose(army, [], 0.0) == (100.0, 0.0)
+    marching = {"units": [unit(2, "hfoo", 2000), unit(3, "hfoo", 2200)], "visible_enemies": []}
+    assert director.choose(marching, [], 1.0) is None   # the shot holds MIN_SHOT
+    assert director.choose(marching, [], 4.5) == (2100.0, 0.0)
+    fight = {**marching, "visible_enemies": [unit(9, "ogru", 3000, owner=1)]}
+    assert director.choose(fight, [], 5.0) is None       # a fight cuts in after FIGHT_CUT
+    assert director.choose(fight, [], 6.5) == (2600.0, 0.0)
+    moment = [{"t": 9.0, "x": -6000, "y": 0, "kind": "hero", "sides": [0]}]
+    assert director.choose(army, moment, 11.0) == (-6000, 0)
+
+
+def test_models_are_named_as_people_say_them():
+    assert [model_name(m) for m in ("anthropic/claude-sonnet-5-5", "openai/gpt-6-sol", "moonshot/kimi-k3")] == [
+        "Claude Sonnet 5.5", "GPT-6 Sol", "Kimi K3"]
 
 
 XWININFO = """
