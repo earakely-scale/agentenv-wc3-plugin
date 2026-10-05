@@ -31,26 +31,26 @@ async def test_orders_wait_for_advance(tools, env):
     assert report.startswith("Advanced 0:00 → 0:02.\nSent 1 order.")
     after = next(u for u in env.obs[0]["units"] if u["unit_id"] == PEASANT)
     assert after["x"] > before["x"]
-    assert env.queue == []
+    assert env.queue[0] == []
     assert "IDLE WORKERS:" in report   # the fake reports no orders, so even the mover looks idle
 
 
 async def test_act_refuses_what_wc3env_would(tools, env):
     error = await tools.error("act", actions=[{"unit_id": ENEMY_HALL, "command": "stop"}])
     assert "bad_actions" in error and "2000" in error
-    assert env.queue == []
+    assert env.queue[0] == []
     error = await tools.error("act", actions=[{"unit_id": PEASANT, "command": "dance"}])
     assert "command" in error   # pydantic's own check of the command list
 
 
 async def test_type_names_resolve_to_ids(env, tools):
     await tools("get_state")
-    action = env._resolve({"unit_id": HALL, "command": "train", "arguments": {"type_id": "Peasant"}})
+    action = env._resolve(0, {"unit_id": HALL, "command": "train", "arguments": {"type_id": "Peasant"}})
     assert action == {"unit_id": HALL, "command": "train", "arguments": {"type_id": "hpea"}}
-    action = env._resolve({"unit_id": PEASANT, "command": "build",
+    action = env._resolve(0, {"unit_id": PEASANT, "command": "build",
                            "arguments": {"type_id": "farm", "x": 1, "y": 2, "auto_place": True}})
     assert action["arguments"]["type_id"] == "hhou"
-    assert env._resolve({"unit_id": PEASANT, "command": "stop", "arguments": {}}) == {"unit_id": PEASANT,
+    assert env._resolve(0, {"unit_id": PEASANT, "command": "stop", "arguments": {}}) == {"unit_id": PEASANT,
                                                                                       "command": "stop"}
 
 
@@ -147,16 +147,16 @@ async def test_cast_and_learn_take_names(env, tools):
     hero = {"unit_id": 77, "type_id": "Hamg", "owner": 0, "x": 0, "y": 0, "hp": 450, "max_hp": 450,
             "abilities": [{"ability_id": "AHbz", "level": 1}]}
     env.obs[0]["units"].append(hero)
-    cast = env._resolve({"unit_id": 77, "command": "cast", "arguments": {"order": "Blizzard", "x": 1, "y": 2}})
+    cast = env._resolve(0, {"unit_id": 77, "command": "cast", "arguments": {"order": "Blizzard", "x": 1, "y": 2}})
     assert cast["arguments"]["order"] == "blizzard"
-    learn = env._resolve({"unit_id": 77, "command": "learn", "arguments": {"ability_id": "brilliance aura"}})
+    learn = env._resolve(0, {"unit_id": 77, "command": "learn", "arguments": {"ability_id": "brilliance aura"}})
     assert learn["arguments"]["ability_id"] == "AHab"
 
 
 async def test_orders_that_stopped_applying_are_dropped_not_blocking(tools, env):
     await tools("act", actions=[{"unit_id": PEASANT, "command": "stop"},
                                 {"unit_id": PEASANT + 1, "command": "move", "arguments": {"x": 0, "y": 0}}])
-    env.queue[1]["unit_id"] = 4242   # as if the second Peasant had died since: an id the game no longer has
+    env.queue[0][1]["unit_id"] = 4242   # as if the second Peasant had died since: an id the game no longer has
     report = await tools("advance", seconds=1)
     assert "Dropped 1 queued order that no longer applied:\n  4242 move at (0,0)" in report
     assert "Sent 1 order." in report

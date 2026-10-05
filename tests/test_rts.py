@@ -14,16 +14,20 @@ import urllib.request
 
 import pytest
 from agent_env.artifact import FileArtifact
+from agent_env.task_step.context import DeployedAgent, TaskStepContext
 from agentenv_protocol import client
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 from test_steps import deployed, run_context
 
 from agentenv_rts import choices, display, highlights, recording
+from agentenv_rts.seats import Lockstep
 from agentenv_rts.session import RemoteSession, SessionError
 from agentenv_rts.steps import SaveRTSRecordingTaskStep
 from agentenv_rts.timeline import Timeline, model_name
-from agentenv_wc3 import frames, render
-from agentenv_wc3.server import WC3Env
-from agentenv_wc3.steps import WC3MatchTaskStep
+from agentenv_wc3 import frames, metrics, render
+from agentenv_wc3.server import WC3Env, check_scenario, seats_of
+from agentenv_wc3.steps import WC3MatchTaskStep, seat_agents
 
 pytestmark = pytest.mark.anyio
 
@@ -402,6 +406,170 @@ async def test_a_runs_recording_is_copied_into_one_folder(env_vars, local_stores
     assert sorted(p.suffix for p in (tmp_path / "match").iterdir()) == [".html", ".mp4"]
     assert "wc3-smoke-abc" in result.output and "Open " in result.output
     assert CliRunner().invoke(wc3, ["recordings", "nope", "--out", str(tmp_path / "x")]).exit_code != 0
+
+
+SEATS = [{"agent": "a", "race": "human"}, {"agent": "b", "race": "orc"}]
+
+
+async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
+    async with deployed(WC3Env()) as record:
+        await client.invoke_extension(record.environment_url, record.environment_card, "urn:wc3:new-game/v1",
+                                      {"seats": SEATS, "time_limit_seconds": 60, "lockstep": {"stall_seconds": 2}})
+        a, b = RemoteSession(base(record) + "/seats/a"), RemoteSession(base(record) + "/seats/b")
+        seen = await asyncio.to_thread(b.observe)
+        assert set(seen["observations"]) == {1} and seen["you"] == 1 and [x["agent"] for x in seen["seats"]] == [
+            "a", "b"]
+        first = asyncio.create_task(asyncio.to_thread(a.step, {0: []}, 1000))
+        await asyncio.sleep(0.5)
+        assert not first.done()   # a's step waits for b's
+        await asyncio.to_thread(b.step, {1: []}, 1000)
+        assert (await first)["observations"][0]["game_time_seconds"] == 1.0
+        alone = await asyncio.to_thread(a.step, {0: []}, 1000)   # b stalls past 2 s: a goes on
+        assert alone["observations"][0]["game_time_seconds"] == 2.0
+        with pytest.raises(SessionError, match="only its own units"):
+            await asyncio.to_thread(a.step, {1: []}, 1000)
+        async with streamable_http_client(base(record) + "/seats/b/mcp") as (read, write, _), \
+                ClientSession(read, write) as mcp:
+            await mcp.initialize()
+            state = (await mcp.call_tool("get_state", {})).content[0].text
+        assert state.startswith("You are slot 1, orc, team 2. Against: a (human).")
+        summary = (await client.get_data(base(record))).parts[0].data
+    assert [(x["agent"], x["slot"], x["stalls"]) for x in summary["seats"]] == [("a", 0, 0), ("b", 1, 1)]
+    assert summary["seats"][0]["metrics"]["workers"] == 5
+
+
+async def test_lockstep_moves_to_the_nearest_deadline():
+    clock, moves = {"t": 0.0}, []
+
+    async def advance(batches, seconds):
+        moves.append((sorted(batches), round(seconds, 3)))
+        clock["t"] += seconds
+
+    lock = Lockstep([0, 1], 30, advance, lambda: clock["t"], lambda: False)
+    await asyncio.gather(lock.step(0, ["x"], 5.0), lock.step(1, [], 1.0), _later(lock.step(1, [], 4.0)))
+    assert moves == [([0, 1], 1.0), ([0, 1], 4.0)] and clock["t"] == 5.0
+
+
+async def _later(step):
+    await asyncio.sleep(0.05)
+    await step
+
+
+def test_seats_say_who_plays():
+    assert [(x["slot"], x["agent"], x["computer"], x["team"]) for x in seats_of(check_scenario(
+        {**WC3Env.__init__.__globals__["DEFAULT_SCENARIO"]}))] == [(0, None, None, 1), (1, None, "normal", 2)]
+    base_scenario = dict(WC3Env.__init__.__globals__["DEFAULT_SCENARIO"])
+    for seats, error in (([{"computer": "easy"}, {"computer": "normal"}], "same difficulty"),
+                         ([{"agent": "a"}, {"agent": "a"}], "one seat"), ([{"computer": "easy"}], "agent seat"),
+                         ([{"agent": "a", "race": "elf"}], "race"), ([{"agent": "a", "colour": 1}], "colour")):
+        with pytest.raises(ValueError, match=error):
+            check_scenario({**base_scenario, "seats": seats})
+
+
+async def test_the_match_gives_each_agent_its_seat():
+    posted, servers = [], {"a": {}, "b": {"x": {"url": "http://env:1/mcp"}}}
+
+    class Agent(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self._reply({"mcp_servers": servers[self.path.split("/")[1]]})
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            posted.append((self.path.split("/")[1], body))
+            servers[self.path.split("/")[1]][body["name"]] = {"url": body["url"]}
+            self._reply({"status": "added"})
+
+        def _reply(self, doc):
+            data = json.dumps(doc).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Agent)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    card = {"capabilities": {"extensions": [{"uri": "urn:agentenv:mcp-config/v1",
+                                             "params": {"endpoint": "/ext/mcp-config"}}]}}
+    agents = [DeployedAgent(agent_name=n, api_url="", a2a_url=f"http://127.0.0.1:{server.server_port}/{n}",
+                            a2a_card=card) for n in ("a", "b")]
+    env = type("Env", (), {"mcp_url": "http://env:1/mcp", "environment_card": {"name": "wc3"}})()
+    context = TaskStepContext(deployed_agents=agents)
+    try:
+        assert await seat_agents(context, env, [{"agent": "a"}]) == {"a": "http://env:1/seats/a/mcp"}
+        assert await seat_agents(context, env, [{"agent": "a"}]) == {"a": "http://env:1/seats/a/mcp"}   # once
+        with pytest.raises(RuntimeError, match="env_ids"):
+            await seat_agents(context, env, [{"agent": "a"}, {"agent": "b"}])
+        with pytest.raises(RuntimeError, match="no deploy_agent"):
+            await seat_agents(context, env, [{"agent": "c"}])
+    finally:
+        server.shutdown()
+    assert posted == [("a", {"url": "http://env:1/seats/a/mcp", "headers": None, "name": "wc3"})]
+
+
+async def test_staging_places_units_by_name_and_names_them(env_vars):
+    env = WC3Env()
+    try:
+        await env.new_game(seats=[{"agent": "wc3", "race": "human"}, {"computer": "normal", "race": "orc"}],
+                           time_limit_seconds=120)
+        real, calls = env.bridge.call, []
+
+        async def call(cmd, **args):
+            if cmd != "debug":
+                return await real(cmd, **args)
+            calls.append((args["op"], args["args"]))
+            return {"unit_ids": [100 + len(calls), 200 + len(calls)]} if args["op"] == "spawn" else {}
+
+        env.bridge.call = call
+        home = env.metrics.home(env.obs[0])
+        result = await env.stage(warmup_seconds=2, ops=[
+            {"op": "ai", "player": "opponent", "paused": True},
+            {"op": "resources", "player": "wc3", "gold": 1500, "lumber": 800},
+            {"op": "spawn", "player": "wc3", "type": "hfoo", "n": 2, "at": "home", "dx": -1150, "as": "army"},
+            {"op": "level", "unit": "army", "level": 3},
+            {"op": "spawn", "player": "opponent", "type": "ogru", "at": "toward:enemy_home:700", "as": "enemy"}])
+        with pytest.raises(ValueError, match="no units named"):
+            await env.stage(ops=[{"op": "give", "unit": "hero", "type": "phea"}])
+        with pytest.raises(ValueError, match="unknown op"):
+            await env.stage(ops=[{"op": "teleport"}])
+    finally:
+        await env.close()
+    assert result["handles"] == {"army": 2, "enemy": 2} and env.stats["staged_seconds"] == 2
+    assert calls[0] == ("ai", {"paused": 1, "player": 1}) and calls[1] == ("resources", {
+        "gold": 1500, "lumber": 800, "player": 0})
+    assert calls[2] == ("spawn", {"type_id": "hfoo", "player": 0, "n": 2, "x": home["x"] - 1150, "y": float(home["y"])})
+    assert calls[3:5] == [("level", {"unit_id": 103, "level": 3}), ("level", {"unit_id": 203, "level": 3})]
+    assert calls[5][1]["player"] == 1 and env.metrics.handles["enemy"]["ids"] == [106, 206]
+
+
+def test_metrics_measure_a_seat_over_the_game():
+    ref = render.Reference({"units": {"hpea": {"name": "Peasant", "builds": ["htow"], "gold": 75},
+                                      "hfoo": {"name": "Footman", "gold": 135}, "ogru": {"name": "Grunt", "gold": 200},
+                                      "htow": {"name": "Town Hall", "structure": True, "food_made": 12},
+                                      "hkee": {"name": "Keep", "structure": True, "food_made": 12}}})
+    m = metrics.Metrics(ref, {"creep_camps": [{"x": 3000, "y": 0}], "start_locations": [{"x": 0, "y": 0},
+                                                                                         {"x": 9000, "y": 0}]}, [0])
+    hall = {"unit_id": 1, "type_id": "hkee", "structure": True, "hp": 2000, "max_hp": 2000, "x": 50, "y": 0}
+    idle = {"unit_id": 2, "type_id": "hpea", "hp": 220, "max_hp": 220, "x": 0, "y": 0, "order": None}
+    foot = {"unit_id": 3, "type_id": "hfoo", "hp": 420, "max_hp": 420, "x": 3000, "y": 100}
+
+    def obs(t, units, events=(), food=(10, 12), enemies=()):
+        return {0: {"game_time_seconds": t, "units": units, "player": {"gold": 100, "food_used": food[0],
+                                                                       "food_cap": food[1]},
+                    "events": list(events), "visible_enemies": list(enemies), "score": {"total": 900}}}
+
+    m.stage("army", 0, [3])
+    m.see(obs(0.0, [hall, idle, foot], enemies=[{"unit_id": 9, "owner": 12, "hp": 50, "x": 3100, "y": 0}]))
+    m.see(obs(10.0, [hall, idle, foot], food=(12, 12)))
+    m.see(obs(20.0, [hall, {**idle, "order": "harvest"}, {**foot, "hp": 210}],
+              events=[{"kind": "death", "unit_id": 9, "owner": 12, "type_id": "ogru"}]))
+    got = m.of(0, obs(20.0, []))
+    assert (got["idle_worker_seconds"], got["supply_blocked_seconds"], got["workers"]) == (20.0, 10.0, 1)
+    assert got["first_time"]["hfoo"] == 0.0 and got["count"]["hkee"] == 1 and got["tier"] == 2
+    assert got["camp_cleared"] is True and got["camps_cleared"] == [1] and got["army_kept_percent"] == 50
+    assert got["total"] == 900 and got["hero_alive"] is False and got["units_lost"] == 0
 
 
 def test_the_timeline_keeps_a_frame_per_half_second_and_every_event():

@@ -63,10 +63,12 @@ class Worker:
 
     def start(self, map: str, players: list[dict], step_ms: int = 1000, seed: int | None = None,
               randomize_starts: bool = False, ai_difficulty: int | None = None, render: bool = False,
-              visible: bool = False, window: list[int] | None = None, mode: str = "stepping") -> dict:
+              visible: bool = False, window: list[int] | None = None, mode: str = "stepping",
+              ai_agents: list[int] | None = None) -> dict:
         """A new game: closes the one before, launches the game with these players, and returns every player's
         first observation and the accepted setup. In `realtime` mode the game runs on its own clock; `render` and
-        `visible` draw the game in a window on the display, for its picture, `window` [width, height] big."""
+        `visible` draw the game in a window on the display, for its picture, `window` [width, height] big;
+        `ai_agents` are agent slots the game's own AI plays beside."""
         from wc3env.session import GameConfig, GameSession, MatchSetup, PlayerConfig
 
         self.close()
@@ -79,7 +81,7 @@ class Worker:
                 map=map,
                 players=tuple(PlayerConfig(p["slot"], p.get("race"), p.get("control", "agent")) for p in players),
                 mode=mode, step_ms=step_ms, render=render, background_visible=visible, sound=False,
-                ai_difficulty=ai_difficulty,
+                ai_difficulty=ai_difficulty, ai_agents=tuple(ai_agents or ()),
                 setup=MatchSetup(seed=seed, randomize_starts=randomize_starts),
                 output_dir=os.environ.get("WC3_OUTPUT_DIR") or None,
             )
