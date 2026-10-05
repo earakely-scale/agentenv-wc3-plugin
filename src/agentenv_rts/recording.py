@@ -1,7 +1,7 @@
 """A finished game's recording from its Timeline: an MP4 of the map, a frame per step (Pillow draws, ffmpeg
 encodes), the spectator page with the whole game embedded, which plays in any browser, and the game's own picture
-when the env captured it (display.py). `files()` is what an env returns from `urn:rts:recording/v1`; the
-`save_rts_recording` step stores them as file artifacts."""
+when the env captured it (display.py), with chapters and a highlight reel (highlights.py). `files()` is what an env
+returns from `urn:rts:recording/v1`; the `save_rts_recording` step stores them as file artifacts."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import live
+from . import highlights, live
 from .timeline import NEUTRAL, Timeline
 
 RECORDING = "urn:rts:recording/v1"
@@ -24,15 +24,30 @@ FPS = 10
 def files(timeline: Timeline, stem: str, formats: tuple[str, ...] = ("mp4", "html"),
           client: Path | None = None) -> tuple[list[dict], list[str]]:
     """The recording as `{"name", "content_type", "base64"}` files, and notes on what could not be made. `client`
-    is the game's own video, for the `client` format."""
+    is the game's own video: the `client` file, with the game's chapters, and what `highlights` cuts its reel from.
+    The `html` replay plays it beside the map when both are in the recording."""
     out, notes = [], []
+    video = client if client is not None and client.is_file() else None
     if "client" in formats:
-        if client is not None and client.is_file():
-            out.append(_file(f"{stem}-client.mp4", "video/mp4", client.read_bytes()))
-        else:
+        if video is None:
             notes.append("no client video: the game was played without its picture (client_view)")
+        else:
+            try:
+                out.append(_file(f"{stem}-client.mp4", "video/mp4", _cut(highlights.chaptered, timeline, video)))
+            except highlights.HighlightsError as e:
+                notes.append(f"client video without chapters: {e}")
+                out.append(_file(f"{stem}-client.mp4", "video/mp4", video.read_bytes()))
+    if "highlights" in formats:
+        if video is None:
+            notes.append("no highlights: they are cut from the client video (client_view)")
+        else:
+            try:
+                out.append(_file(f"{stem}-highlights.mp4", "video/mp4", _cut(highlights.reel, timeline, video)))
+            except highlights.HighlightsError as e:
+                notes.append(f"no highlights: {e}")
     if "html" in formats:
-        out.append(_file(f"{stem}.html", "text/html", live.standalone(timeline).encode()))
+        beside = f"{stem}-client.mp4" if video is not None and "client" in formats else None
+        out.append(_file(f"{stem}.html", "text/html", live.standalone(timeline, beside).encode()))
     if "mp4" in formats:
         try:
             out.append(_file(f"{stem}.mp4", "video/mp4", mp4(timeline)))
@@ -47,6 +62,13 @@ class RecordingError(RuntimeError):
 
 def _file(name: str, content_type: str, data: bytes) -> dict:
     return {"name": name, "content_type": content_type, "base64": base64.b64encode(data).decode()}
+
+
+def _cut(make, timeline: Timeline, video: Path) -> bytes:
+    """What `make` (highlights.chaptered or highlights.reel) writes from `video`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        make(timeline, video, Path(tmp) / "out.mp4")
+        return (Path(tmp) / "out.mp4").read_bytes()
 
 
 def mp4(timeline: Timeline) -> bytes:

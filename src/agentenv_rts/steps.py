@@ -1,6 +1,6 @@
 """`save_rts_recording`: ask a deployed RTS env for its finished game's recording (`urn:rts:recording/v1`: the
-map video, the spectator page with the game embedded, and with `client` the game's own picture) and store each file
-as a `file` artifact."""
+map video, the spectator page with the game embedded, with `client` the game's own picture and with `highlights` a
+reel cut from it) and store each file as a `file` artifact."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from agentenv_protocol import client
 from .recording import RECORDING
 
 log = logging.getLogger(__name__)
-FORMATS = ("mp4", "html", "client")
+FORMATS = ("mp4", "html", "client", "highlights")
 DEFAULT_FORMATS = ("mp4", "html")
 
 
@@ -63,7 +63,7 @@ class SaveRTSRecordingTaskStep(TaskStep):
         for f in (result or {}).get("files") or []:
             content = base64.b64decode(f["base64"])
             artifact = await asyncio.to_thread(
-                FileArtifact.put_bytes, f"{stem}.{f['name'].rpartition('.')[2]}",
+                FileArtifact.put_bytes, f"{stem}-{f['name']}",
                 description=f"Spectator recording of env {self.env_id!r}", filename=f["name"], content=content,
                 content_type=f["content_type"])
             saved.append({"name": f["name"], "artifact_id": artifact.id, "version": artifact.version,

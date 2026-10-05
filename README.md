@@ -69,7 +69,9 @@ agent-env run wc3 --task macro-micro-quick
 
 - **Map and side:** every game is on Echo Isles, with the agent playing Human.
 - **What every task saves:** the game's native replay, and the spectator recording (an MP4 of the map and a
-  self-contained HTML replay), as file artifacts. `macro-micro-realtime` also saves the game's own video.
+  self-contained HTML replay), as file artifacts. `macro-micro-realtime` also saves the game's own video, with a
+  chapter at each major moment, and a highlight reel of at most two minutes cut from it; its HTML replay plays the
+  video beside the map when both files are in one folder.
 - **Grading:** `wc3-verifier` grades the game.
   - A win counts three times as much as not being defeated or as outscoring the AI.
   - The grade is 0 if the game stopped working, if the agent gave no orders, or if the harness played part of the
@@ -114,7 +116,8 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
 - **The game's own picture:** with `client_view` in `wc3_match`, the game draws itself in a 960×540 window on the
   container's display, the env captures it with ffmpeg, and the page shows it as the main view (`/live/client`, an
   MJPEG stream; `/live/client.jpg` is the newest frame) with the map beside it. The camera follows the agent's
-  fighting, as wc3agent films a game. `save_rts_recording` with the `client` format stores the match's video.
+  fighting, as wc3agent films a game. `save_rts_recording` with the `client` format stores the match's video,
+  with chapters, and with `highlights` a reel of its fights and key moments.
   Drawing makes stepping about three times slower, so the other tasks leave it off.
 - **The map:** Echo Isles' terrain from wc3env's pathing grid, trees, gold mines, start locations, creep camps and
   shops, with every unit and building any player sees, in its owner's colour.
@@ -177,6 +180,7 @@ flowchart LR
 | `live.py`, `viewer/` | The live view at `/live` and `/live/data.json?since=T`, with its `?stream` layout and a self-contained HTML replay |
 | `recording.py` | The MP4 of the map from the timeline (Pillow and ffmpeg) and `urn:rts:recording/v1` |
 | `display.py` | The game's own picture from an X display: one ffmpeg writes the match's video and the live JPEG stream |
+| `highlights.py` | A match's major moments on its video's clock: chapters embedded in the video and a highlight reel (ffmpeg) |
 | `steps.py` | `save_rts_recording`: the recording as file artifacts |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 

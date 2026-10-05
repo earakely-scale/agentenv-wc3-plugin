@@ -22,8 +22,10 @@ def page(data: dict | None = None) -> str:
             .replace("/*JS*/", (VIEWER / "app.js").read_text()))
 
 
-def standalone(timeline: Timeline) -> str:
-    return page(timeline.doc())
+def standalone(timeline: Timeline, video: str | None = None) -> str:
+    """`video` names the game's own video, a file beside the page, which then plays in step with the map."""
+    doc = timeline.doc()
+    return page({**doc, "video": video} if video else doc)
 
 
 def data(timeline: Timeline | None, since: str | None, client: bool = False) -> dict:

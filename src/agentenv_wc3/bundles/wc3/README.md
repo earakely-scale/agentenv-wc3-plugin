@@ -29,5 +29,6 @@ harness played part of its game).
   TypeSafe's Jev); the `prompt_agent` model is the macro model. `agent-env wc3 setup --agent` registers the agent.
 
 Every task also saves the spectator recording (`save_rts_recording`): an MP4 of the map and a self-contained HTML
-replay. `agent-env wc3 setup --fake` builds the env on wc3env's fake game, so every task runs end to end without
+replay; `macro-micro-realtime` adds the game's own video, with chapters, and a highlight reel cut from it.
+`agent-env wc3 setup --fake` builds the env on wc3env's fake game, so every task runs end to end without
 Warcraft III (units move and stop, nothing else).
