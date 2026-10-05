@@ -282,12 +282,16 @@ def test_breaking_news_cuts_into_the_talk(fake):
     assert [(line["kind"], line["speaker"]) for line in lines] == [("news", "pbp"), ("news", "color")]
     assert "You cut in: the desk was on something else, and this news can't wait." in fake.prompts[asked]
     assert "Blademaster has fallen" in now_part(fake.prompts[asked])
-    fake.add(frame(90, events=[moment(f"{CLAUDE}'s Archmage reached level 3", 0, "level")]))
     until_quiet(c, clock)
     c.tick()
+    assert c.beat.kind == "color" and len(c.beat.lines) == 1
+    fake.add(frame(90, events=[moment(f"{CLAUDE}'s Archmage reached level 3", 0, "level")]))
     until_quiet(c, clock)
     c.tick()   # a level is news, but not news that cuts in
-    assert c.beat.kind == "news" and c.beat.lines and not c.beat.cut_in
+    assert c.lines[-1]["kind"] == "color" and c.beat.done
+    until_quiet(c, clock)
+    c.tick()
+    assert c.beat.kind == "news" and not c.beat.cut_in and "reached level 3" in now_part(fake.prompts[-1])
 
 
 def test_plans_are_read_out_between_the_analysis(fake):
@@ -308,6 +312,25 @@ def test_plans_are_read_out_between_the_analysis(fake):
     assert f'- {ORC} (orc), at 1:30: "Hold."' in said and "relays one, paraphrased" in said
     assert '   plan (1:00): "Mass Footmen, then push at six minutes."' in fake.prompts[firsts[0]]
     assert "Expand to the north gold mine." in now_part(fake.prompts[firsts[2]])
+
+
+def test_a_plan_is_read_once_and_only_a_players_latest(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start(frame(0), frame(30))
+    beat(c, clock)
+    fake.add(frame(60, notes=[plan("Mass Footmen.")]), frame(70, notes=[plan("Mass Footmen, then expand.")]),
+             frame(80, notes=[plan("Hold.", 1)]))
+    asked = len(fake.prompts)
+    assert beat(c, clock)[-1]["kind"] == "plans"
+    said = now_part(fake.prompts[asked])
+    assert "Mass Footmen, then expand." in said and '"Mass Footmen."' not in said and "Hold." in said
+    assert [beat(c, clock)[-1]["kind"] for _ in range(2)] == ["color", "color"]   # not the plan it replaced
+    fake.add(frame(100, notes=[plan("Mass Footmen, then expand.")]))   # sent again with the next decision
+    assert beat(c, clock)[-1]["kind"] == "color"
+    fake.add(frame(110, notes=[plan("Tower up.", 1)]))
+    asked = len(fake.prompts)
+    assert beat(c, clock)[-1]["kind"] == "plans" and "Tower up." in now_part(fake.prompts[asked])
 
 
 def test_game_over_brings_the_outro_and_then_silence(fake):
@@ -441,6 +464,8 @@ def test_the_lookups_answer_from_the_match_and_errors_are_answers(fake):
         f"{ORC} (orc): 0:30: 200, 1:00: 200 (+0 over these)")
     assert c.lookup("said", {"query": "claude LEADS"}).startswith("3 lines:\n- 1:00, Max: Line 1: Claude leads.")
     assert c.lookup("said", {"query": "Atlantis"}) == "The desk hasn't said that yet"
+    assert caster.stat_parts({"score": 90, "gold": 300, "lumber": None, "units": 5, "structures": None}, {}) == [
+        "score 90", "300 gold", "5 units"]   # an RTS without lumber, or that doesn't count structures
     errors = {("teleport", "{}"): "error: there is no tool 'teleport'; the tools: standings, player, trend, moments, "
                                   "notes, said, say",
               ("player", "{not json"): "error: the arguments are not JSON: '{not json'",
@@ -586,8 +611,9 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
 
 
 def test_a_key_with_a_control_character_is_refused_not_printed():
+    """Run as the streamer image runs it: the file alone, with the standard library only (-I -S: no site-packages)."""
     env = {**os.environ, "CAST_BASE_URL": "http://127.0.0.1:9", "CAST_API_KEY": "sk-se\ncret-123"}
-    out = subprocess.run([sys.executable, caster.__file__, "--data", "http://127.0.0.1:9/live"], env=env,
+    out = subprocess.run([sys.executable, "-I", "-S", caster.__file__, "--data", "http://127.0.0.1:9/live"], env=env,
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 2 and "control character" in out.stderr and "cret-123" not in out.stdout + out.stderr
 

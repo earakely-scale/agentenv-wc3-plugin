@@ -441,13 +441,18 @@ class Caster:
                                          f"{game_time(x['t'])}: {x['text']}", now, bool(x["major"])))
             for n in doc.get("notes") or ():
                 if not joining or n["t"] >= m.t - NEWS_SECONDS:
-                    self.remember(Moment(("note", n["t"], n["slot"], n["text"]), "note", n["t"], n["slot"],
+                    self.remember(Moment(("note", n["slot"], n["text"]), "note", n["t"], n["slot"],
                                          f'{m.who(n["slot"])}, at {game_time(n["t"])}: "{n["text"]}"', now))
 
     def remember(self, moment: Moment) -> None:
-        if moment.key not in self.known:
-            self.known.add(moment.key)
-            self.pending.append(moment)
+        """A moment not seen before is pending. A player sends its plan every decision: one it repeats is not news
+        again, and a new one replaces the one of its not yet read."""
+        if moment.key in self.known:
+            return
+        self.known.add(moment.key)
+        if moment.kind == "note":
+            self.pending = [x for x in self.pending if not (x.kind == "note" and x.side == moment.side)]
+        self.pending.append(moment)
 
     # ---- choosing the beat ----
 
@@ -1031,11 +1036,12 @@ def stat_parts(st: dict, was: dict) -> list[str]:
         if (now := st.get(key)) is not None:
             out.append(f"{name} {now:,}" + (f" ({now - was[key]:+,})" if was.get(key) is not None else ""))
     if st.get("gold") is not None:
-        out.append(f"{st['gold']:,} gold, {number(st.get('lumber'))} lumber")
+        out.append(f"{st['gold']:,} gold" + (f", {st['lumber']:,} lumber" if st.get("lumber") is not None else ""))
     if len(food := st.get("food") or ()) == 2 and None not in food:
         out.append(f"food {food[0]} of {food[1]}")
     if st.get("units") is not None:
-        out.append(f"{st['units']} units, {number(st.get('structures'))} structures")
+        out.append(f"{st['units']} units"
+                   + (f", {st['structures']} structures" if st.get("structures") is not None else ""))
     return out
 
 
