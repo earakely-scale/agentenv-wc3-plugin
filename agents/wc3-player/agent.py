@@ -1,7 +1,8 @@
 """An A2A agent that plays Warcraft III with wc3env's own agent, `wc3agent`: a macro model (System 2) plans the
 economy, workers and army objectives every few game seconds, and a micro model (System 1) controls the army unit by
 unit, at most once a second per group. It plays the game the task's wc3_match started in the env, through the env's
-urn:rts session (remote.py), stepped or in realtime as the match says.
+urn:rts session (remote.py), stepped or in realtime as the match says; at a seat's address
+(`<env>/seats/<agent>/mcp`), it plays that seat.
 
 Models come from agent-env's model endpoint (LITELLM_BASE_URL, LITELLM_API_KEY):
 - macro: the prompt_agent step's model, e.g. anthropic/claude-sonnet-5-5; WC3_MACRO_REASONING (default low).
@@ -10,7 +11,8 @@ Models come from agent-env's model endpoint (LITELLM_BASE_URL, LITELLM_API_KEY):
 WC3_TURN_SECONDS (default 5, at least 5) is the game time between macro requests; WC3_MAX_GAME_SECONDS stops
 playing that much game time from now (default: the match's time limit).
 
-The prompt is not read: the game's setup (map, races, AI, time limit, mode) is the env's, from the task.
+The prompt is wc3agent's goal, a drill's or a full game's "play it to its end", which wc3agent pins first in every
+macro request. The game's setup (map, races, AI, time limit, mode) is the env's, from the task.
 Spectators hear from it through the env's urn:rts:note/v1: its name (the models), each macro turn's plan, and its
 running cost and decisions.
 """
@@ -33,6 +35,7 @@ from agentenv_protocol.a2a_agent import (
     AgentIdentity,
     TaskRequest,
     TaskResult,
+    TextPart,
     Usage,
     a2a_agent,
 )
@@ -105,7 +108,7 @@ def player_name(macro: str, micro: str) -> str:
     return f"{big} + {small.removeprefix(family + ' ') if small.startswith(family + ' ') else small}"
 
 
-def telling(run_log, remote: RemoteSession):
+def telling(run_log, remote: RemoteSession, slot: int):
     """wc3agent's RunLog that also tells the env's spectators each macro plan and the running cost (notes are best
     effort: the game goes on without them)."""
     class SpectatorLog(run_log):
@@ -119,23 +122,36 @@ def telling(run_log, remote: RemoteSession):
                                         "tokens": sum(r["input"] + r["cached"] + r["output"] for r in usage)}))
             for kind, text, data in notes:
                 try:
-                    remote.note(kind, text, data=data)
+                    remote.note(kind, text, slot=slot, data=data)
                 except SessionError as e:
                     log.warning("spectator note: %s", e)
     return SpectatorLog
 
 
-def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Path) -> dict:
+def playing(agent_class, goal: str, slot: int):
+    """wc3agent's Agent with the task's goal when the run gives none, and its seat's player id: observations carry
+    the game's own ids, and wc3agent's macro memory takes its own to be 0."""
+    def agent(*args, **kwargs):
+        made = agent_class(*args, **{**kwargs, "goal": kwargs.get("goal") or goal})
+        made.macro_memory.player = slot
+        return made
+    return agent
+
+
+def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Path, goal: str = "") -> dict:
     """Play the env's game to its end with wc3agent; wc3agent's summary of it."""
     from wc3agent import play as runner
+    from wc3agent.agent import Agent
     from wc3agent.micro import agent as micro
     from wc3agent.models import cost
     from wc3agent.models.chat import ChatModel
+    from wc3agent.recording import RunLog
 
     server = next(iter(servers.values()))
     remote = RemoteSession(server["url"].rstrip("/").removesuffix("/mcp"), headers=server.get("headers"))
     state = remote.observe()
-    scenario, me = state["scenario"], state["observations"][0]
+    you = state.get("you", 0)
+    scenario, me = state["scenario"], state["observations"][you]
     base_url, key = endpoint(environ)
     cost.RATES.update(RATES)
     macro = ChatModel("openai", config.model, key, base_url, reasoning=environ.get("WC3_MACRO_REASONING", "low"))
@@ -148,9 +164,10 @@ def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Pa
         os.environ["TYPESAFE_API_KEY"] = "" if micro_model == "off" else "chat-model"
         micro.timed_call = chat_micro(base_url, key, micro_model)
     runner.GameSession = lambda game_config: RemoteGameSession(game_config, remote)
-    runner.RunLog = telling(runner.RunLog, remote)
+    runner.Agent = playing(Agent, goal, you)
+    runner.RunLog = telling(RunLog, remote, you)
     try:
-        remote.note("player", player_name(config.model, micro_model))
+        remote.note("player", player_name(config.model, micro_model), slot=you)
     except SessionError as e:
         log.warning("spectator note: %s", e)
     remaining = scenario["time_limit_seconds"] - me.get("game_time_seconds", 0.0)
@@ -210,11 +227,12 @@ class WC3Player(AgentEnvAgent):
     async def run(self, request: TaskRequest[WC3Config]) -> TaskResult:
         if not request.mcp_servers:
             return TaskResult.failure("no_mcp_server", "No MCP server was configured for this agent.")
+        goal = "\n".join(p.text for p in request.parts if isinstance(p, TextPart)).strip()
         with tempfile.TemporaryDirectory(prefix="wc3agent-") as tmp:
             out = Path(tmp) / "session"
             try:
                 summary = await asyncio.to_thread(play_game, request.config, dict(request.mcp_servers),
-                                                  dict(os.environ), out)
+                                                  dict(os.environ), out, goal)
             except (SessionError, RuntimeError, ValueError) as e:
                 return TaskResult.failure("wc3agent_error", str(e))
             return result_of(summary, out)

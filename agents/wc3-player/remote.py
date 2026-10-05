@@ -3,7 +3,8 @@ runner uses it (reset, step, observations, debug, save_replay, config, close), o
 (agentenv_rts.session), and its micro transport (Jev's `timed_call`) answered by any chat model.
 
 The env already holds the game the task's wc3_match started: `reset` only observes it, and the replay is the task's
-to save (save_wc3_replay), so `save_replay` declines.
+to save (save_wc3_replay), so `save_replay` declines. wc3agent plays slot 0; at a seat (the env's replies name its
+slot, "you") the seat's slot and slot 0 trade numbers both ways, so slot 0 is always the seat's.
 """
 
 from __future__ import annotations
@@ -23,22 +24,27 @@ class RemoteGameSession:
         self.remote = remote
         self.observations: dict[int, dict] = {}
         self.done = False
+        self.you = 0
 
     def reset(self) -> dict[int, dict]:
         state = self.remote.observe()
-        self.observations, self.done = state["observations"], state["done"]
+        self.you = state.get("you", 0)
+        self.observations, self.done = self.seat(state["observations"]), state["done"]
         return self.observations
 
     def step(self, actions: dict[int, list], ms: int | None = None):
-        result = self.remote.step(actions, ms if ms is not None else self.config.step_ms)
-        self.observations, self.done = result["observations"], result["done"]
-        rejected, placements = dict(result["rejected"]), dict(result["placements"])
+        result = self.remote.step(self.seat(actions), ms if ms is not None else self.config.step_ms)
+        self.observations, self.done = self.seat(result["observations"]), result["done"]
+        rejected, placements = self.seat(result["rejected"]), self.seat(result["placements"])
         for slot in actions:
             rejected.setdefault(slot, [])
             placements.setdefault(slot, [])
         info = {"rejected": rejected, "placements": placements, "elapsed_ms": result.get("elapsed_ms"),
                 "step_reason": "game_over" if self.done else "target"}
         return self.observations, self.done, info
+
+    def seat(self, by_slot: dict[int, object]) -> dict[int, object]:
+        return {0 if slot == self.you else self.you if slot == 0 else slot: v for slot, v in by_slot.items()}
 
     def debug(self, op: str, **args) -> dict:
         return self.remote.debug(op, **args)
