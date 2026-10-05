@@ -55,7 +55,7 @@ wc3env's fake game is a stand-in world (a town hall, five peasants and a distant
 nothing else), so every task runs end to end without the game:
 
 ```bash
-agent-env wc3 setup --fake --agent          # the env on the fake game, and the wc3-macro-micro agent
+agent-env wc3 setup --fake --agent          # the env on the fake game, and the agents (wc3-macro-micro, wc3-scripted)
 agent-env run wc3 --task smoke               # no model: the game runs, is graded and recorded (~1 min, $0)
 agent-env run wc3 --task macro-micro-quick   # wc3agent, Haiku for macro and micro: 5 game minutes (~8 min, ~$1.20)
 agent-env wc3 watch --open                   # while a game runs: its live view
@@ -102,7 +102,7 @@ The activation files never enter an image: the `wc3_match` step sends them to th
 
 ```bash
 agent-env wc3 check                          # the host, your worker image, your activation files
-agent-env wc3 setup --agent                  # the env on top of wc3-worker:local, as "wc3", and the agent
+agent-env wc3 setup --agent                  # the env on top of wc3-worker:local, as "wc3", and the agents
 agent-env run wc3 --task smoke               # ~1 min: the game starts, runs two minutes, is graded and recorded
 agent-env run wc3 --task macro-micro-realtime   # Sonnet 5.5 + Haiku 4.5 against the normal Orc AI, 10 min, ~$11
 agent-env wc3 recordings --out match         # its video, highlights, HTML replay and .w3g, in ./match
@@ -158,7 +158,8 @@ fixed policies and cadence:
 
 It plays the game the task's `wc3_match` started, through the env's `urn:rts` session (raw observations in, raw
 wc3env actions out). It plays stepped (the game waits for the models) or in realtime (the game runs on, and slow
-answers just mean fewer decisions), as the match's `mode` says.
+answers just mean fewer decisions), as the match's `mode` says. At a seat's address it plays that seat. The
+`prompt_agent` step's prompt is wc3agent's goal, which it keeps first in every macro request.
 
 | Setting | Where | Default |
 |---|---|---|
@@ -179,6 +180,17 @@ answers just mean fewer decisions), as the match's `mode` says.
 
 **The result** reports the macro turns, the micro calls, and the tokens and cost per model. Its trajectory is
 wc3agent's call log, with each decision and its cost.
+
+## The wc3-scripted agent
+
+`agents/wc3-scripted` plays a seat as wc3agent's scripted opponents do, with no model, through the env's `urn:rts`
+session. It reads the other side's units from its seat's observations, so it plays an omniscient seat.
+
+| Setting (`deploy_agent` `env_vars`) | What | Default |
+|---|---|---|
+| `SCRIPT` | `attack`: attack-move its army (at most 64 units) at the other side's army; `raid`: at its workers, else its first building; `idle`: no orders | `attack` |
+| `SCRIPT_AFTER_SECONDS` | game seconds after its first observation before its first order | `0` |
+| `SCRIPT_EVERY_SECONDS` | game seconds between its order rounds | `5` |
 
 ## Watch it live
 
@@ -276,7 +288,7 @@ flowchart LR
 |---|---|
 | Environment | `src/agentenv_wc3/server.py`: six MCP tools; `data/get` (result, both sides' score counters, the harness's counters); the extensions `urn:wc3:new-game/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1` and `urn:rts:debug/v1`; `urn:rts:recording/v1`; and `/live` |
 | Task steps | `wc3_match` (starts the game in `stepping` or `realtime` mode and sends any activation files) and `save_wc3_replay`, in `steps.py`; `save_rts_recording`, in `agentenv_rts/steps.py` |
-| Agent | `agents/wc3-player`: `wc3-macro-micro` |
+| Agents | `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks and verifiers | `src/agentenv_wc3/bundles/wc3/` |
 | CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch`, `stream`, `recordings` |
 
