@@ -26,7 +26,7 @@ from agent_env.config import ConfigError, get_config
 
 import agentenv_rts
 
-from . import steps
+from . import drills, steps
 
 ENVIRONMENT_NAME = "wc3"
 BASE_IMAGE = "wc3-worker:local"
@@ -429,3 +429,25 @@ def serve(port: int, worker: str | None):
     from .server import main
 
     main()
+
+
+@wc3.group("drills")
+def drills_group():
+    """Drills: short staged tasks with a goal and checks, from wc3agent's scenarios."""
+
+
+@drills_group.command("import")
+@click.option("--wc3env", "wc3env_dir", type=click.Path(exists=True, file_okay=False, path_type=Path),
+              envvar="WC3ENV_DIR", help="A wc3env checkout. Default: $WC3ENV_DIR, else wc3env at the pinned commit, "
+                                        "downloaded.")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path), default=drills.TASKS,
+              help="Where the task files go. Default: the wc3 bundle's tasks.")
+def import_drills(wc3env_dir: Path | None, out_dir: Path):
+    """Convert wc3agent's scenario definitions into drill tasks, drill-<name>.json, once: the bundle owns them from
+    then on."""
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            written = drills.import_all(_wc3env(wc3env_dir, Path(tmp)) / drills.DEFINITIONS, out_dir)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
+    click.echo(f"Wrote {len(written)} drill tasks into {out_dir}")

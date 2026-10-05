@@ -1,0 +1,184 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "wc3"
+  },
+  {
+    "id": "agent",
+    "type": "deploy_agent",
+    "agent_name": "wc3",
+    "a2a_agent_id": "wc3-macro-micro",
+    "env_ids": [],
+    "env_vars": {
+      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
+    }
+  },
+  {
+    "id": "match",
+    "type": "wc3_match",
+    "env_id": "wc3",
+    "map": "(2)EchoIsles.w3x",
+    "seed": 1,
+    "time_limit_seconds": 150,
+    "mode": "stepping",
+    "seats": [
+      {
+        "agent": "wc3",
+        "race": "human"
+      },
+      {
+        "computer": "easy",
+        "race": "orc"
+      }
+    ],
+    "depends_on": [
+      "agent"
+    ]
+  },
+  {
+    "id": "stage",
+    "type": "apply_server_config",
+    "env_id": "wc3",
+    "timeout_seconds": 600,
+    "directives": [
+      {
+        "service": "wc3",
+        "uri": "urn:wc3:stage/v1",
+        "args": {
+          "warmup_seconds": 0,
+          "ops": [
+            {
+              "op": "ai",
+              "player": "opponent",
+              "paused": true
+            },
+            {
+              "op": "resources",
+              "player": "wc3",
+              "gold": 300,
+              "lumber": 200
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "hbar",
+              "at": "home",
+              "dx": 600,
+              "dy": -600,
+              "as": "base"
+            },
+            {
+              "op": "hp",
+              "unit": "base",
+              "value": 300
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "hhou",
+              "at": "home",
+              "dx": -500,
+              "dy": -500,
+              "as": "base-2"
+            },
+            {
+              "op": "hp",
+              "unit": "base-2",
+              "value": 80
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "hhou",
+              "at": "home",
+              "dx": -700,
+              "dy": -500,
+              "as": "base-3"
+            },
+            {
+              "op": "hp",
+              "unit": "base-3",
+              "value": 150
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "hwtw",
+              "at": "home",
+              "dx": 0,
+              "dy": -800,
+              "as": "base-4"
+            },
+            {
+              "op": "hp",
+              "unit": "base-4",
+              "value": 60
+            }
+          ]
+        }
+      }
+    ],
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "play",
+    "type": "prompt_agent",
+    "agent_name": "wc3",
+    "model": "anthropic/claude-haiku-4-5",
+    "prompt_id": "drill-build-repair",
+    "prompt": "A raid just left four of your buildings badly damaged and nothing threatens you now. Repair all of them with Peasants (repair #peasant on #structure; two or three Peasants on one building finish it faster) while the rest keep mining, so no Peasant stands idle.",
+    "timeout_seconds": 1800,
+    "depends_on": [
+      "stage"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "rts_grade",
+    "env_id": "wc3",
+    "seats": [
+      "wc3"
+    ],
+    "rubric": "checks",
+    "checks": [
+      {
+        "metric": "structure_health_percent",
+        "op": ">=",
+        "value": 95
+      },
+      {
+        "metric": "idle_worker_seconds",
+        "op": "<=",
+        "value": 30
+      },
+      {
+        "metric": "gold_mined",
+        "op": ">=",
+        "value": 300
+      }
+    ],
+    "verifier_id": "drill",
+    "depends_on": [
+      "play"
+    ]
+  },
+  {
+    "id": "replay",
+    "type": "save_wc3_replay",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_rts_recording",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  }
+]

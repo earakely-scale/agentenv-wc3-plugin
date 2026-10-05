@@ -1,0 +1,203 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "wc3"
+  },
+  {
+    "id": "agent",
+    "type": "deploy_agent",
+    "agent_name": "wc3",
+    "a2a_agent_id": "wc3-macro-micro",
+    "env_ids": [],
+    "env_vars": {
+      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
+    }
+  },
+  {
+    "id": "opponent",
+    "type": "deploy_agent",
+    "agent_name": "opponent",
+    "a2a_agent_id": "wc3-scripted",
+    "env_ids": [],
+    "env_vars": {
+      "SCRIPT": "attack",
+      "SCRIPT_AFTER_SECONDS": "0",
+      "SCRIPT_EVERY_SECONDS": "5"
+    }
+  },
+  {
+    "id": "match",
+    "type": "wc3_match",
+    "env_id": "wc3",
+    "map": "(2)EchoIsles.w3x",
+    "seed": 1,
+    "time_limit_seconds": 120,
+    "mode": "stepping",
+    "seats": [
+      {
+        "agent": "wc3",
+        "race": "human"
+      },
+      {
+        "agent": "opponent",
+        "race": "orc",
+        "omniscient": true
+      }
+    ],
+    "depends_on": [
+      "agent",
+      "opponent"
+    ]
+  },
+  {
+    "id": "stage",
+    "type": "apply_server_config",
+    "env_id": "wc3",
+    "timeout_seconds": 600,
+    "directives": [
+      {
+        "service": "wc3",
+        "uri": "urn:wc3:stage/v1",
+        "args": {
+          "warmup_seconds": 0,
+          "ops": [
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "Hamg",
+              "at": "toward:enemy_home:6000",
+              "as": "hero"
+            },
+            {
+              "op": "level",
+              "unit": "hero",
+              "level": 3
+            },
+            {
+              "op": "give",
+              "unit": "hero",
+              "type": "stwp"
+            },
+            {
+              "op": "give",
+              "unit": "hero",
+              "type": "phea"
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "hfoo",
+              "n": 4,
+              "at": "toward:enemy_home:6000",
+              "dx": 150,
+              "as": "army"
+            },
+            {
+              "op": "spawn",
+              "player": "opponent",
+              "type": "Ofar",
+              "at": "toward:enemy_home:4800",
+              "as": "enemy"
+            },
+            {
+              "op": "level",
+              "unit": "enemy",
+              "level": 5
+            },
+            {
+              "op": "spawn",
+              "player": "opponent",
+              "type": "ogru",
+              "n": 8,
+              "at": "toward:enemy_home:4800",
+              "dy": 200,
+              "as": "enemy"
+            },
+            {
+              "op": "spawn",
+              "player": "opponent",
+              "type": "ohun",
+              "n": 5,
+              "at": "toward:enemy_home:4800",
+              "dy": -200,
+              "as": "enemy"
+            }
+          ]
+        }
+      }
+    ],
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "play",
+    "type": "prompt_agent",
+    "agent_name": "wc3",
+    "model": "anthropic/claude-haiku-4-5",
+    "prompt_id": "drill-fight-outnumbered",
+    "prompt": "An enemy army twice the size of yours is attacking your small army away from home. You cannot win this fight. Save the hero and as many units as you can: get back to your base (your hero carries a Scroll of Town Portal).",
+    "timeout_seconds": 1800,
+    "depends_on": [
+      "stage"
+    ]
+  },
+  {
+    "id": "play-opponent",
+    "type": "prompt_agent",
+    "agent_name": "opponent",
+    "prompt_id": "drill-fight-outnumbered-opponent",
+    "prompt": "Play your seat with the script.",
+    "timeout_seconds": 1800,
+    "depends_on": [
+      "stage"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "rts_grade",
+    "env_id": "wc3",
+    "seats": [
+      "wc3"
+    ],
+    "rubric": "checks",
+    "checks": [
+      {
+        "metric": "hero_alive",
+        "op": "==",
+        "value": true
+      },
+      {
+        "metric": "army_kept_percent",
+        "op": ">=",
+        "value": 60
+      },
+      {
+        "metric": "units_lost",
+        "op": "<=",
+        "value": 1
+      }
+    ],
+    "verifier_id": "drill",
+    "depends_on": [
+      "play"
+    ]
+  },
+  {
+    "id": "replay",
+    "type": "save_wc3_replay",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_rts_recording",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  }
+]
