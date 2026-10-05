@@ -1,0 +1,194 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "wc3"
+  },
+  {
+    "id": "agent",
+    "type": "deploy_agent",
+    "agent_name": "wc3",
+    "a2a_agent_id": "wc3-macro-micro",
+    "env_ids": [],
+    "env_vars": {
+      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
+    }
+  },
+  {
+    "id": "opponent",
+    "type": "deploy_agent",
+    "agent_name": "opponent",
+    "a2a_agent_id": "wc3-scripted",
+    "env_ids": [],
+    "env_vars": {
+      "SCRIPT": "raid",
+      "SCRIPT_AFTER_SECONDS": "0",
+      "SCRIPT_EVERY_SECONDS": "5"
+    }
+  },
+  {
+    "id": "match",
+    "type": "wc3_match",
+    "env_id": "wc3",
+    "map": "(2)EchoIsles.w3x",
+    "seed": 1,
+    "time_limit_seconds": 150,
+    "mode": "stepping",
+    "seats": [
+      {
+        "agent": "wc3",
+        "race": "undead"
+      },
+      {
+        "agent": "opponent",
+        "race": "orc",
+        "omniscient": true
+      }
+    ],
+    "depends_on": [
+      "agent",
+      "opponent"
+    ]
+  },
+  {
+    "id": "stage",
+    "type": "apply_server_config",
+    "env_id": "wc3",
+    "timeout_seconds": 600,
+    "directives": [
+      {
+        "service": "wc3",
+        "uri": "urn:wc3:stage/v1",
+        "args": {
+          "warmup_seconds": 0,
+          "ops": [
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "uzg1",
+              "at": "home",
+              "dx": 500,
+              "dy": -500,
+              "as": "base"
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "uzg1",
+              "at": "home",
+              "dx": -500,
+              "dy": -500,
+              "as": "base"
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "ugho",
+              "n": 2,
+              "at": "home",
+              "dx": -1400,
+              "dy": -900,
+              "as": "army"
+            },
+            {
+              "op": "spawn",
+              "player": "opponent",
+              "type": "hfoo",
+              "n": 3,
+              "at": "home",
+              "dx": 800,
+              "dy": 300,
+              "as": "enemy"
+            },
+            {
+              "op": "spawn",
+              "player": "opponent",
+              "type": "hrif",
+              "at": "home",
+              "dx": 900,
+              "dy": 300,
+              "as": "enemy"
+            }
+          ]
+        }
+      }
+    ],
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "play",
+    "type": "prompt_agent",
+    "agent_name": "wc3",
+    "model": "anthropic/claude-haiku-4-5",
+    "prompt_id": "drill-defend-base-undead",
+    "prompt": "Three Footmen and a Rifleman are raiding your Acolytes; two Ghouls are across the base and one stands by the Necropolis. Acolytes cannot fight and cannot hide: move them behind the Necropolis, between the two Spirit Towers, not out into the open. Fight the raiders under the towers with the Ghouls and do not chase beyond tower range.",
+    "timeout_seconds": 1800,
+    "depends_on": [
+      "stage"
+    ]
+  },
+  {
+    "id": "play-opponent",
+    "type": "prompt_agent",
+    "agent_name": "opponent",
+    "prompt_id": "drill-defend-base-undead-opponent",
+    "prompt": "Play your seat with the script.",
+    "timeout_seconds": 1800,
+    "depends_on": [
+      "stage"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "rts_grade",
+    "env_id": "wc3",
+    "seats": [
+      "wc3"
+    ],
+    "rubric": "checks",
+    "checks": [
+      {
+        "metric": "enemy_army_destroyed_percent",
+        "op": ">=",
+        "value": 100
+      },
+      {
+        "metric": "workers_lost",
+        "op": "<=",
+        "value": 0
+      },
+      {
+        "metric": "structures_lost",
+        "op": "<=",
+        "value": 0
+      },
+      {
+        "metric": "units_lost",
+        "op": "<=",
+        "value": 1
+      }
+    ],
+    "verifier_id": "drill",
+    "depends_on": [
+      "play"
+    ]
+  },
+  {
+    "id": "replay",
+    "type": "save_wc3_replay",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_rts_recording",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  }
+]

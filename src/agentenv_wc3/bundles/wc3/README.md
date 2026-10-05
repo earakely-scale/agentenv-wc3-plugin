@@ -32,3 +32,58 @@ Every task also saves the spectator recording (`save_rts_recording`): an MP4 of 
 replay; `macro-micro-realtime` adds the game's own video, with chapters, and a highlight reel cut from it.
 `agent-env wc3 setup --fake` builds the env on wc3env's fake game, so every task runs end to end without
 Warcraft III (units move and stop, nothing else).
+
+## Drills
+
+The `drill-*` tasks are wc3agent's 25 scenarios as ordinary tasks, with no scenario concept: seats in a short stepped
+match on Echo Isles (seed 1), a stage step (`apply_server_config` with `urn:wc3:stage/v1`) that spawns the drill's
+units at named places (`home`, `toward:nearest_camp:900`, `camp:9`, ...) under handles (`army`, `hero`, `enemy`, which
+the summary's `army_kept_percent` and `enemy_army_destroyed_percent` read), the drill's goal as the prompt, and
+`rts_grade` with the scenario's own checks (`rubric: checks`). The opponent is the game's AI, paused by the stage in
+all but the full game, or `wc3-scripted`, an agent seat that attack-moves at your army (`attack`) or at your workers,
+else your hall (`raid`). `wc3-macro-micro` plays your side, Haiku 4.5 for both models.
+
+| Task | Skill | Minutes | Opponent | Dropped |
+|---|---|---|---|---|
+| `drill-build-production` | Second Barracks and a Blacksmith | 4 | computer, paused | |
+| `drill-build-repair` | Repairing a battered base | 2.5 | computer, paused | |
+| `drill-build-supply` | Farms before the food cap (Human) | 3 | computer, paused | |
+| `drill-build-supply-nightelf` | Moon Wells before the food cap (Night Elf) | 3 | computer, paused | |
+| `drill-build-supply-orc` | Burrows before the food cap (Orc) | 3 | computer, paused | |
+| `drill-build-supply-undead` | Ziggurats before the food cap (Undead) | 3 | computer, paused | |
+| `drill-build-towers` | Towers before the raid | 4.5 | `wc3-scripted`: raid after 150 s | |
+| `drill-creep-easy` | Creeping the nearest weak camp | 2.5 | computer, paused | finish at `camp_cleared`, then 15 s |
+| `drill-creep-hard` | Creeping a strong camp | 3.5 | computer, paused | finish at `camp_cleared:camp:9`, then 15 s |
+| `drill-defend-base` | Defending the base from a raid | 2.5 | `wc3-scripted`: attack | |
+| `drill-defend-base-human` | Defending with Militia (Human) | 2.5 | `wc3-scripted`: raid | |
+| `drill-defend-base-nightelf` | Defending with Ancients (Night Elf) | 2.5 | `wc3-scripted`: raid | |
+| `drill-defend-base-orc` | Defending with Burrows (Orc) | 2.5 | `wc3-scripted`: raid | |
+| `drill-defend-base-undead` | Defending under Spirit Towers (Undead) | 2.5 | `wc3-scripted`: raid | |
+| `drill-expansion` | Taking a second gold mine | 5 | computer, paused | finish at `expansion_started_time` |
+| `drill-fight-even` | Even fight | 2.5 | `wc3-scripted`: attack | |
+| `drill-fight-outnumbered` | Outnumbered: save the army | 2 | `wc3-scripted`: attack | |
+| `drill-full-game-easy` | Ten minutes against the easy computer | 10 | easy computer | |
+| `drill-hero-in-danger` | A hero about to die | 1.5 | `wc3-scripted`: attack | finish at `hero_alive == false` |
+| `drill-hero-revive` | Reviving a fallen hero | 3 | computer, paused | |
+| `drill-loot` | Picking up items and tomes | 1.5 | computer, paused | finish at `items_picked_up >= 4`, then 15 s |
+| `drill-opening` | Opening build | 4 | computer, paused | |
+| `drill-scouting` | Finding the enemy base | 3 | computer, paused | finish at `enemy_base_seen_time` |
+| `drill-shopping` | Buying items | 2, after a 460 s warm-up | computer, paused | finish at `items_bought >= 3` |
+| `drill-spend-and-tech` | Spending a big bank and teching | 4 | computer, paused | |
+
+Run one with `agent-env run wc3 --task drill-fight-even`. Every drill needs `wc3-macro-micro` (`agent-env wc3 setup
+--agent`); the ones against `wc3-scripted` need that agent registered too. A drill's time limit is its minutes plus
+any warm-up: `drill-shopping` lets 460 game seconds pass first so the shops stock up.
+
+**Dropped: the early finish.** wc3agent ended a scenario once its `finish` condition held (and, with
+`finish_after_seconds`, a little later, so loot could drop). Drills play to their time limit instead, one stop rule
+for every task, and the summary's first-time metrics record when a goal was met, so the checks lose nothing. The one
+exception is `drill-creep-easy`'s `seconds <= 90`: in wc3agent `seconds` was the time the finish condition first held
+(the camp cleared), which no summary metric reports, so that check needs a camp-cleared time metric or a rewrite.
+Also dropped: wc3agent pointed the game's camera at the staged party (the stage has no camera op), and left the
+opponent's race to the map (the drills give it Orc).
+
+`agent-env wc3 drills import [--wc3env PATH]` regenerates the files from wc3env's pinned commit
+(`agentenv_wc3/drills.py`), and `tests/test_drills.py` checks that they are what it writes. In `drill-build-repair`
+each damaged building has a handle of its own (`base`, `base-2`, ...), since an `hp` op sets every unit under its
+handle.

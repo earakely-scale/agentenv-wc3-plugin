@@ -1,0 +1,173 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "wc3"
+  },
+  {
+    "id": "agent",
+    "type": "deploy_agent",
+    "agent_name": "wc3",
+    "a2a_agent_id": "wc3-macro-micro",
+    "env_ids": [],
+    "env_vars": {
+      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
+    }
+  },
+  {
+    "id": "match",
+    "type": "wc3_match",
+    "env_id": "wc3",
+    "map": "(2)EchoIsles.w3x",
+    "seed": 1,
+    "time_limit_seconds": 210,
+    "mode": "stepping",
+    "seats": [
+      {
+        "agent": "wc3",
+        "race": "human"
+      },
+      {
+        "computer": "easy",
+        "race": "orc"
+      }
+    ],
+    "depends_on": [
+      "agent"
+    ]
+  },
+  {
+    "id": "stage",
+    "type": "apply_server_config",
+    "env_id": "wc3",
+    "timeout_seconds": 600,
+    "directives": [
+      {
+        "service": "wc3",
+        "uri": "urn:wc3:stage/v1",
+        "args": {
+          "warmup_seconds": 0,
+          "ops": [
+            {
+              "op": "ai",
+              "player": "opponent",
+              "paused": true
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "Hamg",
+              "at": "toward:camp:9:900",
+              "dx": 0,
+              "as": "hero"
+            },
+            {
+              "op": "level",
+              "unit": "hero",
+              "level": 3
+            },
+            {
+              "op": "give",
+              "unit": "hero",
+              "type": "phea"
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "hfoo",
+              "n": 5,
+              "at": "toward:camp:9:900",
+              "dx": 150,
+              "as": "army"
+            },
+            {
+              "op": "spawn",
+              "player": "wc3",
+              "type": "hrif",
+              "n": 3,
+              "at": "toward:camp:9:900",
+              "dx": -150,
+              "as": "army"
+            }
+          ]
+        }
+      }
+    ],
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "play",
+    "type": "prompt_agent",
+    "agent_name": "wc3",
+    "model": "anthropic/claude-haiku-4-5",
+    "prompt_id": "drill-creep-hard",
+    "prompt": "A level 3 Archmage, five Footmen and three Riflemen stand next to a strong camp. Clear it with few losses: focus targets, keep the hero alive, pull badly hurt units back, use the potion if needed, take the drops.",
+    "timeout_seconds": 2520,
+    "depends_on": [
+      "stage"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "rts_grade",
+    "env_id": "wc3",
+    "seats": [
+      "wc3"
+    ],
+    "rubric": "checks",
+    "checks": [
+      {
+        "metric": "camp_cleared:camp:9",
+        "op": "==",
+        "value": true
+      },
+      {
+        "metric": "units_lost",
+        "op": "<=",
+        "value": 2
+      },
+      {
+        "metric": "hero_alive",
+        "op": "==",
+        "value": true
+      },
+      {
+        "metric": "army_kept_percent",
+        "op": ">=",
+        "value": 60
+      },
+      {
+        "metric": "items_picked_up",
+        "op": ">=",
+        "value": 1
+      },
+      {
+        "metric": "unspent_skill_points",
+        "op": "<=",
+        "value": 0
+      }
+    ],
+    "verifier_id": "drill",
+    "depends_on": [
+      "play"
+    ]
+  },
+  {
+    "id": "replay",
+    "type": "save_wc3_replay",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_rts_recording",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  }
+]
