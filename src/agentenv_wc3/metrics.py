@@ -78,7 +78,7 @@ class Metrics:
             self.deaths |= {e.get("unit_id") for e in obs.get("events") or () if e.get("kind") == "death"}
             enemies = {p["id"] for p in obs.get("players") or () if p.get("kind") == "player"
                        and p.get("relation") == "enemy"}
-            self.enemies[slot] |= enemies
+            self.enemies[slot] = enemies   # as they stand: allies show as enemies until the game's first step
             if self.base_seen[slot] is None and any(u.get("structure") and u.get("owner") in enemies
                                                     for u in obs.get("visible_enemies") or ()):
                 self.base_seen[slot] = now

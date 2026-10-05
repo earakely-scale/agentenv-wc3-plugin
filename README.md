@@ -134,11 +134,17 @@ To go out live, drop `--offline` and give it a stream key: `--to twitch`, `--to 
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
 | `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime, with the game's picture | 11 min, ~$11 |
+| `duel-quick` | two wc3agents, Haiku 4.5 for both models, Human against Orc | 5 minutes, stepped in lockstep, graded per seat (`dense`) | 19 min, $4.70; Orc 0.41, Human 0.35 |
+| `drill-*` (25) | wc3agent with Haiku 4.5, against the AI or the scripted `wc3-scripted` | wc3agent's 25 scenarios as drills: 1.5 to 10 minutes, graded by their checks | `drill-fight-even` 11 min, $2.30, 0.6; `drill-creep-easy` 10 min, $1.90, 0.67 |
 
 `agent-env run wc3 --task <task>` runs one; the costs are model spend at list prices. On the fake game,
 `macro-micro-quick` costs about $1.20 (there is nothing to fight, so the micro model is never asked).
 
-- **Map and side:** every game is on Echo Isles, with the agent playing Human.
+- **Map and side:** every game is on Echo Isles, with the agent playing Human (Orc too in `duel-quick`).
+- **Seats, drills and grading:** `wc3_match`'s `seats` put any mix of agents and the game's AI in a game, with races
+  and teams; each agent plays at its own address and, stepped, in lockstep with the others. A drill stages its start
+  (`urn:wc3:stage/v1`) and is graded by its checks. [docs/task-design.md](docs/task-design.md) is the design; the
+  bundle's [README](src/agentenv_wc3/bundles/wc3/README.md) lists the 25 drills.
 - **What every task saves:** the game's native replay, and the spectator recording (an MP4 of the map and a
   self-contained HTML replay), as file artifacts. `macro-micro-realtime` also saves the game's own video, with a
   chapter at each major moment, and a highlight reel of at most two minutes cut from it; its HTML replay plays the
@@ -319,15 +325,13 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
 
 ## Not done yet
 
-[docs/task-design.md](docs/task-design.md) is the target for tasks: seats for any mix of agents and the
-game's AI, and staged drills (wc3agent's 25 scenarios as tasks). Grading configured in the task (`rts_grade`) is
-done; its per-seat metrics wait for the env's per-seat summary.
-
+- **A task-set generator** (phase 4 of [docs/task-design.md](docs/task-design.md)): maps, races, opponents, seeds and
+  drills crossed into named tasks and an eval.
+- **Unverified:** shared victory for teams, and determinism under a fixed seed with several agents and staging.
+- **No auth on harness extensions:** an agent can reach the env's stage and idle extensions over HTTP.
 - **Container options.** wc3env runs its worker with `--shm-size 256m` and `--init`; agent-env's `server`
   provider sets neither, and the real game has run without them so far.
 - **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
-- **wc3agent's 25 scenarios**, staged and graded by the env. `urn:rts:debug/v1` already lets a match allow staging.
-- **Several agents in one game:** wc3agent's duels, and model against model.
 - **Upstream seams in wc3agent:** an injectable session and micro transport, so the agent needs no patching.
 - **A Linux-only build of wc3env's inputs**, so no Windows machine is needed (the hook with MinGW, StormLib on
   Linux).

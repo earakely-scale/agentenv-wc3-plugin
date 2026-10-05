@@ -1,7 +1,8 @@
-# Task design (target)
+# Task design
 
-The target for how Warcraft III tasks are built. Not implemented yet but for `rts_grade`, which grades today's tasks:
-they are the two-seat case of it (the shorthand below). The phases at the end say what lands when.
+How Warcraft III tasks are built. Phases 1 to 3 below are implemented and were run end to end on the real game
+(2026-10-05): `smoke` (1.0), `drill-fight-even` (0.6), `drill-creep-easy` (0.67) and `duel-quick` (0.41 and 0.35, one
+score per seat); phase 4, the task-set generator, is not built yet.
 
 ## Principles
 
@@ -138,38 +139,21 @@ was met, so nothing is lost.
 **The 25:** `agent-env wc3 drills import` converts wc3agent's definitions once into 25 task files in the bundle
 (`drill-fight-even`, `drill-defend-base-orc`, ...), which we own from then on.
 
-`fight_even` as a drill task:
+`fight_even` as a drill task is
+[`drill-fight-even.json`](../src/agentenv_wc3/bundles/wc3/tasks/drill-fight-even.json):
 
-```json
-[{"id": "deploy", "type": "deploy_env", "env_id": "wc3"},
- {"id": "agent", "type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": "wc3-macro-micro", "env_ids": ["wc3"]},
- {"id": "attacker", "type": "deploy_agent", "agent_name": "attacker", "a2a_agent_id": "wc3-scripted",
-  "env_ids": ["wc3"], "env_vars": {"SCRIPT": "attack"}},
- {"id": "match", "type": "wc3_match", "env_id": "wc3", "seed": 1, "time_limit_seconds": 150,
-  "seats": [{"agent": "wc3", "race": "human"}, {"agent": "attacker", "race": "orc"}],
-  "depends_on": ["agent", "attacker"]},
- {"id": "stage", "type": "apply_server_config", "env_id": "wc3", "directives": [{"service": "wc3",
-  "uri": "urn:wc3:stage/v1", "args": {"ops": [
-    {"op": "spawn", "player": "wc3", "type": "Hamg", "at": "home", "dx": -1300, "as": "hero"},
-    {"op": "level", "unit": "hero", "level": 3}, {"op": "give", "unit": "hero", "type": "phea"},
-    {"op": "spawn", "player": "wc3", "type": "hfoo", "n": 5, "at": "home", "dx": -1150, "as": "army"},
-    {"op": "spawn", "player": "wc3", "type": "hrif", "n": 3, "at": "home", "dx": -1450, "as": "army"},
-    {"op": "spawn", "player": "attacker", "type": "Ofar", "at": "home", "dx": -2600, "as": "enemy"},
-    {"op": "level", "unit": "enemy", "level": 3},
-    {"op": "spawn", "player": "attacker", "type": "ogru", "n": 4, "at": "home", "dx": -2500, "dy": 150, "as": "enemy"},
-    {"op": "spawn", "player": "attacker", "type": "ohun", "n": 3, "at": "home", "dx": -2700, "dy": -150, "as": "enemy"}]}}],
-  "depends_on": ["match"]},
- {"id": "play", "type": "prompt_agent", "agent_name": "wc3", "model": "anthropic/claude-haiku-4-5",
-  "prompt": "An enemy army the same size as yours (hero, melee, ranged) is attacking your army just outside your base. Win the fight and keep as much of your army as you can: focus fire, use spells, protect the hero, use the potion.",
-  "depends_on": ["stage"]},
- {"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks", "checks": [
-    {"metric": "enemy_army_destroyed_percent", "op": ">=", "value": 100},
-    {"metric": "army_kept_percent", "op": ">=", "value": 40},
-    {"metric": "hero_alive", "op": "==", "value": true},
-    {"metric": "unspent_skill_points", "op": "<=", "value": 0},
-    {"metric": "units_lost", "op": "<=", "value": 4}], "depends_on": ["play"]},
- {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}]
-```
+1. `deploy_env`, then two `deploy_agent`s, both with `"env_ids": []` (the match gives each its seat): the player,
+   `wc3-macro-micro` with `WC3_GOAL=prompt`, and the attacker, `wc3-scripted` with `SCRIPT=attack`.
+2. `wc3_match`: `seats: [{"agent": "wc3", "race": "human"}, {"agent": "opponent", "race": "orc", "omniscient": true}]`,
+   150 game seconds, stepping (so the two play in lockstep).
+3. `stage`: an `apply_server_config` step calling `urn:wc3:stage/v1` with the hero, its level and potion, the army
+   and the enemy army, by named places and handles.
+4. A `prompt_agent` per agent: the player's prompt is the drill's goal; the attacker's is ignored (an A2A agent
+   plays only when prompted).
+5. `rts_grade` with `rubric: checks` and wc3agent's five checks, then the replay and the recording.
+
+On the real game Haiku 4.5 (macro and micro) destroyed the enemy army and kept its hero alive but lost 7 units and
+kept 31% of its army's strength: 3 of the 5 checks, 0.6.
 
 ## The env's end-of-game summary (`data/get`, what `rts_grade` reads)
 
@@ -274,27 +258,31 @@ Today's six tasks run unchanged: the shorthand fields and `labels` still work. T
 and `smoke` give the grades `wc3-verifier` and `smoke-verifier` give (today's 0.5s stay 0.5), and those two scripts
 go.
 
-## To verify early
+## Verified, and still open
 
-- agent-env's MCP-configuration extension lets the match replace an agent's default env address with its seat's.
-- Teams set with wc3env's `alliance` op get shared victory and vision, as melee teams do.
-- Stepping is deterministic under a fixed seed, with several agents and with staging.
-- An agent can reach the env's harness extensions over HTTP (the stage and idle extensions have no auth): say so in
-  the docs, or bind them to the harness's own address.
+- **Seat addresses:** agent-env's MCP-configuration extension can only add a server, not replace one, so seated
+  agents deploy with `"env_ids": []` and `wc3_match` registers each one's seat address; a seated agent that also has
+  the env's own address, in a game with several agent seats, is refused.
+- **Teams:** the `alliance` op makes teammates allies (passive, help, shared experience, spells and vision). They show
+  as allies from the game's first step on: its very first observation still lists them as enemies, so the metrics read
+  each step's relations, never an earlier one's. Shared victory is not verified.
+- **Determinism** under a fixed seed, with several agents and with staging: not verified.
+- **No auth on harness extensions:** an agent can reach the env's stage and idle extensions over HTTP. Say so, or bind
+  them to the harness's own address.
 
 ## Phases
 
-| Phase | What | Runs |
+| Phase | What | Status |
 |---|---|---|
-| 1 | Seats (and the shorthand), per-seat addresses, lockstep, the briefing, per-run overrides; `rts_grade` with `melee` and `smoke`; the six tasks move to it | one agent-versus-agent game, ~$10 |
-| 2 | The summary's per-seat metrics; `dense`, and `checks` on any rubric | two tasks again, ~$5 |
-| 3 | Drills: the stage extension, `wc3-scripted`, the goal from the prompt, the gate's harness time, the 25 imported | a few drills, ~$5 |
-| 4 | The task-set generator and a sweep eval; optionally `rts_broadcast` | one small sweep, ~$15 |
+| 1 | Seats (and the shorthand), per-seat addresses, lockstep, the briefing, per-run overrides; `rts_grade` with `melee` and `smoke`; the six tasks moved to it | done; `duel-quick` ran on the real game |
+| 2 | The summary's per-seat metrics; `dense`, and `checks` on any rubric | done |
+| 3 | Drills: the stage extension, `wc3-scripted`, the goal from the prompt (`WC3_GOAL=prompt`), the gate's harness time, the 25 imported | done; `drill-fight-even` and `drill-creep-easy` ran on the real game |
+| 4 | The task-set generator and a sweep eval; optionally `rts_broadcast` | not built |
 
-## Open decisions
+## Decisions taken
 
-1. The default `seed`: `null` (a new game each run) or `1`.
-2. The default `race`: `random` or `human`.
-3. Agent versus agent: each seat sees only its own observation, or full observations for research.
-4. MCP prompts: generic, relying on the briefing, or matchup-specific with an opening strategy.
-5. Phase 1 first (agent versus agent), or drills first.
+1. The default `seed` stays `null` (a new game each run); tasks pin it.
+2. A seat's default `race` is `random`; the shorthand keeps `human` against `orc`.
+3. Each seat sees only its own observation; `omniscient` is for harness opponents.
+4. MCP prompts can be generic: the briefing opens `get_state`. The existing prompts keep their matchup and opening.
+5. `rts_grade`'s `at_time_limit` defaults to `draw`: a win is a conquest, and a lead in score earns `outscore`.
