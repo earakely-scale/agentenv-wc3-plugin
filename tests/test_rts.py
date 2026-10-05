@@ -381,6 +381,29 @@ def test_the_camera_follows_the_agents_fighting():
     assert frames.camera_spot(army) == (-1750.0, 50.0)
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="the MP4 needs ffmpeg")
+async def test_a_runs_recording_is_copied_into_one_folder(env_vars, local_stores, tmp_path):
+    from agent_env.config import get_config
+    from agent_env.task.store import TASK_INSTANCES_COLLECTION
+    from click.testing import CliRunner
+
+    from agentenv_wc3.cli import wc3
+
+    async with deployed(WC3Env()) as record:
+        await match(record)
+        await asyncio.to_thread(RemoteSession(base(record)).step, {0: []})
+        context = await SaveRTSRecordingTaskStep(id="recording", version=None, env_id="wc3").execute(
+            run_context(record))
+    get_config().get_document_store().insert(TASK_INSTANCES_COLLECTION, {
+        "instance_id": "wc3-smoke-abc", "task_id": "wc3-smoke", "created_at_utc": "2026-10-05 18:17 UTC",
+        "context": {"metadata": {"recordings": context.metadata["recordings"]}}})
+    result = CliRunner().invoke(wc3, ["recordings", "--out", str(tmp_path / "match")])
+    assert result.exit_code == 0, result.output
+    assert sorted(p.suffix for p in (tmp_path / "match").iterdir()) == [".html", ".mp4"]
+    assert "wc3-smoke-abc" in result.output and "Open " in result.output
+    assert CliRunner().invoke(wc3, ["recordings", "nope", "--out", str(tmp_path / "x")]).exit_code != 0
+
+
 def test_the_timeline_keeps_a_frame_per_half_second_and_every_event():
     timeline = Timeline({"game": "g"})
     for t in (0.0, 0.1, 0.2, 0.3, 0.6):

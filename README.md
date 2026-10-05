@@ -1,71 +1,142 @@
 # Warcraft III for AgentEnv
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Built on the AgentEnv Framework](https://img.shields.io/badge/built%20on-AgentEnv%20Framework-6f42c1)](https://www.agentenvframework.com)
+
 AI agents play melee games of Warcraft III: The Frozen Throne against the game's own AI, through
 [wc3env](https://github.com/pwang724/wc3env). An LLM can play through MCP tools, or wc3env's own two-model agent,
-`wc3agent`, can play: a macro model plans the economy and the army, and a fast micro model controls each unit. The
-micro model is Jev or any chat model, such as Claude Haiku. Spectators follow the game live, in the game's own
-picture or on a map, and every game is graded, saved as a native `.w3g` replay and recorded as a video. This repository is an environment plugin for the
+`wc3agent`, can play: a macro model plans the economy and the army, and a fast micro model controls each unit (Jev or
+any chat model, such as Claude Haiku). Every game is graded, saved as a native `.w3g` replay and recorded; you can
+watch it live in the game's own picture, with the agent's plans beside it, and send it to Twitch or X with two AI
+casters calling it. This repository is an environment plugin for the
 [AgentEnv Framework](https://www.agentenvframework.com). Its RTS-generic half, `agentenv_rts`, is meant for the next
 real-time strategy game too.
+
+[![Watch 45 seconds of the broadcast, with sound: Claude Sonnet 5.5 and Haiku 4.5 against the Orc AI, the agent's plan beside the game, and two AI casters calling it](docs/media/broadcast-poster.jpg)](docs/media/broadcast-clip.mp4)
+
+*▶ [Watch 45 seconds of the broadcast](docs/media/broadcast-clip.mp4), with sound: Claude Sonnet 5.5 (macro) and
+Haiku 4.5 (micro) reach tier 2 against the normal Orc AI in `macro-micro-realtime`, while the casters, Max and Ada,
+call it. Claude won on score at the 10-minute limit, 30.7k to 28.5k, after killing the Orc's Blademaster four times.*
 
 > **Unofficial, offline, and bring your own game.** This project is not affiliated with or endorsed by Blizzard
 > Entertainment; Warcraft is their trademark. It contains no game files: wc3env runs your own licensed Warcraft III
 > Legacy (1.29.2) installation, offline only, never on Battle.net. The env image you build holds your game files:
 > keep it private. Whether this use fits your license agreement is your responsibility.
 
-**Status:**
-- **Played on the real game** (Warcraft III Legacy 1.29.2 under Wine, x86-64 Linux, Docker): `smoke` passes, and
-  `macro-micro-quick` (Haiku for macro and micro) built a base, trained a hero and fought creeps in 60 macro turns and
-  302 micro calls, for $2.40. `macro-micro-realtime` plays with the game's own picture live and recorded.
-- **Without the game:** everything above it also runs on wc3env's **fake game**, on macOS (Apple Silicon) and Linux.
-  The fake game simulates a town hall, five peasants and a distant enemy hall; units move and stop, nothing else.
+**Status:** played on the real game (Warcraft III Legacy 1.29.2 under Wine, x86-64 Linux, Docker): `smoke` passes,
+`macro-micro-quick` builds a base, trains a hero and fights creeps, and `macro-micro-realtime` plays a full 10-minute
+game that streams and records with its casters. Everything above the game also runs on wc3env's **fake game**, on macOS
+(Apple Silicon) and Linux, without Warcraft III.
 
-## Try it without Warcraft III (Mac or Linux)
+## Before you start
 
-```bash
-uv tool install agentenv-framework --with-editable ./agentenv-wc3-plugin
-cd agentenv-wc3-plugin
-agent-env wc3 setup --fake --agent        # the env on wc3env's fake game, and the wc3-macro-micro agent, for this machine
-agent-env run wc3 --task smoke             # no model: the game runs, is graded and recorded
-agent-env run wc3 --task macro-micro-quick # wc3agent, Haiku for macro and micro: 5 game minutes, ~8 min, ~$1.20
-agent-env wc3 watch --open                 # the live view of the running game
-```
+- **Python 3.11+ and [uv](https://docs.astral.sh/uv/).**
+- **Docker**, and the local image registry agent-env stores images in:
+  `docker run -d -p 5000:5000 --restart unless-stopped --name registry registry:2`.
+- **A model endpoint** for the agents (and the casters): any OpenAI-compatible endpoint that serves model names like
+  `anthropic/claude-haiku-4-5`, such as a [LiteLLM](https://docs.litellm.ai/) proxy. Give it to agent-env either way:
 
-The agent's models go through agent-env's model endpoint (`[model]` `base_url` and `api_key` in
-`.agentenv/config.toml`, e.g. a LiteLLM proxy).
-
-## With the real game (x86-64 Linux)
-
-**What it needs:**
-- **An x86-64 Linux Docker host whose kernel runs Wine.** wc3env's `docker/platform_probe.py` checks it. Apple
-  Silicon and other arm64 hosts can't run the game itself; see the fake game above, or run the env on a remote
-  Linux host.
-- **wc3env's worker image**, built from your own installation as its
-  [docker/README.md](https://github.com/pwang724/wc3env/blob/main/docker/README.md) describes:
-  1. Once, on a Windows machine, build the hook and prepare the data.
-  2. Then, on any Linux builder:
-     `docker build --platform linux/amd64 --target environment -t wc3-worker:local build/docker-context`.
-- **Your activation files**, `roc.w3k` and `tft.w3k`, from the same installation, in `~/.wc3-license`. You can also
-  name another directory with `license_dir` in `[plugins.agentenv-wc3]` of `.agentenv/config.toml`, or with
-  `$WC3_LICENSE_DIR`. They never enter an image: the `wc3_match` step sends them to the env when a game starts.
+  ```bash
+  export LITELLM_BASE_URL=https://your-endpoint.example.com LITELLM_API_KEY=...   # or, in .agentenv/config.toml:
+  # [model]
+  # base_url = "https://your-endpoint.example.com"
+  # api_key = "env:LITELLM_API_KEY"       # a reference: secrets never go in the file
+  ```
 
 ```bash
-agent-env wc3 check                        # the host, your wc3env image, your activation files
-agent-env wc3 setup --agent                # the env on top of wc3-worker:local, as "wc3", and the agent
-agent-env run wc3 --task smoke
-agent-env run wc3 --task macro-micro-quick
+git clone https://github.com/earakely-scale/agentenv-wc3-plugin && cd agentenv-wc3-plugin
+uv tool install agentenv-framework --with-editable .
+agent-env config show                       # which config and model endpoint agent-env uses
 ```
+
+## Try it without Warcraft III (Mac or Linux, 10 minutes)
+
+wc3env's fake game is a stand-in world (a town hall, five peasants and a distant enemy hall; units move and stop,
+nothing else), so every task runs end to end without the game:
+
+```bash
+agent-env wc3 setup --fake --agent          # the env on the fake game, and the wc3-macro-micro agent
+agent-env run wc3 --task smoke               # no model: the game runs, is graded and recorded (~1 min, $0)
+agent-env run wc3 --task macro-micro-quick   # wc3agent, Haiku for macro and micro: 5 game minutes (~8 min, ~$1.20)
+agent-env wc3 watch --open                   # while a game runs: its live view
+agent-env wc3 recordings --out match         # afterwards: the run's recording and replay, in ./match
+```
+
+## Play the real game (x86-64 Linux)
+
+The game runs under Wine in Docker, on an **x86-64 Linux host** (a laptop, a server or a cloud VM). Apple Silicon and
+other arm64 machines can't run it; drive a Linux host from them instead. Getting the game files ready takes one pass
+on a Windows machine, about an hour, once.
+
+**1. Get the game.** Buy Warcraft III: Reforged on Battle.net (it includes the classic game). In the Battle.net app,
+open the Warcraft III page, choose **Warcraft III - Legacy TFT 1.29** in the Game Version dropdown, and install it.
+That is the one build wc3env supports (`1.29.2.9232`, checked by its executable's hash), and installing it also puts
+the activation files `roc.w3k` and `tft.w3k` in its folder.
+
+**2. Prepare the game files (once, on Windows x64).** Any Windows machine works, including a cloud Windows VM. Install
+64-bit Python 3.11+ and Visual Studio Build Tools 2022 with "Desktop development with C++", then, in wc3env at the
+commit this plugin pins
+([`eb660aa`](https://github.com/pwang724/wc3env/tree/eb660aa558fb6e5c639a1ff404082f7dc0ee483e)):
+
+```powershell
+wc3hook\build.bat                                   # builds and tests the injected hook
+python docker\prepare.py --game-dir "C:\Program Files (x86)\Warcraft III (Legacy)" --output build\docker-context
+```
+
+`prepare.py` checks the executable's hash and copies only the game files and stock maps the worker needs, never the
+activation files (see wc3env's [docker/README.md](https://github.com/pwang724/wc3env/blob/main/docker/README.md)).
+
+**3. Build the worker image (on the Linux host).** Copy `build\docker-context` there, and the two activation files into
+`~/.wc3-license`:
+
+```bash
+chmod -R a+rX docker-context                 # the image's build runs as a non-root user, which must read it
+docker build --platform linux/amd64 --target environment -t wc3-worker:local docker-context
+mkdir -p ~/.wc3-license && cp roc.w3k tft.w3k ~/.wc3-license/ && chmod 600 ~/.wc3-license/*
+```
+
+The activation files never enter an image: the `wc3_match` step sends them to the env when a game starts
+(`license_dir` in `[plugins.agentenv-wc3]` of `.agentenv/config.toml`, or `$WC3_LICENSE_DIR`, names another folder).
+
+**4. Play.**
+
+```bash
+agent-env wc3 check                          # the host, your worker image, your activation files
+agent-env wc3 setup --agent                  # the env on top of wc3-worker:local, as "wc3", and the agent
+agent-env run wc3 --task smoke               # ~1 min: the game starts, runs two minutes, is graded and recorded
+agent-env run wc3 --task macro-micro-realtime   # Sonnet 5.5 + Haiku 4.5 against the normal Orc AI, 10 min, ~$11
+agent-env wc3 recordings --out match         # its video, highlights, HTML replay and .w3g, in ./match
+```
+
+**Watch from your laptop:** the env listens on the host's loopback. `agent-env wc3 watch` on the host prints its
+address; forward it with `ssh -L 8080:127.0.0.1:<port> <host>` and open `http://localhost:8080/live`.
+
+## Record a broadcast, or stream it
+
+`agent-env wc3 stream` turns any game into a broadcast: the game's picture with a score bug, the agent's plans, the
+feed and two AI casters, voiced and captioned. Start it beside a run; it waits for the game and stops after GAME OVER:
+
+```bash
+agent-env wc3 stream --offline --record broadcasts &   # records broadcasts/stream-<time>.mp4: no stream key needed
+agent-env run wc3 --task macro-micro-realtime
+```
+
+To go out live, drop `--offline` and give it a stream key: `--to twitch`, `--to x`, or both (details in
+[Stream it to Twitch or X](#stream-it-to-twitch-or-x)). The casters cost about $2 a game on Haiku 4.5.
 
 ## Tasks
 
-| Task | Who plays | Game |
-|---|---|---|
-| `smoke` | nobody: the harness lets the game run | 2 minutes |
-| `vs-ai-quick` | your default agent over MCP tools, Human | 5 minutes against the easy Orc AI |
-| `vs-ai` | your default agent over MCP tools, Human | 20 minutes against the normal Orc AI |
-| `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped |
-| `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped |
-| `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime |
+| Task | Who plays | Game | Measured on the real game |
+|---|---|---|---|
+| `smoke` | nobody: the harness lets the game run | 2 minutes | 40 s, $0 |
+| `vs-ai-quick` | your default agent over MCP tools, Human | 5 minutes against the easy Orc AI | depends on the agent |
+| `vs-ai` | your default agent over MCP tools, Human | 20 minutes against the normal Orc AI | depends on the agent |
+| `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
+| `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
+| `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime, with the game's picture | 11 min, ~$11 |
+
+`agent-env run wc3 --task <task>` runs one; the costs are model spend at list prices. On the fake game,
+`macro-micro-quick` costs about $1.20 (there is nothing to fight, so the micro model is never asked).
 
 - **Map and side:** every game is on Echo Isles, with the agent playing Human.
 - **What every task saves:** the game's native replay, and the spectator recording (an MP4 of the map and a
@@ -207,7 +278,7 @@ flowchart LR
 | Task steps | `wc3_match` (starts the game in `stepping` or `realtime` mode and sends any activation files) and `save_wc3_replay`, in `steps.py`; `save_rts_recording`, in `agentenv_rts/steps.py` |
 | Agent | `agents/wc3-player`: `wc3-macro-micro` |
 | Tasks and verifiers | `src/agentenv_wc3/bundles/wc3/` |
-| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch`, `stream` |
+| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch`, `stream`, `recordings` |
 
 [docs/protocol.md](docs/protocol.md) is the worker's protocol.
 

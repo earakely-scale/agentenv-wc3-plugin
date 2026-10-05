@@ -379,6 +379,44 @@ def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secr
 
 
 @wc3.command()
+@click.argument("instance", required=False)
+@click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path), default=Path("recordings"),
+              show_default=True, help="The folder to copy them into.")
+def recordings(instance: str | None, out_dir: Path):
+    """Copy a run's recording and replay into one folder: the game's video, its highlight reel, the map's video, the
+    HTML replay (which plays the game's video beside the map) and the .w3g. INSTANCE is the one `agent-env run`
+    printed; without it, the newest run that saved any."""
+    from agent_env.artifact import FileArtifact
+    from agent_env.store.document_store import Filter, Sort
+    from agent_env.store.routing import namespace_routing
+    from agent_env.task.store import TASK_INSTANCES_COLLECTION
+
+    with namespace_routing():   # `agent-env run`'s instances live in the @local namespace's own store
+        docs = get_config().get_document_store()
+        found = docs.query(TASK_INSTANCES_COLLECTION, Filter.of(**({"instance_id": instance} if instance else {})),
+                           sort=Sort.by("created_at_utc"), limit=None if instance else 50)
+        saved = []
+        for doc in found:
+            metadata = (doc.get("context") or {}).get("metadata") or {}
+            saved = [f for key in ("recordings", "replays") for files in (metadata.get(key) or {}).values()
+                     for f in files]
+            if saved:
+                break
+        if not saved:
+            raise click.ClickException(f"no run {instance!r} with a recording" if instance else
+                                       "no run has saved a recording yet: agent-env run wc3 --task smoke")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        click.echo(f"{doc['instance_id']} ({doc.get('created_at_utc')}):")
+        for f in saved:
+            content = FileArtifact.get(f["artifact_id"], f["version"]).load()
+            (out_dir / f["name"]).write_bytes(content)
+            click.echo(f"  {out_dir / f['name']}  {len(content) / 1e6:.1f} MB")
+    page = next((f["name"] for f in saved if f["name"].endswith(".html")), None)
+    if page:
+        click.echo(f"Open {out_dir / page} to watch it, with the game's video beside the map when it has one.")
+
+
+@wc3.command()
 @click.option("--port", default=18765, show_default=True)
 @click.option("--worker", help="The game worker's command line. Default: wc3env's fake game (no Warcraft III).")
 def serve(port: int, worker: str | None):
