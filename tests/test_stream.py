@@ -51,6 +51,7 @@ def env_state():
 def test_the_streamer_encodes_once_for_one_leg_several_legs_or_only_the_recording():
     one = stream.ffmpeg_command("1920x1080", 30, "4500k", ["rtmp://t/app/key"], None)
     assert one[-3:] == ["-f", "flv", "rtmp://t/app/key"] and "-tune" not in one
+    assert one[one.index("-stats"):one.index("-stats") + 3] == ["-stats", "-stats_period", "60"]
     assert one[one.index("x11grab") - 1:one.index("x11grab") + 7] == [
         "-f", "x11grab", "-video_size", "1920x1080", "-framerate", "30", "-draw_mouse", "0"]
     assert one[one.index("pulse") - 1:one.index("pulse") + 3] == ["-f", "pulse", "-i", "broadcast.monitor"]
@@ -99,6 +100,22 @@ def test_the_streamer_keeps_the_stream_keys_and_the_cast_key_out_of_its_output()
         "[tee] Slave rtmps://or.pscp.tv:443/x/<stream key> failed")
     assert stream.redacted("caster: HTTP 401 for key sk-cast-1", secrets) == "caster: HTTP 401 for key <cast key>"
     assert stream.redacted("frame=  900 fps= 30", stream.secrets_of([], "")) == "frame=  900 fps= 30"
+
+
+def test_the_streamer_relays_each_line_as_it_comes_progress_lines_too_without_the_keys(capsys):
+    chunks = [b"[flv @ 0x1] rtmp://t/app/liv", b"e_9: Broken pipe\nframe=  900 fps= 30 sp", b"eed=   1x    \r",
+              b"\r\ncaster: HTTP 401 for sk-cast-1", b""]
+    printed = []
+
+    class Pipe:
+        def read1(self, size):
+            printed.append(capsys.readouterr().out)
+            return chunks.pop(0)
+
+    stream.relay(Pipe(), stream.secrets_of(["rtmp://t/app/live_9"], "sk-cast-1"))
+    printed.append(capsys.readouterr().out)
+    assert printed == ["", "", "[flv @ 0x1] rtmp://t/app/<stream key>: Broken pipe\n",
+                       "frame=  900 fps= 30 speed=   1x\n", "", "caster: HTTP 401 for <cast key>\n"]
 
 
 def test_the_streamer_ends_linger_seconds_after_game_over(env_state, capsys):
@@ -198,7 +215,7 @@ def test_stream_sends_the_newest_game_still_playing_to_twitch_with_the_casters(d
     docker.ps = ("mcp-server-wc3\t127.0.0.1:42000->18765/tcp\tagent-local-over\n"
                  "postgres:16\t127.0.0.1:5432->5432/tcp\tdb\n"
                  "mcp-server-wc3\t127.0.0.1:41000->18765/tcp\tagent-local-playing\n")
-    monkeypatch.setattr(cli, "_state", lambda url: {"game_over": "42000" in url})
+    monkeypatch.setattr(cli, "_state", lambda url: {"game_over": "42000" in url, "t": 300.0})
     result = invoke("--linger", "30")
     assert result.exit_code == 0, result.output
     (build,), [(args, env)] = docker.builds, docker.runs
@@ -292,24 +309,27 @@ def test_stream_explains_what_it_needs_before_it_runs_anything(docker, playing, 
     assert result.exit_code == 1 and "the stream ended with an error (1)" in result.output
 
 
-def test_stream_waits_until_the_env_answers_with_a_game_to_play(docker, monkeypatch, env_state, tmp_path):
+def test_stream_waits_until_the_env_has_a_game_under_way(docker, monkeypatch, env_state, tmp_path):
     url, box = env_state
     assert cli._ready(url)
     box["doc"] = {"game_over": True, "result": "defeat", "t": 300.0, "client": False}
     assert not cli._ready(url)
     box["doc"] = None
     assert cli._state(url) is None and not cli._ready(url)
+    box["doc"] = {"game_over": False, "result": "", "t": None, "client": False}   # deployed, its match not begun
+    assert not cli._ready(url)
 
     waits = []
 
     def sleep(seconds):
         waits.append(seconds)
-        box["doc"] = {"game_over": False, "result": "", "t": None, "client": False}
+        if len(waits) == 2:
+            box["doc"] = {"game_over": False, "result": "", "t": 0.0, "client": False}
 
     monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=sleep))
     configure(monkeypatch)
     result = invoke("--url", url, "--offline", "--record", str(tmp_path), "--no-cast")
     assert result.exit_code == 0, result.output
-    assert f"Waiting for the game at {url}" in result.output and waits == [5]
+    assert f"Waiting for the game at {url} to start" in result.output and waits == [5, 5]
     args, _ = docker.runs[-1]
     assert args[args.index("--url") + 1] == url

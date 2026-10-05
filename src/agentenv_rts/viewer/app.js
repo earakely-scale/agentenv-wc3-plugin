@@ -172,7 +172,7 @@ function momentum() {
     ? `${lead[0][0].label} ahead by ${Math.round((lead[0][1] - lead[1][1]) / total * 100)}% of the score` : "Level on score";
 }
 
-// ?stream: the score bug over the game's picture.
+// ?stream: the score bug over the main view (the map, or the game's picture once there is one).
 function bug(frame) {
   const ps = players().slice(0, 2);
   if (ps.length < 2) return;
@@ -209,9 +209,16 @@ function syncVideo(frame) {
   if (!S.playing && !v.paused) v.pause();
 }
 
-function showClient() {
+// The game's picture becomes the main view, and ?stream's overlays (score bug, chyrons, captions) move from the map
+// onto it: the map is only the minimap now.
+function onClient() {
   S.client = true;
   document.body.classList.add("has-client");
+  $("client").parentElement.append($("bug"), $("chyron"), $("caption"));
+}
+
+function showClient() {
+  onClient();
   $("client").src = `${BASE}/client`;
   if (S.static) setStatic(S.static);
 }
@@ -292,7 +299,7 @@ if (window.RTS_DATA) {
   if (window.RTS_DATA.video) {   // the game's own video, a file beside this page
     const v = document.createElement("video");
     v.id = "client"; v.src = window.RTS_DATA.video; v.muted = true; v.playsInline = true; v.preload = "auto";
-    v.onloadedmetadata = () => { S.video = v; S.client = true; document.body.classList.add("has-client"); setStatic(S.static); show(S.idx); };
+    v.onloadedmetadata = () => { S.video = v; onClient(); setStatic(S.static); show(S.idx); };
     $("client").replaceWith(v);
   }
   setStatic(window.RTS_DATA.static); S.frames = window.RTS_DATA.frames || []; show(0); S.playing = !STREAM; tick();

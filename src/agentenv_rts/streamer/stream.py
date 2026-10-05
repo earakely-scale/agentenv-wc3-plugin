@@ -11,6 +11,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -52,8 +53,15 @@ def secrets_of(targets: list[str], cast_key: str) -> dict[str, str]:
 
 
 def relay(stream, secrets: dict[str, str]) -> None:
-    for line in iter(stream.readline, b""):
-        print(redacted(line.decode(errors="replace").rstrip(), secrets), flush=True)
+    """Prints a child's output a line at a time as it comes, redacted: ffmpeg ends each progress line with \\r."""
+    rest = b""
+    while True:
+        chunk = stream.read1(65536)
+        *lines, rest = re.split(rb"[\r\n]", rest + chunk) if chunk else (rest, b"")
+        for line in filter(bytes.strip, lines):
+            print(redacted(line.decode(errors="replace").rstrip(), secrets), flush=True)
+        if not chunk:
+            return
 
 
 def stop_at(game_over_since: float | None, gone_since: float | None, linger: float, now: float) -> bool:
@@ -105,7 +113,7 @@ def ffmpeg_command(size: str, fps: int, bitrate: str, targets: list[str], record
     """ffmpeg encoding the display and the sink's sound once, for the RTMP targets, the recording, or both: with
     more than one, the tee muxer keeps the others going when an RTMP leg fails."""
     rate = int(bitrate.rstrip("k"))
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats_period", "60",
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats", "-stats_period", "60",
            "-thread_queue_size", "512", "-f", "x11grab", "-video_size", size, "-framerate", str(fps),
            "-draw_mouse", "0", "-i", DISPLAY,
            "-thread_queue_size", "512", "-f", "pulse", "-i", f"{SINK}.monitor", "-map", "0:v", "-map", "1:a",
@@ -225,6 +233,7 @@ def main() -> int:
                 proc.wait(10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.wait()
     if record and (mp4 := remux(record)):
         print(f"Recorded {mp4}", flush=True)
     code = ffmpeg.returncode

@@ -126,7 +126,7 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
 
 `agent-env wc3 stream` sends a game's broadcast layout to Twitch while the agent plays it: a headless browser in
 Docker shows `/live?stream` on a virtual display, and ffmpeg sends it at 1080p and 30 fps with its sound. It waits for
-the newest wc3 env in Docker with a game to play, and ends the stream a minute after GAME OVER, so it can run beside
+a game to start in the newest wc3 env in Docker, and ends the stream a minute after GAME OVER, so it can run beside
 any task:
 
 ```bash

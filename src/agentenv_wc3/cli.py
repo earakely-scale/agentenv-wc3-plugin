@@ -259,9 +259,10 @@ def _state(url: str) -> dict | None:
 
 
 def _ready(url: str) -> bool:
-    """Whether the env behind a live view answers with a game still to play: a finished one keeps serving its end."""
-    state = _state(url)
-    return state is not None and not state.get("game_over")
+    """Whether the env behind a live view has a game under way: a deployed env has none until its match starts one
+    (until then the casters would have no players to talk about), and a finished one keeps serving its end."""
+    state = _state(url) or {}
+    return state.get("t") is not None and not state.get("game_over")
 
 
 def _from_container(url: str) -> str:
@@ -273,8 +274,8 @@ def _from_container(url: str) -> str:
 
 
 @wc3.command()
-@click.option("--url", help="The live view to stream. Default: the newest wc3 env in Docker whose game is not over; "
-                            "the command waits for one.")
+@click.option("--url", help="The live view to stream. Default: the newest wc3 env in Docker with a game under way; "
+                            "the command waits for one to start.")
 @click.option("--to", "destinations", multiple=True, type=click.Choice(["twitch", "x"]), default=("twitch",),
               show_default=True,
               help="Where the stream goes; repeat it to send one stream to both, e.g. --to twitch --to x. X takes the "
@@ -309,7 +310,7 @@ def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secr
            title: str | None, record_dir: Path | None, offline: bool, bandwidth_test: bool):
     """Stream a game's live view (/live?stream) to Twitch, X or any RTMP server, or to several at once, while the
     agent plays it, and optionally record it. A headless browser in Docker shows the page and ffmpeg sends it; the
-    stream starts once the env answers and ends after GAME OVER."""
+    stream starts with the game and ends after GAME OVER."""
     if offline and record_dir is None:
         raise click.UsageError("--offline only records: add --record DIR")
     test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
@@ -345,11 +346,11 @@ def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secr
         if subprocess.run(["docker", "build", "-t", image, str(STREAMER)]).returncode:
             raise click.ClickException("docker build of the streamer failed")
     if url is None:
-        click.echo("Waiting for a Warcraft III game (agent-env run wc3 --task ...)")
+        click.echo("Waiting for a Warcraft III game to start (agent-env run wc3 --task ...)")
         while (url := next((u for u, _ in _live_views() if _ready(u)), None)) is None:
             time.sleep(5)
     elif not _ready(url):
-        click.echo(f"Waiting for the game at {url}")
+        click.echo(f"Waiting for the game at {url} to start")
         while not _ready(url):
             time.sleep(5)
     if sys.platform == "darwin":
