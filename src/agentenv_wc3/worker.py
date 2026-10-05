@@ -63,9 +63,10 @@ class Worker:
 
     def start(self, map: str, players: list[dict], step_ms: int = 1000, seed: int | None = None,
               randomize_starts: bool = False, ai_difficulty: int | None = None, render: bool = False,
-              mode: str = "stepping") -> dict:
+              visible: bool = False, mode: str = "stepping") -> dict:
         """A new game: closes the one before, launches the game with these players, and returns every player's
-        first observation and the accepted setup. In `realtime` mode the game runs on its own clock."""
+        first observation and the accepted setup. In `realtime` mode the game runs on its own clock; `render` and
+        `visible` draw the game in a window on the display, for its picture."""
         from wc3env.session import GameConfig, GameSession, MatchSetup, PlayerConfig
 
         self.close()
@@ -77,7 +78,8 @@ class Worker:
             config = GameConfig(
                 map=map,
                 players=tuple(PlayerConfig(p["slot"], p.get("race"), p.get("control", "agent")) for p in players),
-                mode=mode, step_ms=step_ms, render=render, sound=False, ai_difficulty=ai_difficulty,
+                mode=mode, step_ms=step_ms, render=render, background_visible=visible, sound=False,
+                ai_difficulty=ai_difficulty,
                 setup=MatchSetup(seed=seed, randomize_starts=randomize_starts),
                 output_dir=os.environ.get("WC3_OUTPUT_DIR") or None,
             )

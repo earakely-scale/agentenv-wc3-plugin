@@ -1,13 +1,15 @@
 """The RTS pieces (agentenv_rts) on the WC3 env served over HTTP, on wc3env's fake game: a program playing through
-the urn:rts session, the spectator's live data and page, the recording and its task step, and the choice-question
-transport any chat model answers in Jev's shape."""
+the urn:rts session, the spectator's live data and page, the recording and its task step, the game's own picture
+(display capture, camera), and the choice-question transport any chat model answers in Jev's shape."""
 
 import asyncio
 import base64
 import http.server
 import json
 import shutil
+import subprocess
 import threading
+import urllib.error
 import urllib.request
 
 import pytest
@@ -15,10 +17,11 @@ from agent_env.artifact import FileArtifact
 from agentenv_protocol import client
 from test_steps import deployed, run_context
 
-from agentenv_rts import choices
+from agentenv_rts import choices, display, recording
 from agentenv_rts.session import RemoteSession, SessionError
 from agentenv_rts.steps import SaveRTSRecordingTaskStep
 from agentenv_rts.timeline import Timeline
+from agentenv_wc3 import frames
 from agentenv_wc3.server import WC3Env
 from agentenv_wc3.steps import WC3MatchTaskStep
 
@@ -112,6 +115,71 @@ async def test_the_recording_is_saved_as_file_artifacts(env_vars, local_stores):
     assert load["mp4"][4:8] == b"ftyp"
     html = load["html"]
     assert b"window.RTS_DATA = {" in html and b"</script>" in html
+
+
+async def test_client_view_on_the_fake_game_leaves_the_map_alone(env_vars, local_stores):
+    async with deployed(WC3Env()) as record:
+        await match(record, client_view=True)
+        doc = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/data.json")))
+        assert doc["live"]["client"] is False and doc["frames"]
+        with pytest.raises(urllib.error.HTTPError, match="404"):
+            await asyncio.to_thread(urllib.request.urlopen, base(record) + "/live/client.jpg")
+        assert (await client.get_data(base(record))).parts[0].data["client_view"] is True
+        context = await SaveRTSRecordingTaskStep(id="recording", version=None, env_id="wc3",
+                                                 formats=["client"]).execute(run_context(record))
+    assert context.metadata["recordings"]["recording"] == []
+
+
+XWININFO = """
+     0xa00008 (has no name): ("warcraft iii.exe" "warcraft iii.exe")  1x1+0+0  +0+0
+     0xa00005 "Warcraft III": ("warcraft iii.exe" "warcraft iii.exe")  960x540+4+30  +4+30
+     0x400004 (has no name): ("explorer.exe" "explorer.exe")  160x20+3+29  +3+29
+"""
+
+
+def test_the_game_window_is_found_on_the_display(monkeypatch):
+    monkeypatch.setattr(display.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, XWININFO, ""))
+    assert display.window_region(":99", "Warcraft III") == (4, 30, 960, 540)
+    assert display.window_region(":99", "StarCraft II") is None
+
+
+def test_jpegs_are_cut_from_the_mjpeg_stream():
+    one, two = b"\xff\xd8one\xff\xd9", b"\xff\xd8two\xff\xd9"
+    assert display.split_jpegs(one + two + b"\xff\xd8thr") == ([one, two], b"\xff\xd8thr")
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="the capture needs ffmpeg")
+async def test_the_games_picture_is_a_video_and_a_live_stream(tmp_path):
+    capture = display.Capture(["-f", "lavfi", "-i", "testsrc=size=320x180:rate=15"], tmp_path / "game.mp4")
+    capture.start()
+    try:
+        for _ in range(100):
+            if capture.frames >= 3:
+                break
+            await asyncio.sleep(0.1)
+        assert capture.latest().startswith(b"\xff\xd8")
+        parts = display.mjpeg(capture.latest)
+        part = await anext(parts)
+        await parts.aclose()
+        assert part.startswith(b"--frame\r\nContent-Type: image/jpeg\r\n") and part.endswith(b"\xff\xd9\r\n")
+    finally:
+        video = capture.stop()
+    assert video.read_bytes()[4:8] == b"ftyp" and not capture.running
+    files, notes = recording.files(Timeline({"game": "g"}), "g", ("client",), video)
+    assert [f["name"] for f in files] == ["g-client.mp4"] and notes == []
+
+
+def test_the_camera_follows_the_agents_fighting():
+    def unit(uid, type_id, x, y=0, **more):
+        return {"unit_id": uid, "type_id": type_id, "hp": 400, "x": x, "y": y, **more}
+
+    peasant = unit(1, "hpea", 0)
+    assert frames.camera_spot({"units": [peasant]}) is None
+    fight = {"units": [peasant, unit(2, "hfoo", 0), unit(3, "hfoo", 3000)],
+             "visible_enemies": [unit(9, "ogru", 3600, owner=1), unit(8, "ngol", 3200, owner=15, structure=True)]}
+    assert frames.camera_spot(fight) == (3300.0, 0.0)
+    army = {"units": [unit(2, "hfoo", 0), unit(4, "Hamg", -2000, 100, hero=True, level=2), unit(5, "hfoo", -1500)]}
+    assert frames.camera_spot(army) == (-1750.0, 50.0)
 
 
 def test_the_timeline_keeps_a_frame_per_half_second_and_every_event():

@@ -1,12 +1,15 @@
 "use strict";
 // The RTS spectator: the map and every unit in view, step by step, live from data.json or from the data a
-// recording embeds (window.RTS_DATA). Game-agnostic: it draws timeline.py's static map and frames.
+// recording embeds (window.RTS_DATA). Game-agnostic: it draws timeline.py's static map and frames. When the env
+// captures the game's own picture (live.client), that is the main view and the map becomes the minimap beside it.
 const $ = id => document.getElementById(id);
 const QUERY = new URLSearchParams(location.search);
 const STREAM = QUERY.has("stream");
 const TERRAIN = ["#2f4a2a", "#46452f", "#1f4466", "#121418"];
 const NEUTRAL = "#b8b8b8";
-const S = {static: null, frames: [], idx: -1, follow: true, playing: false, terrain: null, scale: 1, last: null};
+const S = {static: null, frames: [], idx: -1, follow: true, playing: false, terrain: null, scale: 1, last: null,
+  client: false};
+const BASE = location.pathname.replace(/\/$/, "");
 
 if (STREAM) document.body.classList.add("stream");
 
@@ -37,7 +40,8 @@ function terrainCanvas(t) {
 function setStatic(st) {
   S.static = st;
   S.terrain = terrainCanvas(st.terrain);
-  const b = st.bounds, w = b.max_x - b.min_x, h = b.max_y - b.min_y, side = STREAM ? 1000 : 900;
+  const b = st.bounds, w = b.max_x - b.min_x, h = b.max_y - b.min_y, side = S.client ? (STREAM ? 440 : 320)
+    : STREAM ? 1000 : 900;
   S.scale = side / Math.max(w, h);
   const canvas = $("map");
   canvas.width = Math.round(w * S.scale); canvas.height = Math.round(h * S.scale);
@@ -108,13 +112,21 @@ function sidebar(frame) {
   $("pos").textContent = `${S.idx + 1} / ${S.frames.length} steps`;
 }
 
+function showClient() {
+  S.client = true;
+  document.body.classList.add("client");
+  $("client").src = `${BASE}/client`;
+  if (S.static) setStatic(S.static);
+}
+
 function show(idx) { S.idx = Math.max(0, Math.min(S.frames.length - 1, idx)); draw(); }
 
 async function poll() {
   try {
     const since = S.frames.length ? S.frames[S.frames.length - 1].t : -1;
-    const r = await fetch(`${location.pathname.replace(/\/$/, "")}/data.json?since=${since}`, {cache: "no-store"});
+    const r = await fetch(`${BASE}/data.json?since=${since}`, {cache: "no-store"});
     const doc = await r.json();
+    if (doc.live && doc.live.client && !S.client) showClient();
     if (!S.static || (doc.static && doc.static.game !== S.static.game)) { S.frames = []; setStatic(doc.static); }
     S.frames.push(...doc.frames);
     if (S.follow || STREAM) show(S.frames.length - 1);

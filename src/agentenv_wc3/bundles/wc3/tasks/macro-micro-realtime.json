@@ -14,7 +14,8 @@
     "ai_difficulty": "normal",
     "seed": 1,
     "time_limit_seconds": 600,
-    "mode": "realtime"
+    "mode": "realtime",
+    "client_view": true
   },
   {
     "id": "agent",
@@ -66,6 +67,11 @@
     "env_id": "wc3",
     "depends_on": [
       "grade"
+    ],
+    "formats": [
+      "client",
+      "mp4",
+      "html"
     ]
   }
 ]

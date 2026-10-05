@@ -6,6 +6,7 @@ sees; enemies outside everyone's sight are not in it."""
 from __future__ import annotations
 
 import base64
+import math
 import zlib
 from pathlib import Path
 
@@ -96,3 +97,31 @@ def frame(observations: dict[int, dict], result: str = "", events: list[str] | N
                               "units": sum(not u.get("structure") for u in own),
                               "structures": sum(bool(u.get("structure")) for u in own)}
     return {"t": round(t, 3), "players": players, "units": units, "events": list(events or ()), "result": result}
+
+
+NEUTRAL_PASSIVE = 15   # gold mines, shops and critters: never a fight
+CAMERA_FIGHT = 900.0   # a unit of ours this close to a hostile one is in a fight, and the camera goes there
+CAMERA_ARMY = 1200.0   # without a fight, the camera shows our units this close to our strongest hero
+
+
+def camera_spot(obs: dict) -> tuple[float, float] | None:
+    """Where the game's camera looks, as wc3agent films a game (its policies.camera_spot): the fight of ours with
+    the most hostile units in it, else the army around our highest-level hero, else our fighting units; None with no
+    fighting unit of ours, which leaves the camera where it is (at first, on our base)."""
+    ours = [u for u in obs.get("units") or () if u.get("hp", 0) > 0 and not u.get("structure")
+            and u["type_id"] not in render.WORKERS]
+    if not ours:
+        return None
+    enemies = [e for e in obs.get("visible_enemies") or () if e.get("hp", 0) > 0 and not e.get("structure")
+               and e.get("owner") != NEUTRAL_PASSIVE]
+    near = {u["unit_id"]: [e for e in enemies if math.dist((e["x"], e["y"]), (u["x"], u["y"])) <= CAMERA_FIGHT]
+            for u in ours}
+    fighter = max(ours, key=lambda u: len(near[u["unit_id"]]))
+    if near[fighter["unit_id"]]:
+        crowd = [fighter, *near[fighter["unit_id"]]]
+    else:
+        heroes = [u for u in ours if u.get("hero")]
+        lead = max(heroes, key=lambda u: (u.get("level", 0), u["unit_id"])) if heroes else None
+        crowd = ([u for u in ours if math.dist((u["x"], u["y"]), (lead["x"], lead["y"])) <= CAMERA_ARMY]
+                 if lead else ours)
+    return sum(u["x"] for u in crowd) / len(crowd), sum(u["y"] for u in crowd) / len(crowd)

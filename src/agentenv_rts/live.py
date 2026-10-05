@@ -1,6 +1,7 @@
 """The spectator view's page and data, for any env that keeps a Timeline: `page()` is the viewer (`GET /live`;
 `?stream` lays it out 1920×1080 for a broadcast), `standalone()` the same page with a whole game embedded (the HTML
-recording), and `data()` what `GET /live/data.json?since=T` returns."""
+recording), and `data()` what `GET /live/data.json?since=T` returns. With `client`, the env also serves the game's
+own picture at `/live/client` (display.py), and the page shows it next to the map."""
 
 from __future__ import annotations
 
@@ -25,11 +26,12 @@ def standalone(timeline: Timeline) -> str:
     return page(timeline.doc())
 
 
-def data(timeline: Timeline | None, since: str | None) -> dict:
+def data(timeline: Timeline | None, since: str | None, client: bool = False) -> dict:
     if timeline is None:
-        return EMPTY
+        return {**EMPTY, "live": {**EMPTY["live"], "client": client}}
     try:
         after = float(since) if since not in (None, "") else None
     except ValueError:
         after = None
-    return timeline.doc(None if after is None or after < 0 else after)
+    doc = timeline.doc(None if after is None or after < 0 else after)
+    return {**doc, "live": {**doc["live"], "client": client}}

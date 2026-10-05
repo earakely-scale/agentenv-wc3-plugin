@@ -8,7 +8,9 @@ likes between steps. Orders given with `act` wait in a queue and go to the game 
 A program plays the same game through the `urn:rts:*` session extensions (agentenv_rts.session): raw observations
 in, raw wc3env actions out, as wc3env's own `wc3agent` plays (agents/wc3-player). In `realtime` mode the game runs on
 its own clock and a step only sends orders and observes. Spectators follow the game at `/live` (agentenv_rts.live),
-and `urn:rts:recording/v1` gives its recording once it is played.
+and `urn:rts:recording/v1` gives its recording once it is played. With `client_view` the game also draws itself in a
+window on the container's display: the live page shows that picture (`/live/client`), the camera follows the agent's
+fighting, and the recording has the match's video (agentenv_rts.display).
 """
 
 from __future__ import annotations
@@ -16,9 +18,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import math
 import os
 import shlex
 import sys
+import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -35,8 +39,9 @@ from agentenv_protocol import (
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
+from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
 from agentenv_rts.session import DEBUG, OBSERVE, STEP
@@ -59,12 +64,16 @@ DEFAULT_WORKER_CMD = ["wine", "C:\\Python311\\python.exe", "Z:" + str(WORKER).re
 MAX_ADVANCE_SECONDS = 60
 DEFAULT_SCENARIO = {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race": "orc", "ai_difficulty": "normal",
                     "seed": None, "randomize_starts": False, "time_limit_seconds": 1200, "mode": "stepping",
-                    "allow_debug": False}
+                    "allow_debug": False, "client_view": False}
 MODES = ("stepping", "realtime")
 # Debug ops that change only how the game is shown or how fast its clock runs: any session may send them (wc3agent
 # sets the speed when it starts). Every other op stages the game, so it needs the match's allow_debug.
 VIEW_DEBUG_OPS = ("speed", "camera", "overlay", "render")
 DEFAULT_STEP_MS = 1000
+WINDOW_NAME = "Warcraft III"
+CLIENT_DIR = Path(os.environ.get("WC3_CLIENT_DIR", "/tmp/wc3-client"))
+CAMERA_SECONDS = 0.5   # the camera moves at most this often (wall time)
+CAMERA_STILL = 300.0   # and stays put while its spot moves less than this
 
 NEW_GAME_EXTENSION = "urn:wc3:new-game/v1"
 REPLAY_EXTENSION = "urn:wc3:replay/v1"
@@ -111,8 +120,9 @@ def check_scenario(s: dict) -> dict:
         raise ValueError("map must be a map name or path, e.g. (2)EchoIsles.w3x")
     if s["mode"] not in MODES:
         raise ValueError(f"mode must be one of {', '.join(MODES)}, got {s['mode']!r}")
-    if not isinstance(s["allow_debug"], bool):
-        raise ValueError("allow_debug must be true or false")
+    for key in ("allow_debug", "client_view"):
+        if not isinstance(s[key], bool):
+            raise ValueError(f"{key} must be true or false")
     return s
 
 
@@ -167,6 +177,9 @@ class WC3Env(AgentEnvEnvironment):
         self.result = ""
         self.failed: str | None = None
         self.timeline: Timeline | None = None
+        self.capture: rts_display.Capture | None = None
+        self.camera: tuple[float, float] | None = None
+        self.camera_at = 0.0
         self.stats = {"games": 0, "tool_calls": 0, "invalid_calls": 0, "advances": 0, "orders_sent": 0,
                       "orders_rejected": 0, "extension_calls": 0, "idle_seconds": 0, "session_steps": 0}
 
@@ -186,6 +199,7 @@ class WC3Env(AgentEnvEnvironment):
             raise WorkerError("no_license", "the game needs your Warcraft III activation files (roc.w3k, tft.w3k): "
                                             "the wc3_match task step sends them from your license directory "
                                             "(agent-env wc3 setup --help)")
+        await self._drop_capture()
         if self.bridge is None or not self.bridge.alive:
             self.bridge = Bridge(self.worker_cmd)
             await self.bridge.start()
@@ -194,7 +208,8 @@ class WC3Env(AgentEnvEnvironment):
         result = await self.bridge.call("start", map=scenario["map"], players=players,
                                         seed=scenario["seed"], randomize_starts=scenario["randomize_starts"],
                                         ai_difficulty=DIFFICULTIES[scenario["ai_difficulty"]],
-                                        mode=scenario["mode"])
+                                        mode=scenario["mode"], render=scenario["client_view"],
+                                        visible=scenario["client_view"])
         self.scenario, self.setup = scenario, result.get("setup")
         self.obs = {int(k): v for k, v in result["observations"].items()}
         self.queue, self.recent, self.result, self.failed = [], [], "", None
@@ -205,6 +220,9 @@ class WC3Env(AgentEnvEnvironment):
         self.timeline = Timeline(frames.static(f"g-{self.stats['games']}", scenario, self.setup, self.obs,
                                                self.ref))
         self._record()
+        self.camera, self.camera_at = None, 0.0
+        if scenario["client_view"]:
+            await self._start_capture()
         log.warning("NEW GAME %s: %s vs the %s %s AI, seed %s", scenario["map"], scenario["race"],
                     scenario["ai_difficulty"], scenario["opponent_race"], (self.setup or {}).get("match_setup"))
 
@@ -235,6 +253,48 @@ class WC3Env(AgentEnvEnvironment):
         me = self._me()
         self.result = me.get("result") or ("time_limit" if self._seconds() >= self.scenario["time_limit_seconds"]
                                            else "")
+
+    async def _start_capture(self) -> None:
+        """The game's picture, from its window on the container's display, for the live page and the recording."""
+        if self.fake:
+            log.warning("client_view: the fake game draws nothing; the live page shows the map only")
+            return
+        display, region = os.environ.get("DISPLAY", ":99"), None
+        for _ in range(20):
+            if region := await asyncio.to_thread(rts_display.window_region, display, WINDOW_NAME):
+                break
+            await asyncio.sleep(0.5)
+        if region is None:
+            log.warning("client_view: no %r window on %s, so no picture this game", WINDOW_NAME, display)
+            return
+        capture = rts_display.Capture.of_display(display, region, CLIENT_DIR / f"g-{self.stats['games']}.mp4")
+        try:
+            await asyncio.to_thread(capture.start)
+        except rts_display.DisplayError as e:
+            log.warning("client_view: %s", e)
+            return
+        self.capture = capture
+        log.warning("CLIENT VIEW %dx%d at %d,%d of %s", region[2], region[3], region[0], region[1], display)
+
+    async def _drop_capture(self) -> None:
+        capture, self.capture = self.capture, None
+        if capture is not None:
+            await asyncio.to_thread(capture.stop)
+            capture.path.unlink(missing_ok=True)
+
+    async def _aim(self) -> None:
+        """With the game's picture on, its camera follows the agent's fighting (frames.camera_spot), at most every
+        CAMERA_SECONDS and only when the spot moves CAMERA_STILL or more."""
+        if self.capture is None or not self.capture.running or time.monotonic() - self.camera_at < CAMERA_SECONDS:
+            return
+        spot = frames.camera_spot(self._me())
+        if spot is None or (self.camera is not None and math.dist(spot, self.camera) < CAMERA_STILL):
+            return
+        try:
+            await self.bridge.call("debug", op="camera", args={"x": round(spot[0]), "y": round(spot[1])})
+        except WorkerError as e:
+            log.warning("camera: %s", e.message)
+        self.camera, self.camera_at = spot, time.monotonic()
 
     def _footer(self) -> str:
         return render.footer(self._me(), limit=self.scenario["time_limit_seconds"], queued=len(self.queue),
@@ -367,6 +427,7 @@ class WC3Env(AgentEnvEnvironment):
                 self.names.see(o)
             self.recent = events
             self._record(events)
+            await self._aim()
             lines = [f"Advanced {render.clock(start)} → {render.clock(self._seconds())}."]
             if dropped:
                 lines.append(f"Dropped {len(dropped)} queued order{'s' if len(dropped) != 1 else ''} that no longer "
@@ -497,7 +558,7 @@ class WC3Env(AgentEnvEnvironment):
                                                                                     for u in units),
                 "opponent_units": sum(not u.get("structure") for u in ai.get("units") or ()),
                 "opponent_structures": sum(bool(u.get("structure")) for u in ai.get("units") or ()),
-                "mode": self.scenario["mode"],
+                "mode": self.scenario["mode"], "client_view": self.scenario["client_view"],
                 "harness": dict(self.stats), "engine_failed": self.failed is not None, "error": self.failed,
             }
         return [DataPart(data=summary)]
@@ -510,16 +571,19 @@ class WC3Env(AgentEnvEnvironment):
                            "night_elf or random; ai_difficulty: easy, normal or insane; seed (null: a new one); "
                            "time_limit_seconds: game seconds before the game ends undecided; mode: stepping "
                            "(time passes when the agent steps) or realtime (the game runs on its own clock); "
-                           "allow_debug: the session's debug extension may stage the game; license: the "
-                           "activation files {\"roc.w3k\": base64, \"tft.w3k\": base64}, needed once per env.")
+                           "allow_debug: the session's debug extension may stage the game; client_view: draw the "
+                           "game for spectators, its picture live and in the recording (stepping is slower); "
+                           "license: the activation files {\"roc.w3k\": base64, \"tft.w3k\": base64}, needed once "
+                           "per env.")
     async def new_game(self, map: str | None = None, race: str | None = None, opponent_race: str | None = None,
                        ai_difficulty: str | None = None, seed: int | None = None, randomize_starts: bool | None = None,
                        time_limit_seconds: int | None = None, mode: str | None = None,
-                       allow_debug: bool | None = None, license: dict | None = None) -> dict:
+                       allow_debug: bool | None = None, client_view: bool | None = None,
+                       license: dict | None = None) -> dict:
         self.stats["extension_calls"] += 1
         given = {"map": map, "race": race, "opponent_race": opponent_race, "ai_difficulty": ai_difficulty,
                  "seed": seed, "randomize_starts": randomize_starts, "time_limit_seconds": time_limit_seconds,
-                 "mode": mode, "allow_debug": allow_debug}
+                 "mode": mode, "allow_debug": allow_debug, "client_view": client_view}
         scenario = check_scenario({**self.scenario, **{k: v for k, v in given.items() if v is not None}})
         async with self.lock:
             if license is not None and not self.fake:
@@ -546,6 +610,7 @@ class WC3Env(AgentEnvEnvironment):
                     result = await self.bridge.call("step", actions={}, ms=max(25, round(step * 1000) // 25 * 25))
                     self._observed(result)
                     self._record()
+                    await self._aim()
                     if self.scenario["mode"] == "realtime":   # the game runs on its own: just look in now and then
                         await asyncio.sleep(1)
                 played = self._seconds() - start
@@ -628,6 +693,7 @@ class WC3Env(AgentEnvEnvironment):
                 self.names.see(o)
             self.recent = render.events_text(me.get("events") or [], self.ref, self.names, AGENT)
             self._record(self.recent)
+            await self._aim()
             return {**self._session_state(), "rejected": rejected, "placements": placements,
                     "elapsed_ms": result.get("elapsed_ms")}
 
@@ -683,31 +749,52 @@ class WC3Env(AgentEnvEnvironment):
     # ---- spectators: the live view and the recording (agentenv_rts) ----
 
     @extension(rts_recording.RECORDING, description="The game played so far as spectators see it: an MP4 of the "
-                                                    "map and a self-contained HTML replay, as base64 files.")
+                                                    "map (mp4), a self-contained HTML replay (html) and, for a match "
+                                                    "with client_view, the game's own video (client; that ends it), "
+                                                    "as base64 files.")
     async def recording(self, formats: list[str] | None = None) -> dict:
         self.stats["extension_calls"] += 1
+        formats = tuple(formats or ("mp4", "html"))
         async with self.lock:
             timeline = self.timeline
             if timeline is None or not timeline.frames:
                 return {"files": [], "notes": ["no game has been played"]}
             stem = f"wc3-{Path(self.scenario['map']).stem}-{timeline.static['game']}".replace(" ", "")
-        files, notes = await asyncio.to_thread(rts_recording.files, timeline, stem, tuple(formats or ("mp4", "html")))
+            client = (await asyncio.to_thread(self.capture.stop)
+                      if "client" in formats and self.capture is not None else None)
+        files, notes = await asyncio.to_thread(rts_recording.files, timeline, stem, formats, client)
         return {"files": files, "notes": notes}
 
     def create_app(self):
         app = super().create_app()
         app.custom_route("/live", methods=["GET"])(self._live_page)
         app.custom_route("/live/data.json", methods=["GET"])(self._live_data)
+        app.custom_route("/live/client", methods=["GET"])(self._live_client)
+        app.custom_route("/live/client.jpg", methods=["GET"])(self._live_client_frame)
         return app
 
     async def _live_page(self, request: Request) -> Response:
         return HTMLResponse(rts_live.page(), headers={"Cache-Control": "no-cache"})
 
     async def _live_data(self, request: Request) -> Response:
-        return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since")),
+        return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since"), self.capture is not None),
                             headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
 
+    def _client_frame(self) -> bytes | None:
+        return self.capture.latest() if self.capture is not None else None
+
+    async def _live_client(self, request: Request) -> Response:
+        return StreamingResponse(rts_display.mjpeg(self._client_frame),
+                                 media_type=f"multipart/x-mixed-replace; boundary={rts_display.BOUNDARY}",
+                                 headers={"Cache-Control": "no-store"})
+
+    async def _live_client_frame(self, request: Request) -> Response:
+        if (frame := self._client_frame()) is None:
+            return Response(status_code=404)
+        return Response(frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
     async def close(self) -> None:
+        await self._drop_capture()
         if self.bridge is not None:
             await self.bridge.close()
 

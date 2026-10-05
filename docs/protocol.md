@@ -17,7 +17,7 @@ Requests are `{"id", "cmd", "args"}`. A reply is `{"id", "ok": true, "result"}`,
 
 | Command | Args | Result |
 |---|---|---|
-| `start` | `map`, `players` (`[{"slot", "race", "control": "agent" \| "computer"}]`), `step_ms`, `seed`, `randomize_starts`, `ai_difficulty` (0 easy, 1 normal, 2 insane), `render`, `mode` (`stepping`, or `realtime`: the game runs on its own clock and `step` only sends orders and observes) | `{"observations": {slot: observation}, "setup"}`: closes any game before, launches the game, and returns every player's first observation (wc3env's JSON observations) |
+| `start` | `map`, `players` (`[{"slot", "race", "control": "agent" \| "computer"}]`), `step_ms`, `seed`, `randomize_starts`, `ai_difficulty` (0 easy, 1 normal, 2 insane), `render` and `visible` (draw the game in a window on the display, for its picture), `mode` (`stepping`, or `realtime`: the game runs on its own clock and `step` only sends orders and observes) | `{"observations": {slot: observation}, "setup"}`: closes any game before, launches the game, and returns every player's first observation (wc3env's JSON observations) |
 | `validate` | `slot`, `actions` | `{"valid": n}`, or `bad_actions`: wc3env's own host checks against the slot's newest observation, without sending anything |
 | `step` | `actions` (`{slot: [action]}`; a slot left out sends none), `ms` (a multiple of 25, 25-60000) | `{"observations", "done", "rejected": {slot: [{"index", "reason"}]}, "placements": {slot: [{"index", "x", "y"}]}, "elapsed_ms"}` |
 | `observe` | | `{"observations", "done"}` |

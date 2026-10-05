@@ -1,5 +1,6 @@
 """`save_rts_recording`: ask a deployed RTS env for its finished game's recording (`urn:rts:recording/v1`: the
-map video and the spectator page with the game embedded) and store each file as a `file` artifact."""
+map video, the spectator page with the game embedded, and with `client` the game's own picture) and store each file
+as a `file` artifact."""
 
 from __future__ import annotations
 
@@ -18,7 +19,8 @@ from agentenv_protocol import client
 from .recording import RECORDING
 
 log = logging.getLogger(__name__)
-FORMATS = ("mp4", "html")
+FORMATS = ("mp4", "html", "client")
+DEFAULT_FORMATS = ("mp4", "html")
 
 
 class SaveRTSRecordingTaskStep(TaskStep):
@@ -29,7 +31,7 @@ class SaveRTSRecordingTaskStep(TaskStep):
                  timeout_seconds: int = 1800, depends_on: list | None = None, fail_task_on_error: bool = False):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
         self.env_id, self.timeout_seconds = env_id, timeout_seconds
-        self.formats = list(formats) if formats is not None else list(FORMATS)
+        self.formats = list(formats) if formats is not None else list(DEFAULT_FORMATS)
         if unknown := sorted(set(self.formats) - set(FORMATS)):
             raise ValueError(f"save_rts_recording formats must be among {', '.join(FORMATS)}, got {unknown}")
 

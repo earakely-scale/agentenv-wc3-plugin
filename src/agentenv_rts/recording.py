@@ -1,6 +1,7 @@
 """A finished game's recording from its Timeline: an MP4 of the map, a frame per step (Pillow draws, ffmpeg
-encodes), and the spectator page with the whole game embedded, which plays in any browser. `files()` is what an env
-returns from `urn:rts:recording/v1`; the `save_rts_recording` step stores them as file artifacts."""
+encodes), the spectator page with the whole game embedded, which plays in any browser, and the game's own picture
+when the env captured it (display.py). `files()` is what an env returns from `urn:rts:recording/v1`; the
+`save_rts_recording` step stores them as file artifacts."""
 
 from __future__ import annotations
 
@@ -20,9 +21,16 @@ BAR = 64
 FPS = 10
 
 
-def files(timeline: Timeline, stem: str, formats: tuple[str, ...] = ("mp4", "html")) -> tuple[list[dict], list[str]]:
-    """The recording as `{"name", "content_type", "base64"}` files, and notes on what could not be made."""
+def files(timeline: Timeline, stem: str, formats: tuple[str, ...] = ("mp4", "html"),
+          client: Path | None = None) -> tuple[list[dict], list[str]]:
+    """The recording as `{"name", "content_type", "base64"}` files, and notes on what could not be made. `client`
+    is the game's own video, for the `client` format."""
     out, notes = [], []
+    if "client" in formats:
+        if client is not None and client.is_file():
+            out.append(_file(f"{stem}-client.mp4", "video/mp4", client.read_bytes()))
+        else:
+            notes.append("no client video: the game was played without its picture (client_view)")
     if "html" in formats:
         out.append(_file(f"{stem}.html", "text/html", live.standalone(timeline).encode()))
     if "mp4" in formats:

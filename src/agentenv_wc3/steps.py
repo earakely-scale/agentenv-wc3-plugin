@@ -29,7 +29,7 @@ REPLAY_EXTENSION = "urn:wc3:replay/v1"
 LICENSE_FILES = ("roc.w3k", "tft.w3k")
 DEFAULT_LICENSE_DIR = "~/.wc3-license"
 MATCH_OPTIONS = ("map", "race", "opponent_race", "ai_difficulty", "seed", "randomize_starts", "time_limit_seconds",
-                 "mode", "allow_debug")
+                 "mode", "allow_debug", "client_view")
 
 
 def _deployed_env(context: TaskStepContext, env_id: str) -> DeployedEnv:
@@ -77,7 +77,8 @@ def read_license(directory: Path) -> dict[str, str] | None:
 class WC3MatchTaskStep(TaskStep):
     """Start a game in a deployed env: the agent's race against the game's AI, on a map, with a time limit.
     `mode` is `stepping` (time passes when the agent steps) or `realtime` (the game runs on its own clock);
-    `allow_debug` lets the session's debug extension stage the game (scenarios)."""
+    `allow_debug` lets the session's debug extension stage the game (scenarios); `client_view` draws the game for
+    spectators: its picture at the live page and, with save_rts_recording's `client` format, its video."""
 
     type: ClassVar[str] = "wc3_match"
     entity_refs = (EntityRef.env("env_id"),)
@@ -85,13 +86,15 @@ class WC3MatchTaskStep(TaskStep):
     def __init__(self, id: str, version: int | None, env_id: str, map: str = "(2)EchoIsles.w3x",
                  race: str = "human", opponent_race: str = "orc", ai_difficulty: str = "normal",
                  seed: int | None = None, randomize_starts: bool = False, time_limit_seconds: int = 1200,
-                 mode: str = "stepping", allow_debug: bool = False, license_dir: str | None = None,
+                 mode: str = "stepping", allow_debug: bool = False, client_view: bool = False,
+                 license_dir: str | None = None,
                  timeout_seconds: int = 900, depends_on: list | None = None, fail_task_on_error: bool = True):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
         self.env_id, self.map, self.race, self.opponent_race = env_id, map, race, opponent_race
         self.ai_difficulty, self.seed, self.randomize_starts = ai_difficulty, seed, randomize_starts
         self.time_limit_seconds, self.license_dir = time_limit_seconds, license_dir
-        self.mode, self.allow_debug, self.timeout_seconds = mode, allow_debug, timeout_seconds
+        self.mode, self.allow_debug, self.client_view = mode, allow_debug, client_view
+        self.timeout_seconds = timeout_seconds
         if mode not in ("stepping", "realtime"):
             raise ValueError(f"wc3_match mode must be stepping or realtime, got {mode!r}")
 
