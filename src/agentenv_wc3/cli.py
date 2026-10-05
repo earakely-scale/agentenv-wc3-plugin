@@ -1,10 +1,12 @@
 """`agent-env wc3`: check what a Warcraft III env needs on this machine, build and register the env from your
 wc3env worker image (or on wc3env's fake game, on any machine), build and register the wc3-macro-micro agent, serve
-the env locally against the fake game, and watch a running game live."""
+the env locally against the fake game, watch a running game live, and stream it to Twitch or X."""
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import os
 import platform
 import re
@@ -14,10 +16,15 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import click
+from agent_env.config import ConfigError, get_config
+
+import agentenv_rts
 
 from . import steps
 
@@ -28,6 +35,10 @@ WC3ENV = "https://github.com/pwang724/wc3env"
 WC3ENV_COMMIT = "eb660aa558fb6e5c639a1ff404082f7dc0ee483e"   # the one agents/wc3-player/Dockerfile pins
 AGENT_ID = "wc3-macro-micro"
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
+STREAMER = Path(agentenv_rts.__file__).with_name("streamer")
+STREAMER_IMAGE = "rts-streamer"
+STREAM_KEY, X_SERVER, X_STREAM_KEY = "TWITCH_STREAM_KEY", "X_STREAM_SERVER", "X_STREAM_KEY"
+CASTER_MODEL = "anthropic/claude-haiku-4-5"
 
 
 def _checkout(source: Path | None) -> Path:
@@ -222,6 +233,148 @@ def watch(open_page: bool):
         raise click.ClickException("no wc3 env is running; agent-env run wc3 --task ... starts one")
     if open_page:
         click.launch(views[0][0])
+
+
+def _streamer_image() -> str:
+    """The streamer image's tag: a digest of agentenv_rts/streamer's files, so a changed streamer builds a new image
+    instead of running an older one."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in STREAMER.iterdir() if p.is_file()):
+        digest.update(path.name.encode() + b"\0" + path.read_bytes())
+    return f"{STREAMER_IMAGE}:{digest.hexdigest()[:12]}"
+
+
+def _secret(name: str) -> str | None:
+    """A secret from agent-env's secret store ([stores.secret] in .agentenv/config.toml), else the environment."""
+    return get_config().get_secret_store().get(name) or os.environ.get(name)
+
+
+def _state(url: str) -> dict | None:
+    """Where the game behind a live view stands (/live/state.json); None while the env doesn't answer."""
+    try:
+        with urllib.request.urlopen(f"{url.rstrip('/')}/state.json", timeout=10) as r:
+            return json.load(r)
+    except (OSError, ValueError):
+        return None
+
+
+def _ready(url: str) -> bool:
+    """Whether the env behind a live view answers with a game still to play: a finished one keeps serving its end."""
+    state = _state(url)
+    return state is not None and not state.get("game_over")
+
+
+def _from_container(url: str) -> str:
+    """`url` as a Docker Desktop container reaches it: this machine's loopback is host.docker.internal there."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.hostname not in ("127.0.0.1", "localhost"):
+        return url
+    return parts._replace(netloc=parts.netloc.replace(parts.hostname, "host.docker.internal", 1)).geturl()
+
+
+@wc3.command()
+@click.option("--url", help="The live view to stream. Default: the newest wc3 env in Docker whose game is not over; "
+                            "the command waits for one.")
+@click.option("--to", "destinations", multiple=True, type=click.Choice(["twitch", "x"]), default=("twitch",),
+              show_default=True,
+              help="Where the stream goes; repeat it to send one stream to both, e.g. --to twitch --to x. X takes the "
+                   "server URL and stream key of a Live Studio source; press Go Live there once the stream has "
+                   "started.")
+@click.option("--server", default="rtmp://live.twitch.tv/app", show_default=True,
+              help="Twitch's RTMP ingest server, or any other RTMP server to stream to instead; the stream key is "
+                   "appended to it.")
+@click.option("--key-secret", default=STREAM_KEY, show_default=True,
+              help="The secret that holds that server's stream key, from agent-env's secret store ([stores.secret] in "
+                   ".agentenv/config.toml) or an environment variable of that name.")
+@click.option("--x-server-secret", default=X_SERVER, show_default=True,
+              help="The secret that holds the server URL of X's Live Studio source.")
+@click.option("--x-key-secret", default=X_STREAM_KEY, show_default=True,
+              help="The secret that holds the stream key of X's Live Studio source.")
+@click.option("--size", default="1920x1080", show_default=True, help="The stream's resolution.")
+@click.option("--fps", default=30, show_default=True)
+@click.option("--bitrate", default="4500k", show_default=True)
+@click.option("--linger", default=60, show_default=True, help="Seconds to keep streaming the end of the game.")
+@click.option("--cast/--no-cast", default=True, show_default=True,
+              help="Two AI casters talk over the game, voiced and captioned, through agent-env's model endpoint "
+                   "([model] in .agentenv/config.toml).")
+@click.option("--caster-model", default=CASTER_MODEL, show_default=True, help="The model that writes their lines.")
+@click.option("--title", help="The broadcast's title, on screen and in the casters' intro.")
+@click.option("--record", "record_dir", type=click.Path(file_okay=False, path_type=Path),
+              help="Also write the stream to DIR/stream-<UTC time>.mp4.")
+@click.option("--offline", is_flag=True, help="Only record (with --record): nothing goes to Twitch or X.")
+@click.option("--test", "bandwidth_test", is_flag=True,
+              help="Send to Twitch without going live (its bandwidth test): the stream shows only in Twitch Inspector.")
+def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secret: str, x_server_secret: str,
+           x_key_secret: str, size: str, fps: int, bitrate: str, linger: int, cast: bool, caster_model: str,
+           title: str | None, record_dir: Path | None, offline: bool, bandwidth_test: bool):
+    """Stream a game's live view (/live?stream) to Twitch, X or any RTMP server, or to several at once, while the
+    agent plays it, and optionally record it. A headless browser in Docker shows the page and ffmpeg sends it; the
+    stream starts once the env answers and ends after GAME OVER."""
+    if offline and record_dir is None:
+        raise click.UsageError("--offline only records: add --record DIR")
+    test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
+    targets, where = [], []
+    for name in [] if offline else dict.fromkeys(destinations):
+        if name == "twitch":
+            key = _secret(key_secret)
+            if not key:
+                raise click.ClickException(
+                    f"no stream key: store your Twitch stream key as the secret {key_secret} in agent-env's secret "
+                    f"store, or export {key_secret}; or record only with --offline --record DIR")
+            targets.append(f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else ""))
+            where.append(f"to {server.rstrip('/')}/<stream key>{test}")
+        else:
+            x_server, key = _secret(x_server_secret), _secret(x_key_secret)
+            if not x_server or not key:
+                raise click.ClickException(
+                    f"no X stream: create a source in X's Live Studio and store its server URL and stream key as the "
+                    f"secrets {x_server_secret} and {x_key_secret}, as for the Twitch key")
+            targets.append(f"{x_server.rstrip('/')}/{key}")
+            where.append(f"to {x_server.rstrip('/')}/<stream key> (press Go Live in X's Live Studio once it starts)")
+    env = {"STREAM_URL": "\n".join(targets)}
+    if cast:
+        config = get_config()
+        try:
+            env["CAST_BASE_URL"], env["CAST_API_KEY"] = config.get_litellm_base_url(), config.get_litellm_api_key()
+        except ConfigError as e:
+            raise click.ClickException(f"the casters need agent-env's model endpoint: {e}; or stream without them: "
+                                       "--no-cast") from e
+    image = _streamer_image()
+    if not _image_exists(image):
+        click.echo(f"Building {image} from {STREAMER}")
+        if subprocess.run(["docker", "build", "-t", image, str(STREAMER)]).returncode:
+            raise click.ClickException("docker build of the streamer failed")
+    if url is None:
+        click.echo("Waiting for a Warcraft III game (agent-env run wc3 --task ...)")
+        while (url := next((u for u, _ in _live_views() if _ready(u)), None)) is None:
+            time.sleep(5)
+    elif not _ready(url):
+        click.echo(f"Waiting for the game at {url}")
+        while not _ready(url):
+            time.sleep(5)
+    if sys.platform == "darwin":
+        network, page = [], _from_container(url)
+        if cast:
+            env["CAST_BASE_URL"] = _from_container(env["CAST_BASE_URL"])
+    else:
+        network, page = ["--network", "host"], url
+    mount = []
+    if record_dir is not None:
+        record_dir.mkdir(parents=True, exist_ok=True)
+        mount = ["-v", f"{record_dir.resolve()}:/rec", "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
+        where.append(f"into {record_dir}")
+    click.echo(f"Streaming {url} {' and '.join(where)}{', with the casters' if cast else ''}; Ctrl-C ends the stream")
+    cmd = ["docker", "run", "--rm", "--shm-size", "1g", *network, *mount, *[a for name in env for a in ("-e", name)],
+           image, "--url", page, "--size", size, "--fps", str(fps), "--bitrate", bitrate, "--linger", str(linger),
+           *(["--cast-config", json.dumps({"model": caster_model})] if cast else []),
+           *(["--title", title] if title else []), *(["--record", "/rec"] if record_dir is not None else [])]
+    run = subprocess.Popen(cmd, env={**os.environ, **env})
+    try:
+        code = run.wait()
+    except KeyboardInterrupt:   # docker passes Ctrl-C on: the streamer ends the stream and finishes the recording
+        code = run.wait()
+    if code:
+        raise click.ClickException(f"the stream ended with an error ({code})")
 
 
 @wc3.command()
