@@ -43,6 +43,7 @@ HALLS = {"htow": "human", "ogre": "orc", "unpl": "undead", "etol": "nightelf"}
 RATES = {
     "anthropic/claude-haiku-4-5": {"input": 1.0, "cached": 0.10, "cache_write": 1.25, "output": 5.0},
     "anthropic/claude-opus-5-5": {"input": 4.0, "cached": 0.20, "cache_write": 5.0, "output": 20.0},
+    "anthropic/claude-sonnet-5-5": {"input": 2.0, "cached": 0.20, "cache_write": 2.5, "output": 10.0},
     "openai/gpt-6-sol": {"input": 2.0, "cached": 0.20, "cache_write": 2.0, "output": 10.0},
     "openai/gpt-6-luna": {"input": 0.10, "cached": 0.01, "cache_write": 0.125, "output": 0.50},
 }
