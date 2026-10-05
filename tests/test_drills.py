@@ -34,9 +34,10 @@ def test_fight_even_is_the_design_docs_drill():
     assert drills.convert("fight_even", definition("fight_even")) == [
         {"id": "deploy", "type": "deploy_env", "env_id": "wc3"},
         {"id": "agent", "type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": "wc3-macro-micro", "env_ids": [],
-         "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}},
+         "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}, "depends_on": ["deploy"]},
         {"id": "opponent", "type": "deploy_agent", "agent_name": "opponent", "a2a_agent_id": "wc3-scripted",
-         "env_ids": [], "env_vars": {"SCRIPT": "attack", "SCRIPT_AFTER_SECONDS": "0", "SCRIPT_EVERY_SECONDS": "5"}},
+         "env_ids": [], "env_vars": {"SCRIPT": "attack", "SCRIPT_AFTER_SECONDS": "0", "SCRIPT_EVERY_SECONDS": "5"},
+         "depends_on": ["deploy"]},
         {"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)EchoIsles.w3x", "seed": 1,
          "time_limit_seconds": 150, "mode": "stepping",
          "seats": [{"agent": "wc3", "race": "human"}, {"agent": "opponent", "race": "orc", "omniscient": True}],
@@ -182,4 +183,12 @@ def test_every_drill_is_a_consistent_task(task):
         assert op.get("player", "wc3") in ("wc3", "opponent") and op.get("unit") in handles, op
         handles.add(op.get("as"))
     grade = next(s for s in steps if s["type"] == "rts_grade")
-    assert grade["checks"] == definition(task.removeprefix("drill-").replace("-", "_"))["checks"]
+    assert grade["checks"] == drills.checks(definition(task.removeprefix("drill-").replace("-", "_")))
+
+
+def test_a_check_on_the_finish_time_reads_the_finish_metrics_own_time():
+    creep = definition("creep_easy")
+    assert {"metric": "seconds", "op": "<=", "value": 90} in creep["checks"]
+    assert {"metric": "camp_cleared_time", "op": "<=", "value": 90} in drills.checks(creep)
+    assert drills.checks({"checks": [{"metric": "seconds", "op": "<=", "value": 9}]}) == [
+        {"metric": "seconds", "op": "<=", "value": 9}]

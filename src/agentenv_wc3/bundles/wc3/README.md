@@ -77,9 +77,9 @@ any warm-up: `drill-shopping` lets 460 game seconds pass first so the shops stoc
 
 **Dropped: the early finish.** wc3agent ended a scenario once its `finish` condition held (and, with
 `finish_after_seconds`, a little later, so loot could drop). Drills play to their time limit instead, one stop rule
-for every task, and the summary's first-time metrics record when a goal was met, so the checks lose nothing. The one
-exception is `drill-creep-easy`'s `seconds <= 90`: in wc3agent `seconds` was the time the finish condition first held
-(the camp cleared), which no summary metric reports, so that check needs a camp-cleared time metric or a rewrite.
+for every task, and the summary's first-time metrics record when a goal was met, so the checks lose nothing. wc3agent's
+`seconds` was the time its finish condition first held, so `drill-creep-easy`'s `seconds <= 90` reads
+`camp_cleared_time`, when the camp was first cleared.
 Also dropped: wc3agent pointed the game's camera at the staged party (the stage has no camera op), and left the
 opponent's race to the map (the drills give it Orc).
 

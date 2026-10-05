@@ -36,6 +36,7 @@ class Metrics:
         self.events = {s: [] for s in slots}
         self.first_seen = {s: {} for s in slots}
         self.cleared = {s: set() for s in slots}
+        self.cleared_at: dict[int, dict[int, float]] = {s: {} for s in slots}
         self.base_seen: dict[int, float | None] = {s: None for s in slots}
         self.live: dict[int, dict] = {}
         self.deaths: set[int] = set()
@@ -83,10 +84,12 @@ class Metrics:
                 self.base_seen[slot] = now
             hostile = [u for u in obs.get("visible_enemies") or () if u.get("owner") == CREEPS]
             mobile = [u for u in units if not u.get("structure")]
-            self.cleared[slot] |= {c["number"] for c in self.camps
-                                   if any(math.dist((u["x"], u["y"]), (c["x"], c["y"])) < CAMP_REACH for u in mobile)
-                                   and not any(math.dist((u["x"], u["y"]), (c["x"], c["y"])) < CAMP_CLEAR
-                                               for u in hostile)}
+            cleared = {c["number"] for c in self.camps
+                       if any(math.dist((u["x"], u["y"]), (c["x"], c["y"])) < CAMP_REACH for u in mobile)
+                       and not any(math.dist((u["x"], u["y"]), (c["x"], c["y"])) < CAMP_CLEAR for u in hostile)}
+            self.cleared[slot] |= cleared
+            for number in cleared:
+                self.cleared_at[slot].setdefault(number, now)
         for handle in self.handles.values():
             if handle["strength"] is None and handle["slot"] in observations:
                 mine = [u for u in observations[handle["slot"]].get("units") or () if u["unit_id"] in handle["ids"]]
@@ -178,6 +181,7 @@ class Metrics:
             "enemy_army_destroyed_percent": round(100 * sum(i in self.deaths for i in staged) / len(staged))
             if staged else None,
             "camp_cleared": nearest is not None and nearest["number"] in self.cleared[slot],
+            "camp_cleared_time": self.cleared_at[slot].get(nearest["number"]) if nearest else None,
             "camps_cleared": sorted(self.cleared[slot]),
             "seconds": round(obs.get("game_time_seconds") or 0, 1),
             "count": {t: sum(1 for u in units if u["type_id"] == t and u.get("hp", 0) > 0

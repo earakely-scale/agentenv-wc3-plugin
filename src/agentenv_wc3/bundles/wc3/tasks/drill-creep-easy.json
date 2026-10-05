@@ -12,7 +12,10 @@
     "env_ids": [],
     "env_vars": {
       "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
-    }
+    },
+    "depends_on": [
+      "deploy"
+    ]
   },
   {
     "id": "match",
@@ -109,7 +112,7 @@
         "value": true
       },
       {
-        "metric": "seconds",
+        "metric": "camp_cleared_time",
         "op": "<=",
         "value": 90
       },

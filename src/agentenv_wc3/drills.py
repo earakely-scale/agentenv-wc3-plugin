@@ -17,6 +17,7 @@ WALL_SECONDS_PER_GAME_SECOND = 12   # what the bundle's stepped tasks allow an a
 RACES = {"human": "human", "orc": "orc", "undead": "undead", "nightelf": "night_elf"}
 SCRIPTED = ("attack", "raid")
 OPPONENTS = ("computer", "idle", *SCRIPTED)
+TIMED = {"camp_cleared_time"}   # metrics that say when their condition first held
 KEYS = {"title", "goal", "minutes", "setup", "checks", "race", "opponent", "opponent_after_seconds", "finish",
         "finish_after_seconds", "skip_seconds"}
 METRIC_HANDLES = ("army", "hero", "enemy")   # what army_kept_percent and enemy_army_destroyed_percent read
@@ -67,6 +68,14 @@ def _stage_ops(name: str, definition: dict) -> list[dict]:
     return ops
 
 
+def checks(definition: dict) -> list[dict]:
+    """The definition's checks. wc3agent's `seconds` is the time its finish condition first held; drills play on,
+    so a check on it reads the finish metric's own time (`camp_cleared` → `camp_cleared_time`)."""
+    finish = definition.get("finish")
+    timed = f"{finish}_time" if isinstance(finish, str) and f"{finish}_time" in TIMED else None
+    return [{**c, "metric": timed} if c.get("metric") == "seconds" and timed else c for c in definition["checks"]]
+
+
 def convert(name: str, definition: dict) -> list[dict]:
     """The drill task's steps for wc3agent's scenario `name`. Its `finish` and `finish_after_seconds` are dropped:
     drills play to their time limit, and the summary's first-time metrics record when a goal was met."""
@@ -83,13 +92,13 @@ def convert(name: str, definition: dict) -> list[dict]:
     ops = _stage_ops(name, definition)
     steps = [{"id": "deploy", "type": "deploy_env", "env_id": "wc3"},
              {"id": "agent", "type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": "wc3-macro-micro",
-              "env_ids": [], "env_vars": {"WC3_MICRO_MODEL": MODEL}}]
+              "env_ids": [], "env_vars": {"WC3_MICRO_MODEL": MODEL}, "depends_on": ["deploy"]}]
     if scripted:
         steps.append({"id": "opponent", "type": "deploy_agent", "agent_name": "opponent",
                       "a2a_agent_id": "wc3-scripted", "env_ids": [],
                       "env_vars": {"SCRIPT": opponent,
                                    "SCRIPT_AFTER_SECONDS": str(definition.get("opponent_after_seconds", 0)),
-                                   "SCRIPT_EVERY_SECONDS": "5"}})
+                                   "SCRIPT_EVERY_SECONDS": "5"}, "depends_on": ["deploy"]})
     seat = ({"agent": "opponent", "race": "orc", "omniscient": True} if scripted
             else {"computer": AI_DIFFICULTY, "race": "orc"})
     steps.append({"id": "match", "type": "wc3_match", "env_id": "wc3", "map": MAP, "seed": 1,
@@ -111,7 +120,7 @@ def convert(name: str, definition: dict) -> list[dict]:
                       "timeout_seconds": timeout, "depends_on": [start]})
     return [*steps,
             {"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks",
-             "checks": definition["checks"], "verifier_id": "drill", "depends_on": ["play"]},
+             "checks": checks(definition), "verifier_id": "drill", "depends_on": ["play"]},
             {"id": "replay", "type": "save_wc3_replay", "env_id": "wc3", "depends_on": ["grade"]},
             {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}]
 
