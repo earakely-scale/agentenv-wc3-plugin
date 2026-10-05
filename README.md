@@ -303,6 +303,9 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
 
 ## Not done yet
 
+[docs/task-design.md](docs/task-design.md) is the target for tasks: seats for any mix of agents and the
+game's AI, staged drills (wc3agent's 25 scenarios as tasks), and grading configured in the task.
+
 - **Container options.** wc3env runs its worker with `--shm-size 256m` and `--init`; agent-env's `server`
   provider sets neither, and the real game has run without them so far.
 - **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
