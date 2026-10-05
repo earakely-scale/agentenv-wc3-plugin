@@ -1,6 +1,7 @@
 """`agent-env wc3`: check what a Warcraft III env needs on this machine, build and register the env from your
-wc3env worker image (or on wc3env's fake game, on any machine), build and register the wc3-macro-micro agent, serve
-the env locally against the fake game, watch a running game live, and stream it to Twitch or X."""
+wc3env worker image (or on wc3env's fake game, on any machine), build and register the wc3-macro-micro and
+wc3-scripted agents, serve the env locally against the fake game, watch a running game live, and stream it to Twitch
+or X."""
 
 from __future__ import annotations
 
@@ -33,7 +34,12 @@ BASE_IMAGE = "wc3-worker:local"
 STANDIN_IMAGE = "wc3-worker:standin"
 WC3ENV = "https://github.com/pwang724/wc3env"
 WC3ENV_COMMIT = "eb660aa558fb6e5c639a1ff404082f7dc0ee483e"   # the one agents/wc3-player/Dockerfile pins
-AGENT_ID = "wc3-macro-micro"
+# Each agent `setup --agent` registers: its directory under agents/, what it is, and its A2AAgent metadata.
+AGENTS = {
+    "wc3-macro-micro": ("wc3-player", "Warcraft III wc3agent (macro + micro)",
+                        {"default_model": "anthropic/claude-sonnet-5-5"}),
+    "wc3-scripted": ("wc3-scripted", "Warcraft III scripted opponent (attack, raid or idle)", {}),
+}
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
 STREAMER = Path(agentenv_rts.__file__).with_name("streamer")
 STREAMER_IMAGE = "rts-streamer"
@@ -89,21 +95,21 @@ def _build_standin(root: Path, wc3env: Path, build_platform: str) -> None:
             raise click.ClickException("docker build of the stand-in failed")
 
 
-def _register_agent(root: Path, build_platform: str) -> None:
-    """Build agents/wc3-player (wc3env's wc3agent behind A2A) and register it as wc3-macro-micro."""
+def _register_agent(root: Path, build_platform: str, agent_id: str) -> None:
+    """Build one of AGENTS from its directory under agents/ and register it under its id."""
     from agent_env.a2a_agent import A2AAgent
     from agent_env.artifact import DockerImageArtifact
 
-    dockerfile, image = root / "agents/wc3-player/Dockerfile", f"a2a-agent-{AGENT_ID}"
+    directory, description, metadata = AGENTS[agent_id]
+    dockerfile, image = root / "agents" / directory / "Dockerfile", f"a2a-agent-{agent_id}"
     click.echo(f"Building {image} for {build_platform}")
     build = ["docker", "build", "--platform", build_platform, "-t", image, "-f", str(dockerfile), str(root)]
     if subprocess.run(build).returncode:
-        raise click.ClickException("docker build of the wc3-macro-micro agent failed")
-    artifact = DockerImageArtifact.put(id=image, image_name=image, description="Warcraft III wc3agent (macro + micro)",
+        raise click.ClickException(f"docker build of the {agent_id} agent failed")
+    artifact = DockerImageArtifact.put(id=image, image_name=image, description=description,
                                        build_context_path=str(root), dockerfile_path=str(dockerfile))
-    agent = A2AAgent.put(id=AGENT_ID, docker_image_artifact=artifact,
-                         metadata={"default_model": "anthropic/claude-sonnet-5-5"})
-    click.echo(f"Registered A2A agent {agent.id!r} version {agent.version} (wc3agent: macro + micro)")
+    agent = A2AAgent.put(id=agent_id, docker_image_artifact=artifact, metadata=metadata)
+    click.echo(f"Registered A2A agent {agent.id!r} version {agent.version} ({description})")
 
 
 def _image_exists(image: str) -> bool:
@@ -165,12 +171,14 @@ def check(base: str, license_dir: Path | None):
 @click.option("--wc3env", "wc3env_dir", type=click.Path(exists=True, file_okay=False, path_type=Path),
               envvar="WC3ENV_DIR", help="A wc3env checkout for --fake. Default: $WC3ENV_DIR, else wc3env at the "
                                         "pinned commit, downloaded.")
-@click.option("--agent", is_flag=True, help="Also build and register the wc3-macro-micro agent (wc3env's wc3agent).")
+@click.option("--agent", is_flag=True, help="Also build and register the agents: wc3-macro-micro (wc3env's wc3agent) "
+                                            "and wc3-scripted (its scripted opponent).")
 def setup(env_id: str, base: str, source: Path | None, image: str | None, fake: bool, wc3env_dir: Path | None,
           agent: bool):
     """Build the env image on top of your wc3env worker image and register it as an MCP server env. The image holds
     your game files: it stays in agent-env's local registry; never push it anywhere public. With --fake, the env is
-    built on wc3env's fake game instead; with --agent, the wc3-macro-micro agent is built and registered too."""
+    built on wc3env's fake game instead; with --agent, the wc3-macro-micro and wc3-scripted agents are built and
+    registered too."""
     from agent_env.artifact import DockerImageArtifact
     from agent_env.env import MCPServerEnv
 
@@ -202,7 +210,9 @@ def setup(env_id: str, base: str, source: Path | None, image: str | None, fake: 
     click.echo(f"Registered env {env.id!r} version {env.version} (image {artifact.image_name}"
                + (", the FAKE game" if fake else "") + ")")
     if agent:
-        _register_agent(root, _docker_platform())
+        build_platform = _docker_platform()
+        for agent_id in AGENTS:
+            _register_agent(root, build_platform, agent_id)
     click.echo("Next: agent-env run wc3 --task " + ("macro-micro-quick" if agent else "smoke"))
 
 
