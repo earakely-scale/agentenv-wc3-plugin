@@ -198,6 +198,9 @@ def test_the_feed_names_fights_and_the_moments_that_matter():
     assert [i["text"] for i in later] == ["Claude summoned a Archmage",
                                           "Fight at the middle of the map over after 20 s: Orc AI lost 1 Grunt"]
     assert frames.army_value([footman, unit(5, "Hamg", 0, hero=True), hall], REF) == 135 + 525
+    named = frames.Feed(REF, {"players": [{"slot": 0, "label": "Claude Sonnet 5.5 + Haiku 4.5"},
+                                          {"slot": 1, "label": "Orc AI (normal)"}]})
+    assert [named.side(0), named.side(1), named.side(frames.CREEPS)] == ["Claude Sonnet 5.5", "Orc AI", "the creeps"]
     murloc = unit(20, "ogru", 4000, owner=frames.CREEPS)
     creep = [{"kind": "attacked", "unit_id": 20, "attacker_id": 2}] * 4
     obs[0].update(game_time_seconds=40.0, units=[hall, unit(2, "hfoo", 3900)], visible_enemies=[murloc], events=creep)

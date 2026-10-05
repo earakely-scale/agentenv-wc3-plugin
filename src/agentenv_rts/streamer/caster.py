@@ -171,7 +171,7 @@ def tool(name: str, description: str, properties: dict, required: tuple = ()) ->
 
 
 PLAYER = {"type": "string", "description": "a player's label, or its slot number"}
-SINCE = {"type": "number", "description": "game seconds; leave out for the whole game"}
+SINCE = {"type": "number", "description": "game seconds (or a clock, \"7:50\"); leave out for the whole game"}
 LOOKUPS = [
     tool("standings", "The table now, best score first: score and army value with their change over two minutes, "
                       "resources, food, units, structures, each AI's decisions, tokens and cost, and plans.", {}),
@@ -927,9 +927,10 @@ class Caster:
         m = self.match
         if stat not in TREND_STATS:
             raise Unknown(f"no stat {stat!r}; the stats: {', '.join(TREND_STATS)}")
-        span = [h for h in m.history if since_t is None or h["t"] >= float(since_t)]
+        since_t = seconds(since_t)
+        span = [h for h in m.history if since_t is None or h["t"] >= since_t]
         if not span:
-            raise Unknown(f"no history since {game_time(float(since_t))}: the game is at {game_time(m.t)}")
+            raise Unknown(f"no history since {game_time(since_t)}: the game is at {game_time(m.t)}")
         picks = sorted({round(k * (len(span) - 1) / 11) for k in range(12)}) if len(span) > 12 else range(len(span))
         sample = [span[k] for k in picks]
         out = [f"{stat}, {game_time(span[0]['t'])} to {game_time(span[-1]['t'])}:"]
@@ -944,7 +945,7 @@ class Caster:
     def look_moments(self, kind=None, side=None, since_t=None) -> str:
         m = self.match
         p = self.player_of(side) if side is not None else None
-        since = float(since_t) if since_t is not None else None
+        since = seconds(since_t)
         found = [x for x in m.moments if (kind is None or x["kind"] == kind) and (since is None or x["t"] >= since)
                  and (p is None or m.involved(x, p))]
         if not found:
@@ -1017,6 +1018,18 @@ class Caster:
 
 def rank(kind: str) -> int:
     return KINDS.index(kind) if kind in KINDS else len(KINDS)
+
+
+def seconds(value) -> float | None:
+    """Game seconds from what a model sends: 470, "470" or a clock, "7:50"."""
+    if value is None:
+        return None
+    if isinstance(value, str) and ":" in value:
+        total = 0.0
+        for part in value.strip().split(":"):
+            total = total * 60 + float(part or 0)
+        return total
+    return float(value)
 
 
 def game_time(t) -> str:

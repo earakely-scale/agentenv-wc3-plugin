@@ -695,3 +695,7 @@ def test_the_two_voices_are_levelled_to_the_same_loudness():
     assert caster.wav_seconds(caster.fixed_wav(streamed_wav(1.5))) == 1.5
     with pytest.raises(ValueError):
         caster.fixed_wav(b"ID3 not a wav")
+
+
+def test_lookups_take_game_seconds_or_a_clock():
+    assert [caster.seconds(v) for v in (None, 470, "470", "7:50", "1:02:03")] == [None, 470.0, 470.0, 470.0, 3723.0]

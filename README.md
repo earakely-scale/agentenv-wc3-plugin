@@ -113,17 +113,30 @@ wc3agent's call log, with each decision and its cost.
 
 While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 watch --open` prints and opens it.
 
-- **The game's own picture:** with `client_view` in `wc3_match`, the game draws itself in a 960×540 window on the
-  container's display, the env captures it with ffmpeg, and the page shows it as the main view (`/live/client`, an
-  MJPEG stream; `/live/client.jpg` is the newest frame) with the map beside it. The camera follows the agent's
-  fighting, as wc3agent films a game. `save_rts_recording` with the `client` format stores the match's video,
-  with chapters, and with `highlights` a reel of its fights and key moments.
-  Drawing makes stepping about three times slower, so the other tasks leave it off.
+- **The game's own picture:** with `client_view` in `wc3_match`, the game draws itself in a 1280×720 window on the
+  container's 1920×1080 display (`WC3_WINDOW`, `WC3_SCREEN`), the env captures it with ffmpeg at 24 fps, and the page
+  shows it as the main view (`/live/client`, an MJPEG stream at 12 fps; `/live/client.jpg` is the newest frame) with
+  the map beside it. `save_rts_recording` with the `client` format stores the match's video, with chapters, and with
+  `highlights` a reel of its fights and key moments. Drawing makes stepping about three times slower, so the other
+  tasks leave it off.
+- **The camera director** (`frames.Director`): the agent's fights first, then its key moments (a hero, a tier, an
+  expansion, a building lost), then its army around its strongest hero, with a look at the base every 30 s. Each shot
+  holds at least 4 s, and the camera eases between nearby spots.
+- **What the agent is thinking:** players tell spectators their plans, names and running costs through
+  `urn:rts:note/v1`. wc3-macro-micro sends each macro turn's plan, which the page shows under "Thinking" and the game
+  draws in its own picture, and its models' names ("Claude Sonnet 5.5 + Haiku 4.5") and spend.
+- **The feed** (`frames.Feed`): names instead of unit ids, one line when a fight starts and one when it ends instead of
+  one per blow, and the moments that matter in bold: heroes, levels, tiers, expansions, heroes and buildings lost.
+  Creeping is minor news.
+- **The sidebar:** each player's card with its army's value, and, for an agent, its spend and decisions per minute; a
+  momentum graph of score and army over the game, and who is ahead. `labels` in `wc3_match` names players by slot.
 - **The map:** Echo Isles' terrain from wc3env's pathing grid, trees, gold mines, start locations, creep camps and
   shops, with every unit and building any player sees, in its owner's colour.
-- **The sidebar:** each player's gold, lumber, food, units, buildings and score, and the event feed.
-- **The timeline:** scrub through every step played so far.
-- **`/live?stream`:** lays the page out at 1920×1080 for a broadcast, which `agent-env wc3 stream` sends out.
+- **The timeline:** scrub through every step played so far. The HTML recording plays the game's video beside the map
+  when the client video sits in the same folder.
+- **`/live?stream`:** lays the page out at 1920×1080 for a broadcast, with a score bug, chyrons for the big moments and
+  the casters' captions, which `agent-env wc3 stream` sends out. `/live/state.json` and `/live/casting.json` serve the
+  streamer and its casters.
 
 ### Stream it to Twitch or X
 

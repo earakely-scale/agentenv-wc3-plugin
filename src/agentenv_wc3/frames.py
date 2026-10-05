@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import math
+import re
 import zlib
 from collections import Counter
 from pathlib import Path
@@ -149,9 +150,14 @@ class Feed:
         self.moments: list[dict] = []
 
     def side(self, owner: int | None) -> str:
+        """A player as the feed names it: its label without the models after "+" or the AI's level, so lines and
+        chapter titles stay short ("Claude Sonnet 5.5's Archmage", "Orc AI lost a Grunt")."""
         if owner == CREEPS:
             return "the creeps"
-        return self.labels.get(owner) or ("neutral" if owner in (13, 14, 15) else f"player {owner}")
+        label = self.labels.get(owner)
+        if not label:
+            return "neutral" if owner in (13, 14, 15) else f"player {owner}"
+        return re.sub(r"\s*\([^)]*\)$", "", label.split(" + ")[0]).strip() or label
 
     def place(self, x: float, y: float) -> str:
         for slot, (bx, by) in self.bases.items():

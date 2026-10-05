@@ -79,7 +79,7 @@ WINDOW = [int(n) for n in os.environ.get("WC3_WINDOW", "1288x754").split("x")]
 CLIENT_DIR = Path(os.environ.get("WC3_CLIENT_DIR", "/tmp/wc3-client"))
 PAN_SECONDS, PAN_STEPS, PAN_MAX = 0.6, 8, 4000.0   # the camera eases over this; farther than PAN_MAX it cuts
 NOTE_CHARS = 400
-OVERLAY = {"x": -0.30, "y": 0.60, "seconds": 9}   # where and how long a plan shows in the game's picture
+OVERLAY = {"x": -1.0, "y": 1.0, "seconds": 9}   # a plan shows top left in the game's picture, under its resources
 
 NEW_GAME_EXTENSION = "urn:wc3:new-game/v1"
 REPLAY_EXTENSION = "urn:wc3:replay/v1"
@@ -869,8 +869,9 @@ class WC3Env(AgentEnvEnvironment):
                 f"heroes experience and items. Here {names.get(AGENT, 'an AI agent')} plays {race} against the game's "
                 f"own {s['ai_difficulty']} {s['opponent_race'].replace('_', ' ')} AI on {Path(s['map']).stem}, in "
                 f"{'real time' if s['mode'] == 'realtime' else 'stepped time (the game waits while the agent thinks)'}"
-                f". There is a {s['time_limit_seconds'] // 60}-minute limit: if time runs out, the game is undecided "
-                f"and the score says who was ahead. Score counts units, buildings, heroes and resources gathered.")
+                f". There is a {s['time_limit_seconds'] // 60}-minute limit: if no side has won by then, the higher "
+                f"score wins the tiebreak (a win on score, not a conquest). Score counts units, buildings, heroes and "
+                f"resources gathered.")
 
     def _client_frame(self) -> bytes | None:
         return self.capture.latest() if self.capture is not None else None
