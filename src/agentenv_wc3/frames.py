@@ -58,7 +58,7 @@ def static(game: str, scenario: dict, setup: dict | None, observations: dict[int
         players.append({"slot": slot, "race": (p.get("race") or "").replace("_", " "),
                         "controller": CONTROLLERS.get(p.get("control"), p.get("control") or ""),
                         "label": (labels or {}).get(slot) or (f"Player {slot + 1}" if p.get("control") == "agent"
-                                                              else f"{scenario.get('ai_difficulty', '')} AI".strip()),
+                                                              else ai_label(p.get("race"), scenario)),
                         "color": player_color(slot)})
     types = {}
     for obs in observations.values():
@@ -69,6 +69,12 @@ def static(game: str, scenario: dict, setup: dict | None, observations: dict[int
             "trees": [[x, y] for x, y in zip(trees.get("x") or (), trees.get("y") or (), strict=False)],
             "points": points, "players": players, "types": types,
             "time_limit": scenario.get("time_limit_seconds")}
+
+
+def ai_label(race: str | None, scenario: dict) -> str:
+    """The game's own AI as spectators read it: "Orc AI (normal)"."""
+    name = (race or "").replace("_", " ").title()
+    return f"{name} AI ({scenario.get('ai_difficulty')})" if scenario.get("ai_difficulty") else f"{name} AI".strip()
 
 
 def kind(u: dict) -> int:
@@ -255,16 +261,21 @@ class Feed:
         if fight["shown"] or fight["blows"] < FIGHT_SHOWN or len(fight["sides"]) < 2:
             return []
         fight["shown"] = True
-        sides = " vs ".join(self.side(o) for o in sorted(fight["sides"]))
-        return [self._item(f"Fight at {self.place(fight['x'], fight['y'])}: {sides}", min(fight["sides"]), "fight",
-                           True, (fight["x"], fight["y"]), t, fight["sides"])]
+        place, players = self.place(fight["x"], fight["y"]), sorted(o for o in fight["sides"] if o != CREEPS)
+        if CREEPS in fight["sides"]:   # creeping: a hero's experience, not news
+            return [self._item(f"{' and '.join(map(self.side, players)) or 'Someone'} creeping at {place}",
+                               min(players, default=None), "creeps")]
+        sides = " vs ".join(self.side(o) for o in players)
+        return [self._item(f"Fight at {place}: {sides}", min(players), "fight", True, (fight["x"], fight["y"]), t,
+                           fight["sides"])]
 
     def _fight_over(self, fight: dict, t: float) -> dict:
         losses = [f"{self.side(o)} lost " + ", ".join(f"{n} {name}" for name, n in c.most_common())
                   for o, c in sorted(fight["lost"].items())]
-        text = (f"Fight at {self.place(fight['x'], fight['y'])} over after {t - fight['start']:.0f} s"
-                + (": " + "; ".join(losses) if losses else ", no losses"))
-        return self._item(text, None, "fight_end", bool(losses))
+        creeping = CREEPS in fight["sides"]
+        text = (f"{'Creeping' if creeping else 'Fight'} at {self.place(fight['x'], fight['y'])} over after "
+                f"{t - fight['start']:.0f} s" + (": " + "; ".join(losses) if losses else ", no losses"))
+        return self._item(text, None, "creeps_end" if creeping else "fight_end", bool(losses) and not creeping)
 
 
 NEUTRAL_PASSIVE = 15   # gold mines, shops and critters: never a fight

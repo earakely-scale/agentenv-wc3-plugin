@@ -198,6 +198,11 @@ def test_the_feed_names_fights_and_the_moments_that_matter():
     assert [i["text"] for i in later] == ["Claude summoned a Archmage",
                                           "Fight at the middle of the map over after 20 s: Orc AI lost 1 Grunt"]
     assert frames.army_value([footman, unit(5, "Hamg", 0, hero=True), hall], REF) == 135 + 525
+    murloc = unit(20, "ogru", 4000, owner=frames.CREEPS)
+    creep = [{"kind": "attacked", "unit_id": 20, "attacker_id": 2}] * 4
+    obs[0].update(game_time_seconds=40.0, units=[hall, unit(2, "hfoo", 3900)], visible_enemies=[murloc], events=creep)
+    assert [(i["kind"], i["major"], i["text"]) for i in feed.see(obs)] == [
+        ("creeps", False, "Claude creeping at the east")]
 
 
 def test_the_director_holds_a_shot_and_cuts_to_a_fight():
