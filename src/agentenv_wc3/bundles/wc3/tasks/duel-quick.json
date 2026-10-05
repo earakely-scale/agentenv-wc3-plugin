@@ -1,0 +1,107 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "wc3"
+  },
+  {
+    "id": "agent-p1",
+    "type": "deploy_agent",
+    "agent_name": "p1",
+    "a2a_agent_id": "wc3-macro-micro",
+    "env_ids": [],
+    "env_vars": {
+      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
+    },
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-p2",
+    "type": "deploy_agent",
+    "agent_name": "p2",
+    "a2a_agent_id": "wc3-macro-micro",
+    "env_ids": [],
+    "env_vars": {
+      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
+    },
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "wc3_match",
+    "env_id": "wc3",
+    "map": "(2)EchoIsles.w3x",
+    "seed": 1,
+    "time_limit_seconds": 300,
+    "mode": "stepping",
+    "seats": [
+      {
+        "agent": "p1",
+        "race": "human"
+      },
+      {
+        "agent": "p2",
+        "race": "orc"
+      }
+    ],
+    "depends_on": [
+      "agent-p1",
+      "agent-p2"
+    ]
+  },
+  {
+    "id": "play-p1",
+    "type": "prompt_agent",
+    "agent_name": "p1",
+    "model": "anthropic/claude-haiku-4-5",
+    "prompt_id": "duel-quick-p1",
+    "prompt": "Play the game the env has started to its end.",
+    "timeout_seconds": 3600,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "play-p2",
+    "type": "prompt_agent",
+    "agent_name": "p2",
+    "model": "anthropic/claude-haiku-4-5",
+    "prompt_id": "duel-quick-p2",
+    "prompt": "Play the game the env has started to its end.",
+    "timeout_seconds": 3600,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "rts_grade",
+    "env_id": "wc3",
+    "rubric": "dense",
+    "verifier_id": "duel",
+    "depends_on": [
+      "play-p1",
+      "play-p2"
+    ]
+  },
+  {
+    "id": "replay",
+    "type": "save_wc3_replay",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_rts_recording",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  }
+]
