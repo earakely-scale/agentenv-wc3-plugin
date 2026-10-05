@@ -11,8 +11,9 @@ Models come from agent-env's model endpoint (LITELLM_BASE_URL, LITELLM_API_KEY):
 WC3_TURN_SECONDS (default 5, at least 5) is the game time between macro requests; WC3_MAX_GAME_SECONDS stops
 playing that much game time from now (default: the match's time limit).
 
-The prompt is wc3agent's goal, a drill's or a full game's "play it to its end", which wc3agent pins first in every
-macro request. The game's setup (map, races, AI, time limit, mode) is the env's, from the task.
+With WC3_GOAL=prompt the prompt is wc3agent's goal (a drill's), which wc3agent pins first in every macro request as
+"THIS GAME IS A TEST OF ONE THING"; without it wc3agent plays the whole game, as it does in a melee. The game's setup
+(map, races, AI, time limit, mode) is the env's, from the task.
 Spectators hear from it through the env's urn:rts:note/v1: its name (the models), each macro turn's plan, and its
 running cost and decisions.
 """
@@ -227,7 +228,8 @@ class WC3Player(AgentEnvAgent):
     async def run(self, request: TaskRequest[WC3Config]) -> TaskResult:
         if not request.mcp_servers:
             return TaskResult.failure("no_mcp_server", "No MCP server was configured for this agent.")
-        goal = "\n".join(p.text for p in request.parts if isinstance(p, TextPart)).strip()
+        goal = ("\n".join(p.text for p in request.parts if isinstance(p, TextPart)).strip()
+                if os.environ.get("WC3_GOAL") == "prompt" else "")
         with tempfile.TemporaryDirectory(prefix="wc3agent-") as tmp:
             out = Path(tmp) / "session"
             try:

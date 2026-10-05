@@ -34,7 +34,8 @@ def test_fight_even_is_the_design_docs_drill():
     assert drills.convert("fight_even", definition("fight_even")) == [
         {"id": "deploy", "type": "deploy_env", "env_id": "wc3"},
         {"id": "agent", "type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": "wc3-macro-micro", "env_ids": [],
-         "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}, "depends_on": ["deploy"]},
+         "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5", "WC3_GOAL": "prompt"},
+         "depends_on": ["deploy"]},
         {"id": "opponent", "type": "deploy_agent", "agent_name": "opponent", "a2a_agent_id": "wc3-scripted",
          "env_ids": [], "env_vars": {"SCRIPT": "attack", "SCRIPT_AFTER_SECONDS": "0", "SCRIPT_EVERY_SECONDS": "5"},
          "depends_on": ["deploy"]},

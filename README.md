@@ -170,6 +170,7 @@ answers just mean fewer decisions), as the match's `mode` says. At a seat's addr
 | Macro reasoning effort | `WC3_MACRO_REASONING` | `low` |
 | Game seconds between macro turns | `WC3_TURN_SECONDS` (5 or more) | `5` |
 | Stop after this much game time | `WC3_MAX_GAME_SECONDS` | the match's time limit |
+| The prompt is a goal (a drill's), pinned in every macro request | `WC3_GOAL=prompt` | off: a whole game |
 
 **The micro model:**
 - **A chat model** (the default) is asked through the same OpenAI-compatible endpoint. The answers come back in

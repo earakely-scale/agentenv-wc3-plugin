@@ -170,7 +170,8 @@ async def test_wc3agent_plays_its_seat_with_the_prompt_as_its_goal(monkeypatch):
     models, seat = Models(plan="Plan: scout the enemy start.\n\nmove peon1 at 0 0"), Seat()
     goal = "Scout the enemy base with your peon."
     monkeypatch.setattr(agent.os, "environ", {**agent.os.environ, "LITELLM_BASE_URL": models.url,
-                                              "LITELLM_API_KEY": "sk-test", "WC3_MICRO_MODEL": "off"})
+                                              "LITELLM_API_KEY": "sk-test", "WC3_MICRO_MODEL": "off",
+                                              "WC3_GOAL": "prompt"})
     request = TaskRequest(task_id="t", context_id="c", parts=(TextPart(text=goal),),
                           config=agent.WC3Config(model="anthropic/claude-sonnet-5-5"),
                           mcp_servers={"wc3": {"url": seat.url}})
