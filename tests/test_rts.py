@@ -466,6 +466,17 @@ def test_seats_say_who_plays():
             check_scenario({**base_scenario, "seats": seats})
 
 
+def test_a_team_wins_together_once_every_rival_is_defeated(env_vars):
+    env = WC3Env()
+    env.seats = seats_of(check_scenario({**env.scenario, "map": "(4)TurtleRock.w3x", "seats": [
+        {"agent": "a", "team": 1}, {"agent": "b", "team": 1}, {"computer": "easy", "team": 2},
+        {"computer": "easy", "team": 2}]}))
+    env.obs = {0: {"game_time_seconds": 60.0}, 1: {}, 2: {"result": "defeat"}, 3: {}}
+    assert [env._result_of(s) for s in range(4)] == ["", "", "defeat", ""]
+    env.obs[3]["result"] = "defeat"
+    assert [env._result_of(s) for s in range(4)] == ["victory", "victory", "defeat", "defeat"]
+
+
 async def test_the_match_gives_each_agent_its_seat():
     posted, servers = [], {"a": {}, "b": {"x": {"url": "http://env:1/mcp"}}}
 

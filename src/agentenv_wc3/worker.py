@@ -126,8 +126,9 @@ class Worker:
                 "elapsed_ms": info["elapsed_ms"]}
 
     def observe(self) -> dict:
+        """The game as it is now, also for checking the next orders: staged units are in it before any step."""
         session = self._session()
-        return {"observations": _keyed(session.observations), "done": session.done}
+        return {"observations": _keyed(session._observe_all()), "done": session.done}
 
     def replay(self) -> dict:
         """The episode's native replay (.w3g), as base64. Recording stops: call it once the game is over."""

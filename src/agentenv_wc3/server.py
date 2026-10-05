@@ -361,9 +361,15 @@ class WC3Env(AgentEnvEnvironment):
         return max((o.get("game_time_seconds") or 0.0 for o in self.obs.values()), default=0.0)
 
     def _result_of(self, slot: int) -> str:
+        """The game's result for a seat, else victory once every seat on the other teams is defeated: the game
+        lets allies win together only with the lobby's allied victory, which teams made by alliances don't have."""
         own = (self.obs.get(slot) or {}).get("result")
         if own:
             return own
+        team = next((x["team"] for x in self.seats if x["slot"] == slot), None)
+        rivals = [x["slot"] for x in self.seats if x["team"] != team]
+        if rivals and all((self.obs.get(r) or {}).get("result") == "defeat" for r in rivals):
+            return "victory"
         return "time_limit" if self._seconds() >= self.scenario["time_limit_seconds"] else ""
 
     async def _play(self, slot: int, batch: list[dict], ms: int) -> dict:

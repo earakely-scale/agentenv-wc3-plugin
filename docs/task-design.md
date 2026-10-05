@@ -265,8 +265,18 @@ go.
   the env's own address, in a game with several agent seats, is refused.
 - **Teams:** the `alliance` op makes teammates allies (passive, help, shared experience, spells and vision). They show
   as allies from the game's first step on: its very first observation still lists them as enemies, so the metrics read
-  each step's relations, never an earlier one's. Shared victory is not verified.
-- **Determinism** under a fixed seed, with several agents and with staging: not verified.
+  each step's relations, never an earlier one's.
+- **Shared victory:** the game lets allies win together only with the lobby's allied victory, which alliances made
+  after the start don't give, so the env scores a seat as a win once every seat on the other teams is defeated.
+  Verified on the real game, with two agent seats against two computers: one agent's buildings were destroyed, then
+  all of team 2's; both agent seats won and the game ended. A teammate whose buildings are gone plays on while its
+  ally's stand, as in melee.
+- **Determinism**, verified on the real game in stepping mode. The setup: two agent seats in lockstep and two computer
+  seats, with staged armies that fight, over 91 steps. The same seed gave the same observations at every step and the
+  same end state for all four players, both in one container and in a fresh one. Another seed differed from the first
+  step. Realtime games are not expected to repeat.
+- **Free-for-all:** the game is over once the first agent seat has a result, so with three or more teams it ends
+  when that seat's game does.
 - **No auth on harness extensions:** an agent can reach the env's stage and idle extensions over HTTP. Say so, or bind
   them to the harness's own address.
 
