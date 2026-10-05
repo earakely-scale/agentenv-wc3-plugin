@@ -445,9 +445,38 @@ async def test_lockstep_moves_to_the_nearest_deadline():
         moves.append((sorted(batches), round(seconds, 3)))
         clock["t"] += seconds
 
-    lock = Lockstep([0, 1], 30, advance, lambda: clock["t"], lambda: False)
+    lock = Lockstep([0, 1], 30, advance, lambda: clock["t"], lambda p: False)
     await asyncio.gather(lock.step(0, ["x"], 5.0), lock.step(1, [], 1.0), _later(lock.step(1, [], 4.0)))
     assert moves == [([0, 1], 1.0), ([0, 1], 4.0)] and clock["t"] == 5.0
+
+
+async def test_a_player_who_is_out_holds_nobody_up():
+    clock, moves, out = {"t": 0.0}, [], set()
+
+    async def advance(batches, seconds):
+        moves.append(sorted(batches))
+        clock["t"] += seconds
+        out.add(1)
+
+    lock = Lockstep([0, 1], 30, advance, lambda: clock["t"], lambda p: p in out)
+    await asyncio.wait_for(asyncio.gather(lock.step(0, [], 2.0), lock.step(1, [], 5.0)), 1)
+    await asyncio.wait_for(lock.step(0, [], 1.0), 1)
+    assert moves == [[0, 1], [0]] and clock["t"] == 3.0 and lock.stalls == {0: 0, 1: 0}
+
+
+async def test_a_waiting_player_goes_once_the_game_ends_outside_a_step(monkeypatch):
+    monkeypatch.setattr(Lockstep, "RECHECK_SECONDS", 0.05)
+    out = set()
+
+    async def advance(batches, seconds):
+        raise AssertionError("the game ended without a step")
+
+    lock = Lockstep([0, 1], 30, advance, lambda: 0.0, lambda p: p in out)
+    waiting = asyncio.create_task(lock.step(0, [], 1.0))
+    await asyncio.sleep(0.1)
+    assert not waiting.done()
+    out.update({0, 1})
+    await asyncio.wait_for(waiting, 1)
 
 
 async def _later(step):
@@ -473,8 +502,19 @@ def test_a_team_wins_together_once_every_rival_is_defeated(env_vars):
         {"computer": "easy", "team": 2}]}))
     env.obs = {0: {"game_time_seconds": 60.0}, 1: {}, 2: {"result": "defeat"}, 3: {}}
     assert [env._result_of(s) for s in range(4)] == ["", "", "defeat", ""]
+    assert not env.game_over
     env.obs[3]["result"] = "defeat"
-    assert [env._result_of(s) for s in range(4)] == ["victory", "victory", "defeat", "defeat"]
+    assert [env._result_of(s) for s in range(4)] == ["victory", "victory", "defeat", "defeat"] and env.game_over
+
+
+def test_a_free_for_all_plays_on_after_one_seat_is_out(env_vars):
+    env = WC3Env()
+    env.seats = seats_of(check_scenario({**env.scenario, "map": "(4)TurtleRock.w3x", "seats": [
+        {"agent": "a"}, {"agent": "b"}, {"agent": "c"}]}))
+    env.obs = {0: {"result": "defeat", "game_time_seconds": 60.0}, 1: {}, 2: {}}
+    assert not env.game_over and [env._session_state(x)["done"] for x in env.seats] == [True, False, False]
+    env.obs[2]["result"], env.obs[1]["result"] = "defeat", "victory"
+    assert env.game_over
 
 
 async def test_the_match_gives_each_agent_its_seat():

@@ -275,8 +275,10 @@ go.
   seats, with staged armies that fight, over 91 steps. The same seed gave the same observations at every step and the
   same end state for all four players, both in one container and in a fresh one. Another seed differed from the first
   step. Realtime games are not expected to repeat.
-- **Free-for-all:** the game is over once the first agent seat has a result, so with three or more teams it ends
-  when that seat's game does.
+- **Free-for-all:** a seat that is out (it has a result) is done: its own session says so, its agent stops, and
+  lockstep goes on without it; the game is over once every agent seat has a result. Verified on the real game with
+  three agent seats on three teams. Slot 0 (the game's own local player) was knocked out first and the other two
+  played on. When the third was knocked out, the second won and the game ended.
 - **No auth on harness extensions:** an agent can reach the env's stage and idle extensions over HTTP. Say so, or bind
   them to the harness's own address.
 

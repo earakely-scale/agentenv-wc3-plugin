@@ -294,7 +294,7 @@ class WC3Env(AgentEnvEnvironment):
         self.orders_sent, self.step_info = {x: 0 for x in agents}, {}
         self.result, self.failed, self.done = "", None, False
         self.lockstep = (Lockstep(agents, scenario["lockstep"]["stall_seconds"], self._chunk, self._seconds,
-                                  lambda: self.game_over)
+                                  self._out)
                          if scenario["mode"] == "stepping" and len(agents) > 1 else None)
         await self._ally(seats)
         self.names = render.Names()
@@ -355,7 +355,11 @@ class WC3Env(AgentEnvEnvironment):
 
     @property
     def game_over(self) -> bool:
-        return self.done or bool(self.result)
+        """Over once every agent seat has a result, so in a free-for-all the last seats play on after one is out."""
+        return self.done or all(self._result_of(x["slot"]) for x in self.seats if x["computer"] is None)
+
+    def _out(self, slot: int) -> bool:
+        return self.game_over or bool(self._result_of(slot))
 
     def _seconds(self) -> float:
         return max((o.get("game_time_seconds") or 0.0 for o in self.obs.values()), default=0.0)
@@ -410,14 +414,15 @@ class WC3Env(AgentEnvEnvironment):
             return
         notes, self.notes = self.notes, []
         wall = time.monotonic() - self.capture.started if self.capture is not None and self.capture.running else None
-        frame = frames.frame(self.obs, self.result, self.feed.see(self.obs), self.ref, notes, wall)
+        frame = frames.frame(self.obs, self.result if self.game_over else "", self.feed.see(self.obs), self.ref, notes,
+                             wall)
         for slot, stats in self.agents.items():
             frame["players"].setdefault(str(slot), {})["agent"] = stats
         self.timeline.add(frame)
 
     def _observed(self, result: dict) -> None:
-        """A step's observations become the game's state: whether it is over, and the first agent seat's result
-        (or the time limit), which today's summary reports."""
+        """A step's observations become the game's state: whether the game says it is over, and the first agent
+        seat's result (or the time limit), which today's summary reports."""
         self.obs = {int(k): v for k, v in result["observations"].items()}
         self.done = self.done or bool(result.get("done"))
         self.result = self._result_of(self.lead)
@@ -574,7 +579,7 @@ class WC3Env(AgentEnvEnvironment):
         {shop_id, item_type_id}; revive {target_id} on an altar; stop; select."""
         async def body():
             slot = self._slot()
-            if self.game_over or self._result_of(slot):
+            if self._out(slot):
                 raise WorkerError("game_over", f"the game is over ({self._result_of(slot) or 'ended'})")
             batch = [self._resolve(slot, a.model_dump()) for a in actions]
             await self.bridge.call("validate", slot=slot, actions=batch)
@@ -594,7 +599,7 @@ class WC3Env(AgentEnvEnvironment):
         what the game refused, the sites it chose for buildings, what happened, and the new state's footer."""
         async def before():
             slot = self._slot()
-            if self.game_over or self._result_of(slot):
+            if self._out(slot):
                 raise WorkerError("game_over", f"the game is over ({self._result_of(slot) or 'ended'}); get_state "
                                                "shows the end")
             extra = [self._resolve(slot, a.model_dump()) for a in actions or ()]
@@ -976,7 +981,7 @@ class WC3Env(AgentEnvEnvironment):
         async with self.lock:
             await self._session_game()
             seat = self._session_seat()
-            if self.game_over:
+            if self._out(seat["slot"]) if seat else self.game_over:
                 return {**self._session_state(seat), "rejected": {}, "placements": {}, "elapsed_ms": 0}
             given = {int(k): list(v or ()) for k, v in (actions or {}).items()}
             if seat is not None and set(given) - {seat["slot"]}:
@@ -1072,10 +1077,12 @@ class WC3Env(AgentEnvEnvironment):
             raise RuntimeError(f"{e.code}: {e.message}") from e
 
     def _session_state(self, seat: dict | None) -> dict:
-        """The game as `seat` sees it: its own observation (every one for an omniscient seat or at the root)."""
+        """The game as `seat` sees it: its own observation (every one for an omniscient seat or at the root), and
+        done once its own game is over."""
         shown = None if seat is None or seat["omniscient"] else {seat["slot"]}
         state = {"observations": {str(k): v for k, v in self.obs.items() if shown is None or k in shown},
-                 "done": self.game_over, "result": self._result_of(seat["slot"]) if seat else self.result,
+                 "done": self._out(seat["slot"]) if seat else self.game_over,
+                 "result": self._result_of(seat["slot"]) if seat else self.result,
                  "scenario": self.scenario, "setup": self.setup,
                  "time_limit_seconds": self.scenario["time_limit_seconds"],
                  "seats": [{k: x[k] for k in ("slot", "agent", "computer", "race", "team")} for x in self.seats]}
@@ -1146,7 +1153,8 @@ class WC3Env(AgentEnvEnvironment):
     async def _live_state(self, request: Request) -> Response:
         """Where the game stands, for a streamer deciding when to stop."""
         last = self.timeline.last if self.timeline is not None else None
-        return JSONResponse({"game_over": self.game_over, "result": self.result, "t": (last or {}).get("t"),
+        return JSONResponse({"game_over": self.game_over, "result": self.result if self.game_over else "",
+                             "t": (last or {}).get("t"),
                              "client": self.capture is not None}, headers={"Cache-Control": "no-store"})
 
     async def _live_casting(self, request: Request) -> Response:

@@ -327,8 +327,6 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
 
 - **A task-set generator** (phase 4 of [docs/task-design.md](docs/task-design.md)): maps, races, opponents, seeds and
   drills crossed into named tasks and an eval.
-- **Free-for-all:** a game is over once the first agent seat has a result, so with three or more teams it ends when
-  that seat's game does.
 - **No auth on harness extensions:** an agent can reach the env's stage and idle extensions over HTTP.
 - **Container options.** wc3env runs its worker with `--shm-size 256m` and `--init`; agent-env's `server`
   provider sets neither, and the real game has run without them so far.
