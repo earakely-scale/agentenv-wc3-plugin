@@ -43,11 +43,11 @@
   },
   {
     "id": "grade",
-    "type": "env_outcome_verifier",
+    "type": "rts_grade",
     "env_id": "wc3",
-    "file_artifact_id": "wc3-verifier",
+    "rubric": "melee",
+    "at_time_limit": "draw",
     "verifier_id": "wc3",
-    "score_aggregator": "weighted_average",
     "depends_on": [
       "play"
     ]

@@ -32,11 +32,10 @@
   },
   {
     "id": "grade",
-    "type": "env_outcome_verifier",
+    "type": "rts_grade",
     "env_id": "wc3",
-    "file_artifact_id": "smoke-verifier",
+    "rubric": "smoke",
     "verifier_id": "smoke",
-    "score_aggregator": "weighted_average",
     "depends_on": [
       "idle"
     ]
