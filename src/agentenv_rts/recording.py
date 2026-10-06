@@ -1,14 +1,14 @@
 """A finished game's recording from its Timeline: an MP4 of the map, a frame per step (Pillow draws, ffmpeg
 encodes), the spectator page with the whole game embedded, which plays in any browser, and the game's own picture
-when the env captured it (display.py), with chapters and a highlight reel (highlights.py). `files()` is what an env
-returns from `urn:rts:recording/v1`; the `save_rts_recording` step stores them as file artifacts."""
+when the env captured it (display.py), with chapters and a highlight reel (highlights.py). `files()` writes them to a
+folder the env serves; `urn:rts:recording/v1` lists them and the `save_rts_recording` step fetches each one into a
+file artifact, so a long game's video never travels inside a reply."""
 
 from __future__ import annotations
 
 import base64
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from . import highlights, live
@@ -21,57 +21,60 @@ BAR = 64
 FPS = 10
 
 
-def files(timeline: Timeline, stem: str, formats: tuple[str, ...] = ("mp4", "html"),
+def files(timeline: Timeline, out: Path, stem: str, formats: tuple[str, ...] = ("mp4", "html"),
           client: Path | None = None) -> tuple[list[dict], list[str]]:
-    """The recording as `{"name", "content_type", "base64"}` files, and notes on what could not be made. `client`
-    is the game's own video: the `client` file, with the game's chapters, and what `highlights` cuts its reel from.
-    The `html` replay plays it beside the map when both are in the recording."""
-    out, notes = [], []
+    """Writes the recording into the folder `out`: its files as `{"name", "content_type", "bytes"}`, and notes on
+    what could not be made. `client` is the game's own video: the `client` file, with the game's chapters, and what
+    `highlights` cuts its reel from. The `html` replay plays it beside the map when both are in the recording."""
+    out.mkdir(parents=True, exist_ok=True)
+    made, notes = [], []
     video = client if client is not None and client.is_file() else None
     if "client" in formats:
         if video is None:
             notes.append("no client video: the game was played without its picture (client_view)")
         else:
+            path = out / f"{stem}-client.mp4"
             try:
-                out.append(_file(f"{stem}-client.mp4", "video/mp4", _cut(highlights.chaptered, timeline, video)))
+                highlights.chaptered(timeline, video, path)
             except highlights.HighlightsError as e:
                 notes.append(f"client video without chapters: {e}")
-                out.append(_file(f"{stem}-client.mp4", "video/mp4", video.read_bytes()))
+                shutil.copyfile(video, path)
+            made.append(_made(path, "video/mp4"))
     if "highlights" in formats:
         if video is None:
             notes.append("no highlights: they are cut from the client video (client_view)")
         else:
+            path = out / f"{stem}-highlights.mp4"
             try:
-                out.append(_file(f"{stem}-highlights.mp4", "video/mp4", _cut(highlights.reel, timeline, video)))
+                highlights.reel(timeline, video, path)
+                made.append(_made(path, "video/mp4"))
             except highlights.HighlightsError as e:
+                path.unlink(missing_ok=True)
                 notes.append(f"no highlights: {e}")
     if "html" in formats:
         beside = f"{stem}-client.mp4" if video is not None and "client" in formats else None
-        out.append(_file(f"{stem}.html", "text/html", live.standalone(timeline, beside).encode()))
+        (path := out / f"{stem}.html").write_text(live.standalone(timeline, beside), encoding="utf-8")
+        made.append(_made(path, "text/html"))
     if "mp4" in formats:
+        path = out / f"{stem}.mp4"
         try:
-            out.append(_file(f"{stem}.mp4", "video/mp4", mp4(timeline)))
+            mp4(timeline, path)
+            made.append(_made(path, "video/mp4"))
         except RecordingError as e:
+            path.unlink(missing_ok=True)
             notes.append(f"no MP4: {e}")
-    return out, notes
+    return made, notes
 
 
 class RecordingError(RuntimeError):
     pass
 
 
-def _file(name: str, content_type: str, data: bytes) -> dict:
-    return {"name": name, "content_type": content_type, "base64": base64.b64encode(data).decode()}
+def _made(path: Path, content_type: str) -> dict:
+    return {"name": path.name, "content_type": content_type, "bytes": path.stat().st_size}
 
 
-def _cut(make, timeline: Timeline, video: Path) -> bytes:
-    """What `make` (highlights.chaptered or highlights.reel) writes from `video`."""
-    with tempfile.TemporaryDirectory() as tmp:
-        make(timeline, video, Path(tmp) / "out.mp4")
-        return (Path(tmp) / "out.mp4").read_bytes()
-
-
-def mp4(timeline: Timeline) -> bytes:
+def mp4(timeline: Timeline, path: Path) -> None:
     if not timeline.frames:
         raise RecordingError("no game was played")
     if shutil.which("ffmpeg") is None:
@@ -81,25 +84,21 @@ def mp4(timeline: Timeline) -> bytes:
     except ImportError as e:
         raise RecordingError("Pillow is not installed") from e
     painter = Painter(timeline.static)
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "game.mp4"
-        command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
-                   "-s", f"{painter.width}x{painter.height}", "-r", str(FPS), "-i", "-", "-c:v", "libx264",
-                   "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(path)]
-        proc = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            for frame in timeline.frames:
-                proc.stdin.write(painter.paint(frame).tobytes())
-            for _ in range(FPS * 2):   # hold the last frame
-                proc.stdin.write(painter.paint(timeline.frames[-1]).tobytes())
-        finally:
-            proc.stdin.close()
-            err = proc.stderr.read().decode(errors="replace")
-            proc.wait()
-        if proc.returncode or not path.is_file():
-            raise RecordingError(f"ffmpeg failed: {err.strip()[-300:]}")
-        return path.read_bytes()
-
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+               "-s", f"{painter.width}x{painter.height}", "-r", str(FPS), "-i", "-", "-c:v", "libx264",
+               "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(path)]
+    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        for frame in timeline.frames:
+            proc.stdin.write(painter.paint(frame).tobytes())
+        for _ in range(FPS * 2):   # hold the last frame
+            proc.stdin.write(painter.paint(timeline.frames[-1]).tobytes())
+    finally:
+        proc.stdin.close()
+        err = proc.stderr.read().decode(errors="replace")
+        proc.wait()
+    if proc.returncode or not path.is_file():
+        raise RecordingError(f"ffmpeg failed: {err.strip()[-300:]}")
 
 class Painter:
     """Draws frames the way the spectator page does: the terrain, trees and points once, then units on top."""

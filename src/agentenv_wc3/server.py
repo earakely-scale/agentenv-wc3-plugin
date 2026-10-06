@@ -24,7 +24,9 @@ import math
 import os
 import re
 import shlex
+import shutil
 import sys
+import tempfile
 import textwrap
 import time
 from functools import partial
@@ -44,7 +46,7 @@ from agentenv_protocol import (
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
@@ -249,6 +251,7 @@ class WC3Env(AgentEnvEnvironment):
         self.failed: str | None = None
         self.timeline: Timeline | None = None
         self.capture: rts_display.Capture | None = None
+        self.recordings: Path | None = None   # the latest game's recording, served at /live/recording/<name>
         self.camera: tuple[float, float] | None = None
         self.director = frames.Director(self.lead)
         self.feed: frames.Feed | None = None
@@ -1163,8 +1166,9 @@ class WC3Env(AgentEnvEnvironment):
                                                     "map (mp4), a self-contained HTML replay (html) and, for a match "
                                                     "with client_view, the game's own video with chapters (client; "
                                                     "the replay plays it beside the map) and a highlight reel cut "
-                                                    "from it (highlights), as base64 files. Asking for either ends "
-                                                    "the capture.")
+                                                    "from it (highlights). Lists the files, each to fetch from its "
+                                                    "path (/live/recording/<name>); asking for client or highlights "
+                                                    "ends the capture.")
     async def recording(self, formats: list[str] | None = None) -> dict:
         self.stats["extension_calls"] += 1
         formats = tuple(formats or ("mp4", "html"))
@@ -1175,14 +1179,19 @@ class WC3Env(AgentEnvEnvironment):
             stem = f"wc3-{Path(self.scenario['map']).stem}-{timeline.static['game']}".replace(" ", "")
             client = (await asyncio.to_thread(self.capture.stop)
                       if {"client", "highlights"} & set(formats) and self.capture is not None else None)
-        files, notes = await asyncio.to_thread(rts_recording.files, timeline, stem, formats, client)
-        return {"files": files, "notes": notes}
+        if self.recordings is None:
+            self.recordings = Path(tempfile.mkdtemp(prefix="wc3-recording-"))
+        shutil.rmtree(self.recordings / "latest", ignore_errors=True)
+        made, notes = await asyncio.to_thread(rts_recording.files, timeline, self.recordings / "latest", stem,
+                                              formats, client)
+        return {"files": [{**f, "path": f"/live/recording/{f['name']}"} for f in made], "notes": notes}
 
     def create_app(self):
         app = super().create_app()
         app.custom_route("/live", methods=["GET"])(self._live_page)
         app.custom_route("/live/data.json", methods=["GET"])(self._live_data)
         app.custom_route("/live/client", methods=["GET"])(self._live_client)
+        app.custom_route("/live/recording/{name}", methods=["GET"])(self._live_recording)
         app.custom_route("/live/client.jpg", methods=["GET"])(self._live_client_frame)
         app.custom_route("/live/state.json", methods=["GET"])(self._live_state)
         app.custom_route("/live/casting.json", methods=["GET"])(self._live_casting)
@@ -1260,10 +1269,20 @@ class WC3Env(AgentEnvEnvironment):
             return Response(status_code=404)
         return Response(frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
+    async def _live_recording(self, request: Request) -> Response:
+        """A file of the latest recording, streamed from disk (save_rts_recording fetches each one)."""
+        name = request.path_params["name"]
+        path = self.recordings / "latest" / name if self.recordings is not None else None
+        if path is None or name != Path(name).name or not path.is_file():
+            return Response(status_code=404)
+        return FileResponse(path)
+
     async def close(self) -> None:
         await self._drop_capture()
         if self.bridge is not None:
             await self.bridge.close()
+        if self.recordings is not None:
+            shutil.rmtree(self.recordings, ignore_errors=True)
 
 
 async def _now(value):

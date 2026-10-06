@@ -1,15 +1,20 @@
 """`save_rts_recording`: ask a deployed RTS env for its finished game's recording (`urn:rts:recording/v1`: the
 map video, the spectator page with the game embedded, with `client` the game's own picture and with `highlights` a
-reel cut from it) and store each file as a `file` artifact."""
+reel cut from it) and store each file as a `file` artifact. The env lists the files; each is streamed from the
+path it gives, through a temporary file, to the object store, so an hour of video never sits in memory (an env that
+sends `base64` instead still works)."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import logging
+import tempfile
 import uuid
+from pathlib import Path
 from typing import ClassVar
 
+import httpx
 from agent_env.artifact import FileArtifact
 from agent_env.entity_refs import EntityRef
 from agent_env.task_step.context import TaskStepContext
@@ -61,14 +66,26 @@ class SaveRTSRecordingTaskStep(TaskStep):
         stem = f"{context.metadata.get('task_id', self.env_id)}-recording-{context.instance_id or uuid.uuid4().hex}"
         saved = []
         for f in (result or {}).get("files") or []:
-            content = base64.b64decode(f["base64"])
-            artifact = await asyncio.to_thread(
-                FileArtifact.put_bytes, f"{stem}-{f['name']}",
-                description=f"Spectator recording of env {self.env_id!r}", filename=f["name"], content=content,
-                content_type=f["content_type"])
-            saved.append({"name": f["name"], "artifact_id": artifact.id, "version": artifact.version,
-                          "bytes": len(content)})
-            log.info("save_rts_recording: %s (%d bytes) is file artifact %s v%d", f["name"], len(content),
-                     artifact.id, artifact.version)
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / Path(f["name"]).name
+                if "base64" in f:
+                    path.write_bytes(base64.b64decode(f["base64"]))
+                else:
+                    await _download(f"{deployed.environment_url.rstrip('/')}{f['path']}", path, self.timeout_seconds)
+                size = path.stat().st_size
+                artifact = await asyncio.to_thread(FileArtifact.put, f"{stem}-{f['name']}",
+                                                   description=f"Spectator recording of env {self.env_id!r}",
+                                                   file_path=str(path))
+            saved.append({"name": f["name"], "artifact_id": artifact.id, "version": artifact.version, "bytes": size})
+            log.info("save_rts_recording: %s (%d bytes) is file artifact %s v%d", f["name"], size, artifact.id,
+                     artifact.version)
         context.metadata.setdefault("recordings", {})[self.id] = saved
         return context
+
+
+async def _download(url: str, path: Path, timeout: float) -> None:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=30)) as http, http.stream("GET", url) as r:
+        r.raise_for_status()
+        with path.open("wb") as out:
+            async for chunk in r.aiter_bytes(1 << 20):
+                out.write(chunk)

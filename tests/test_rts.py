@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -266,8 +267,9 @@ async def test_the_games_picture_is_a_video_and_a_live_stream(tmp_path):
     finally:
         video = capture.stop()
     assert video.read_bytes()[4:8] == b"ftyp" and not capture.running
-    files, notes = recording.files(Timeline({"game": "g"}), "g", ("client",), video)
+    files, notes = recording.files(Timeline({"game": "g"}), tmp_path / "rec", "g", ("client",), video)
     assert [f["name"] for f in files] == ["g-client.mp4"] and notes == []
+    assert files[0]["bytes"] == (tmp_path / "rec" / "g-client.mp4").stat().st_size > 0
 
 
 EXPANSION = "Claude expanded: a Town Hall at the gold mine; east = far from home, and then some"
@@ -343,10 +345,8 @@ def test_the_recording_has_chapters_a_highlight_reel_and_a_replay_beside_the_vid
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                     "testsrc=size=160x90:rate=10", "-t", "100", "-c:v", "libx264", "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p", str(video)], check=True)
-    files, notes = recording.files(played(), "g", ("client", "highlights", "html"), video)
+    files, notes = recording.files(played(), tmp_path, "g", ("client", "highlights", "html"), video)
     assert [f["name"] for f in files] == ["g-client.mp4", "g-highlights.mp4", "g.html"] and notes == []
-    for f in files:
-        (tmp_path / f["name"]).write_bytes(base64.b64decode(f["base64"]))
     chapters = ffprobe(tmp_path / "g-client.mp4", "-show_chapters")["chapters"]
     assert [(c["start"], c["tags"]["title"]) for c in chapters] == [
         (0, "Start"), (30000, "Fight at the north: Claude vs Orc AI"), (70000, "Claude reached tier 2: Keep"),
@@ -361,14 +361,15 @@ def test_the_recording_has_chapters_a_highlight_reel_and_a_replay_beside_the_vid
     assert embedded((tmp_path / "g.html").read_bytes())["video"] == "g-client.mp4"
     assert highlights.reel(played(), video, tmp_path / "short.mp4", max_seconds=30) == [(26.0, 49.0), (65.0, 72.0)]
     assert highlights.duration(tmp_path / "short.mp4") <= 30.05
-    files, notes = recording.files(played(), "g", ("highlights", "html"), video)
+    files, notes = recording.files(played(), tmp_path / "b", "g", ("highlights", "html"), video)
     assert [f["name"] for f in files] == ["g-highlights.mp4", "g.html"] and notes == []
-    assert "video" not in embedded(base64.b64decode(files[1]["base64"]))
-    files, notes = recording.files(played(), "g", ("highlights",))
+    assert "video" not in embedded((tmp_path / "b" / "g.html").read_bytes())
+    files, notes = recording.files(played(), tmp_path / "c", "g", ("highlights",))
     assert files == [] and notes == ["no highlights: they are cut from the client video (client_view)"]
     (broken := tmp_path / "broken.mp4").write_bytes(b"no video")
-    files, notes = recording.files(played(), "g", ("client", "highlights"), broken)
-    assert [(f["name"], base64.b64decode(f["base64"])) for f in files] == [("g-client.mp4", b"no video")]
+    files, notes = recording.files(played(), tmp_path / "d", "g", ("client", "highlights"), broken)
+    assert [(f["name"], (tmp_path / "d" / f["name"]).read_bytes()) for f in files] == [("g-client.mp4", b"no video")]
+    assert sorted(p.name for p in (tmp_path / "d").iterdir()) == ["g-client.mp4"]
     assert [n.partition(": ")[0] for n in notes] == ["client video without chapters", "no highlights"]
 
 
@@ -426,6 +427,9 @@ async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
         assert (await first)["observations"][0]["game_time_seconds"] == 1.0
         alone = await asyncio.to_thread(a.step, {0: []}, 1000)   # b stalls past 2 s: a goes on
         assert alone["observations"][0]["game_time_seconds"] == 2.0
+        began = time.monotonic()
+        again = await asyncio.to_thread(a.step, {0: []}, 1000)   # and without b from then on
+        assert again["observations"][0]["game_time_seconds"] == 3.0 and time.monotonic() - began < 1.5
         with pytest.raises(SessionError, match="only its own units"):
             await asyncio.to_thread(a.step, {1: []}, 1000)
         async with streamable_http_client(base(record) + "/seats/b/mcp") as (read, write, _), \
@@ -472,6 +476,22 @@ async def test_lockstep_moves_to_the_nearest_deadline():
     lock = Lockstep([0, 1], 30, advance, lambda: clock["t"], lambda p: False)
     await asyncio.gather(lock.step(0, ["x"], 5.0), lock.step(1, [], 1.0), _later(lock.step(1, [], 4.0)))
     assert moves == [([0, 1], 1.0), ([0, 1], 4.0)] and clock["t"] == 5.0
+
+
+async def test_a_stalled_player_holds_the_game_once_and_rejoins():
+    clock, moves = {"t": 0.0}, []
+
+    async def advance(batches, seconds):
+        moves.append(sorted(batches))
+        clock["t"] += seconds
+
+    lock = Lockstep([0, 1], 0.2, advance, lambda: clock["t"], lambda p: False)
+    began = time.monotonic()
+    for _ in range(4):
+        await lock.step(0, [], 1.0)
+    assert time.monotonic() - began < 0.6 and lock.stalls == {0: 0, 1: 1}   # one 0.2 s wait, not four
+    await asyncio.wait_for(asyncio.gather(lock.step(1, [], 1.0), _later(lock.step(0, [], 1.0))), 1)
+    assert moves[-1] == [0, 1] and clock["t"] == 5.0 and lock.stalls == {0: 0, 1: 1}
 
 
 async def test_a_player_who_is_out_holds_nobody_up():
