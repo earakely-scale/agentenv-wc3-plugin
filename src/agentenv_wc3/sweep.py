@@ -157,7 +157,9 @@ def generate(spec: Spec, out: Path) -> list[str]:
     template = spec.steps()
     (out / "tasks").mkdir(parents=True, exist_ok=True)
     (out / "evals").mkdir(exist_ok=True)
-    manifest = {"name": spec.name, "template": spec.template, "max_cost_usd": spec.max_cost_usd, "tasks": {}}
+    agent = next(s for s in template if s["id"] == spec.player_step).get("agent_name")
+    manifest = {"name": spec.name, "template": spec.template, "max_cost_usd": spec.max_cost_usd, "agent": agent,
+                "tasks": {}}
     for c in spec.combinations():
         name = task_name(spec, c)
         (out / "tasks" / f"{name}.json").write_text(json.dumps(task_of(spec, template, c, name), indent=2) + "\n")
@@ -178,23 +180,30 @@ def metadata(instance: str) -> dict:
         return ((get_task_instance_store().get(instance).context or {}).get("metadata")) or {}
 
 
-def outcome(task: str, axes: dict, instance: str | None, wall: float | None, code: int) -> dict:
-    """One game's row: its grade, result, scores and the agent's spend, from the run's stored instance."""
+def outcome(task: str, axes: dict, agent: str | None, instance: str | None, wall: float | None, code: int) -> dict:
+    """One game's row: its grade, result, scores and the spend of `agent`'s seat (the one agent seat of a match
+    without seats), from the run's stored instance. The cost is None when the run recorded none."""
     row = {"task": task, **axes, "instance": instance, "wall_seconds": wall, "exit": code}
     if instance is None:
-        return {**row, "grade": 0.0, "cost_usd": 0.0}
+        return {**row, "grade": 0.0, "cost_usd": None}
     found = metadata(instance)
     grade = next(iter((found.get("verifications") or {}).values()), {}).get("score", 0.0)
     summary = next(iter((found.get("rts_summary") or {}).values()), {})
     seats = summary.get("seats") or []
-    me = next((x for x in seats if x.get("agent")), {})
+    me = next((x for x in seats if agent and x.get("agent") == agent), None) or next(
+        (x for x in seats if not x.get("computer")), {})
     them = next((x for x in seats if x.get("team") != me.get("team")), {})
     mine, theirs, spend = me.get("metrics") or {}, them.get("metrics") or {}, me.get("spend") or {}
     return {**row, "grade": round(grade, 4), "result": me.get("result"), "score": mine.get("total"),
             "opponent_score": theirs.get("total"), "units_killed": mine.get("units_killed"),
             "orders": me.get("orders_sent"), "decisions": spend.get("decisions"),
-            "cost_usd": round(spend.get("cost_usd") or 0.0, 4), "game_seconds": summary.get("game_time_seconds"),
+            "cost_usd": spend.get("cost_usd"), "game_seconds": summary.get("game_time_seconds"),
             "error": summary.get("error")}
+
+
+def cost(row: dict, cap: float) -> float:
+    """What a game spent, or, when its run recorded no spend, its cap: the budget counts the worst case."""
+    return cap if row.get("cost_usd") is None else row["cost_usd"]
 
 
 def run(out: Path, budget: float, parallel: int = 2, agent_env: str = "agent-env", echo=print) -> list[dict]:
@@ -203,7 +212,7 @@ def run(out: Path, budget: float, parallel: int = 2, agent_env: str = "agent-env
     manifest = json.loads((out / "sweep.json").read_text())
     rows, cap = results(out), float(manifest["max_cost_usd"])
     pending = [t for t in manifest["tasks"] if t not in {r["task"] for r in rows}]
-    spent = sum(r.get("cost_usd") or 0 for r in rows)
+    spent = sum(cost(r, cap) for r in rows)
     running: dict[str, subprocess.Popen] = {}
     logs = out / "logs"
     logs.mkdir(exist_ok=True)
@@ -224,13 +233,14 @@ def run(out: Path, budget: float, parallel: int = 2, agent_env: str = "agent-env
             del running[task]
             found = INSTANCE.findall((logs / f"{task}.log").read_text(errors="replace"))
             wall, instance = (float(found[-1][0]), found[-1][1]) if found else (None, None)
-            row = outcome(task, manifest["tasks"][task], instance, wall, proc.returncode)
+            row = outcome(task, manifest["tasks"][task], manifest.get("agent"), instance, wall, proc.returncode)
             rows.append(row)
-            spent += row.get("cost_usd") or 0
+            spent += cost(row, cap)
             with (out / "results.jsonl").open("a") as f:
                 f.write(json.dumps(row) + "\n")
-            echo(f"done  {task}: grade {row['grade']}, {row.get('result')}, ${row.get('cost_usd', 0):.3f} "
-                 f"(spent ${spent:.2f})")
+            paid = (f"${row['cost_usd']:.3f}" if row["cost_usd"] is not None else
+                    f"no spend recorded, counted as its cap ${cap:.2f}")
+            echo(f"done  {task}: grade {row['grade']}, {row.get('result')}, {paid} (spent ${spent:.2f})")
     return rows
 
 
@@ -250,21 +260,28 @@ def report(out: Path) -> str:
         xs = [x for x in xs if x is not None]
         return statistics.stdev(xs) if len(xs) > 1 else 0.0
 
-    lines = [f"Sweep `{json.loads((out / 'sweep.json').read_text())['name']}`: {len(rows)} games, "
-             f"${sum(r.get('cost_usd') or 0 for r in rows):.2f} of model spend.", "",
-             "| Model | Games | Grade (mean ± sd) | Won / limit / lost | Score share | Cost a game | Turns a game |",
-             "|---|---|---|---|---|---|---|"]
+    manifest = json.loads((out / "sweep.json").read_text())
+    cap, unknown = float(manifest["max_cost_usd"]), sum(r.get("cost_usd") is None for r in rows)
+    lines = [f"Sweep `{manifest['name']}`: {len(rows)} games, ${sum(cost(r, cap) for r in rows):.2f} of model spend"
+             + (f" ({unknown} with no spend recorded, counted at the cap)." if unknown else "."), "",
+             "| Model | Games | Grade (mean ± sd) | Won / limit / lost | Score vs opponent | Score share | Cost a game "
+             f"| At the ${cap:.2f} cap | Turns a game |", "|---|---|---|---|---|---|---|---|---|"]
     ranked = sorted(models, key=lambda m: -(mean(r["grade"] for r in rows if r["model"] == m) or 0))
     for m in ranked:
         mine = [r for r in rows if r["model"] == m]
         grades = [r["grade"] for r in mine]
         won = sum(r.get("result") == "victory" for r in mine)
         lost = sum(r.get("result") == "defeat" for r in mine)
-        share = mean(r["score"] / (r["score"] + r["opponent_score"]) for r in mine
-                     if r.get("score") is not None and (r.get("score") or 0) + (r.get("opponent_score") or 0))
-        cost, turns = mean(r.get("cost_usd") for r in mine) or 0, mean(r.get("decisions") for r in mine) or 0
+        scored = [r for r in mine if r.get("score") is not None and r.get("opponent_score") is not None]
+        versus = (f"{mean(r['score'] for r in scored) / 1000:.1f}k vs "
+                  f"{mean(r['opponent_score'] for r in scored) / 1000:.1f}k") if scored else "–"
+        share = mean(r["score"] / (r["score"] + r["opponent_score"]) for r in scored
+                     if r["score"] + r["opponent_score"])
+        paid, turns = mean(r.get("cost_usd") for r in mine) or 0, mean(r.get("decisions") for r in mine) or 0
+        capped = sum((r.get("cost_usd") or 0) >= cap for r in mine)
         lines.append(f"| {m} | {len(mine)} | {mean(grades):.2f} ± {sd(grades):.2f} | {won} / {len(mine) - won - lost} "
-                     f"/ {lost} | {'–' if share is None else f'{share:.0%}'} | ${cost:.3f} | {turns:.0f} |")
+                     f"/ {lost} | {versus} | {'–' if share is None else f'{share:.0%}'} | ${paid:.3f} | {capped} "
+                     f"| {turns:.0f} |")
     lines += ["", "Grade by map, one per seed:", "", "| Model | " + " | ".join(short(p) for p in maps)
               + " | Spread across seeds (mean sd) |", "|---|" + "---|" * (len(maps) + 1)]
     for m in ranked:

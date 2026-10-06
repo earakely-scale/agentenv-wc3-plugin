@@ -74,11 +74,14 @@ def fake_agent_env(tmp_path):
     return str(script)
 
 
-def summary(cost: float, score: int) -> dict:
+def summary(cost: float | None, score: int) -> dict:
+    """A shorthand match's summary, as the real game's: the agent's seat has no agent name."""
+    spend = {} if cost is None else {"cost_usd": cost, "decisions": 30, "tokens": 9000}
     return {"verifications": {"wc3": {"score": 0.4}}, "rts_summary": {"wc3": {"game_time_seconds": 300, "seats": [
-        {"slot": 0, "agent": "wc3", "team": 0, "result": "", "orders_sent": 40,
-         "spend": {"cost_usd": cost, "decisions": 30}, "metrics": {"total": score, "units_killed": 3}},
-        {"slot": 1, "agent": None, "computer": "easy", "team": 1, "result": "", "metrics": {"total": 1000}}]}}}
+        {"slot": 0, "agent": None, "computer": None, "team": 1, "result": "time_limit", "orders_sent": 40,
+         "spend": spend, "metrics": {"total": score, "units_killed": 3}},
+        {"slot": 1, "agent": None, "computer": "easy", "team": 2, "result": "time_limit", "orders_sent": 0,
+         "spend": {}, "metrics": {"total": 1000}}]}}}
 
 
 def test_the_runner_stops_before_a_game_could_take_the_spend_past_the_budget_and_resumes(generated, tmp_path,
@@ -91,9 +94,32 @@ def test_the_runner_stops_before_a_game_could_take_the_spend_past_the_budget_and
     assert [r["task"] for r in rows] == names[:2]   # 0.3 spent + 0.5 fits in 1.0, 0.6 + 0.5 does not
     assert rows[0]["instance"] == f"@local/x/{names[0]}" and rows[0]["wall_seconds"] == 12.5
     assert (rows[0]["grade"], rows[0]["cost_usd"], rows[0]["score"], rows[0]["opponent_score"]) == (0.4, 0.3, 500, 1000)
+    assert (rows[0]["result"], rows[0]["orders"], rows[0]["decisions"]) == ("time_limit", 40, 30)
     assert said[-1].startswith("stopped: another game could take the spend past $1.00")
     rows = sweep.run(out, budget=10.0, parallel=3, agent_env=fake_agent_env(tmp_path), echo=said.append)
     assert sorted(r["task"] for r in rows) == sorted(names) and len(sweep.results(out)) == 8
+
+
+def test_a_game_without_a_recorded_spend_counts_as_its_cap(generated, tmp_path, monkeypatch):
+    out, names = generated
+    monkeypatch.setattr(sweep.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sweep, "metadata", lambda instance: summary(None, 500))
+    said = []
+    rows = sweep.run(out, budget=1.4, parallel=1, agent_env=fake_agent_env(tmp_path), echo=said.append)
+    assert len(rows) == 2 and rows[0]["cost_usd"] is None   # 0.5 + 0.5 fits in 1.4, 1.0 + 0.5 does not
+    assert "no spend recorded, counted as its cap $0.50 (spent $0.50)" in said[1]
+    assert "2 games, $1.00 of model spend (2 with no spend recorded, counted at the cap)." in sweep.report(out)
+
+
+def test_a_seat_named_in_seats_is_found_by_its_agent(generated, monkeypatch):
+    out, _ = generated
+    found = summary(0.2, 500)
+    seats = found["rts_summary"]["wc3"]["seats"]
+    seats[:] = [{**seats[1], "computer": None, "agent": "rival", "spend": {"cost_usd": 9.0}},
+                {**seats[0], "agent": "wc3"}]
+    monkeypatch.setattr(sweep, "metadata", lambda instance: found)
+    row = sweep.outcome("t", {}, json.loads((out / "sweep.json").read_text())["agent"], "i", 1.0, 0)
+    assert (row["cost_usd"], row["score"], row["opponent_score"]) == (0.2, 500, 1000)
 
 
 def test_the_report_ranks_the_models_and_shows_each_seed(generated, tmp_path, monkeypatch):
@@ -108,5 +134,5 @@ def test_the_report_ranks_the_models_and_shows_each_seed(generated, tmp_path, mo
     ranking = [line.split(" | ")[0] for line in text.splitlines() if line.startswith("| openai") or
                line.startswith("| anthropic")]
     assert ranking[:2] == ["| openai/gpt-5.4-mini", "| anthropic/claude-haiku-4-5"]
-    assert "| openai/gpt-5.4-mini | 4 | 0.60 ± 0.00 | 0 / 4 / 0 | 75% | $0.100 | 30 |" in text
+    assert "| openai/gpt-5.4-mini | 4 | 0.60 ± 0.00 | 0 / 4 / 0 | 3.0k vs 1.0k | 75% | $0.100 | 0 | 30 |" in text
     assert "| anthropic/claude-haiku-4-5 | 0.20 0.20 | 0.20 0.20 | 0.00 |" in text
