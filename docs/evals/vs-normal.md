@@ -34,7 +34,7 @@ Grade by map, one per seed:
   - No model won. The normal AI outscored every model two to four times over.
 - **DeepSeek V4.1 Flash is first, and it fights.**
   - It survived all four games and gave 140 orders a game, 35 of them attacks; Haiku gave 5 attacks and GPT-5.4 mini 8.
-  - It ended each game with the most food in use: 20 to 43, workers included, against at most 12 for Haiku.
+  - It ended its games with 20 to 43 food in use, workers included; Haiku ended with at most 12.
   - It is also the cheapest, at under $0.05 a game.
 - **Haiku 4.5 and GPT-5.4 mini leave their gold unspent.**
   - They held 1,700 to 1,800 gold on average through the game, twice DeepSeek's.
