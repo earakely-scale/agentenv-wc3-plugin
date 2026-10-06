@@ -79,9 +79,13 @@ commit this plugin pins
 ([`eb660aa`](https://github.com/pwang724/wc3env/tree/eb660aa558fb6e5c639a1ff404082f7dc0ee483e)):
 
 ```powershell
+git apply path\to\agentenv-wc3-plugin\patches\wc3env-realtime-hold.patch   # optional, see below
 wc3hook\build.bat                                   # builds and tests the injected hook
 python docker\prepare.py --game-dir "C:\Program Files (x86)\Warcraft III (Legacy)" --output build\docker-context
 ```
+
+The patch lets a realtime game wait at its start until every player has made its first move (the hook's `hold` and
+`release`). Without it, a realtime game starts when it is created; stepping games wait either way.
 
 `prepare.py` checks the executable's hash and copies only the game files and stock maps the worker needs, never the
 activation files (see wc3env's [docker/README.md](https://github.com/pwang724/wc3env/blob/main/docker/README.md)).

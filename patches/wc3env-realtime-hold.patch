@@ -1,0 +1,173 @@
+diff --git a/src/wc3env/rpc.py b/src/wc3env/rpc.py
+index 5aba520..6ea5bc7 100644
+--- a/src/wc3env/rpc.py
++++ b/src/wc3env/rpc.py
+@@ -138,9 +138,16 @@ class RpcClient:
+     def info(self) -> dict:
+         return self.call("info")
+ 
+-    def create_game(self, map: str, players: list[dict], mode: str = "stepping") -> dict:
++    def create_game(self, map: str, players: list[dict], mode: str = "stepping", hold: bool = False) -> dict:
++        """With `hold`, a realtime game stands at its start until release()."""
++        if hold:
++            return self.call("create_game", map=map, players=players, mode=mode, hold=True)
+         return self.call("create_game", map=map, players=players, mode=mode)
+ 
++    def release(self) -> dict:
++        """Start the clock of a realtime game created with hold."""
++        return self.call("release")
++
+     def step(self, ms: int, observe: list[int] | None = None, actions: dict[int, list[dict]] | None = None) -> dict:
+         """Advance ms; with `observe`, also write those players' binary observations (binary.py) and
+         return their offsets in `observations`; with `actions` ({player: [action, ...]}), first send them as act
+diff --git a/src/wc3env/session.py b/src/wc3env/session.py
+index 602c99c..f348f7f 100644
+--- a/src/wc3env/session.py
++++ b/src/wc3env/session.py
+@@ -66,6 +66,9 @@ class GameConfig:
+         PlayerConfig(1, control="computer"),
+     )
+     mode: str = "stepping"
++    # realtime only: the game stands at its start after reset() until release(), so every player can look and
++    # send its first orders before any time passes
++    hold: bool = False
+     step_ms: int = 1000
+     window_mode: str = "background"
+     render: bool = True
+@@ -96,6 +99,8 @@ class GameConfig:
+             raise ValueError("at least one player must be an agent")
+         if self.mode not in ("stepping", "realtime"):
+             raise ValueError("mode must be stepping or realtime")
++        if type(self.hold) is not bool or (self.hold and self.mode != "realtime"):
++            raise ValueError("hold must be a bool, true only in realtime mode")
+         if self.observation not in OBSERVATIONS:
+             raise ValueError("observation must be json or binary")
+         if self.window_mode not in ("interactive", "background"):
+@@ -286,7 +291,7 @@ class GameSession:
+                 if not created:
+                     game.rpc.reset()
+                 self.setup = game.rpc.create_game(
+-                    str(game.map), [p.to_dict() for p in self.config.players], self.config.mode
++                    str(game.map), [p.to_dict() for p in self.config.players], self.config.mode, self.config.hold
+                 )
+                 if created:
+                     for op, args in self._tuning.items():
+@@ -300,6 +305,15 @@ class GameSession:
+                 self.setup = None
+                 raise
+ 
++    def release(self) -> dict:
++        """Start the clock of a realtime game created with `hold`; orders sent before run from its first frame."""
++        with self._lock:
++            with self._state_lock:
++                self._check_open()
++            if not self.observations or self._faulted:
++                raise RuntimeError("call reset() before release()")
++            return self.game.rpc.release()
++
+     def step(
+         self, actions: dict[int, list[Action] | list[dict]], ms: int | None = None
+     ) -> tuple[dict[int, dict], bool, dict]:
+diff --git a/wc3hook/rpc.c b/wc3hook/rpc.c
+index bda6226..b77d0c7 100644
+--- a/wc3hook/rpc.c
++++ b/wc3hook/rpc.c
+@@ -12,6 +12,7 @@
+ static const char *STATUS_NAMES[] = {"launched", "in_game", "ended"};
+ volatile LONG g_status = ST_LAUNCHED;
+ static int g_mode;               /* 0 none, 1 stepping, 2 realtime */
++static int g_realtime_held;      /* a realtime game created with hold, its clock not yet released */
+ static int g_obs_seq[16];        /* observe sequence per player */
+ static char g_map[4 * MAX_PATH]; /* UTF-8 path passed to -loadfile by the launcher */
+ static char g_exe_hash[65];
+@@ -216,6 +217,8 @@ static void m_info(JW *w, LONGLONG id) {
+         jw_string(w, "realtime");
+     else
+         jw_null(w);
++    jw_key(w, "held");
++    jw_bool(w, g_realtime_held);
+     jw_key(w, "game_time_ms");
+     jw_uint(w, game_time());
+     jw_key(w, "instance");
+@@ -245,7 +248,7 @@ static int map_matches(const char *requested) {
+     return g_map[0] && (_stricmp(path, g_map) == 0 || (!strchr(path, '\\') && _stricmp(path, base) == 0));
+ }
+ typedef struct {
+-    int mode;
++    int mode, hold;
+     unsigned players;
+     int races[16], controls[16];
+     char error[160];
+@@ -272,6 +275,7 @@ static void restart_job(void *a) {
+     setup_clear();
+     g_status = ST_LAUNCHED;
+     g_mode = 0;
++    g_realtime_held = 0;
+     memset(g_obs_seq, 0, sizeof g_obs_seq);
+     step_restart();
+ }
+@@ -376,10 +380,41 @@ static void create_job(void *a) {
+     events_set_players(j->players);
+     g_mode = j->mode;
+     g_status = ST_IN_GAME;
+-    if (g_mode == 2)
++    g_realtime_held = g_mode == 2 && j->hold;
++    if (g_mode == 2 && !j->hold)
+         step_mode(0); /* release only after the event readers are ready */
+ }
+ 
++/* A realtime game created with hold stands at its start, as a stepping game between steps, until release lets
++ * its clock run: every player can look and send its first orders (queued for the first frame) before any time
++ * passes. */
++static void release_job(void *a) {
++    (void)a;
++    g_realtime_held = 0;
++    step_mode(0);
++}
++static void m_release(JW *w, LONGLONG id) {
++    if (g_status != ST_IN_GAME) {
++        reply_error(w, id, "bad_status", STATUS_ERR("release"));
++        return;
++    }
++    if (!g_realtime_held) {
++        reply_error(w, id, "bad_status", "release starts a realtime game created with hold, once");
++        return;
++    }
++    if (!run_on_game_thread(release_job, NULL, 5000)) {
++        reply_error(w, id, "bad_status", "the game thread did not answer");
++        return;
++    }
++    reply_head(w, id, 1);
++    jw_key(w, "result");
++    jw_open(w, '{');
++    jw_key(w, "game_time_ms");
++    jw_uint(w, game_time());
++    jw_close(w, '}');
++    jw_close(w, '}');
++}
++
+ static void m_create_game(JW *w, LONGLONG id, yyjson_val *params) {
+     char map[4 * MAX_PATH], mode[16];
+     if (g_status == ST_IN_GAME) {
+@@ -433,6 +468,12 @@ static void m_create_game(JW *w, LONGLONG id, yyjson_val *params) {
+         reply_error(w, id, "bad_params", "mode must be stepping or realtime");
+         return;
+     }
++    yyjson_val *hold = yyjson_obj_get(params, "hold");
++    if (hold && (!yyjson_is_bool(hold) || (yyjson_get_bool(hold) && strcmp(mode, "realtime")))) {
++        reply_error(w, id, "bad_params", "hold must be a bool, true only for a realtime game");
++        return;
++    }
++    j.hold = hold && yyjson_get_bool(hold);
+     if (!map_matches(map)) {
+         reply_error(w, id, "unsupported_config", "requested map differs from the file loaded at launch");
+         return;
+@@ -962,6 +1003,8 @@ void rpc_handle(const char *line) {
+                 m_info(&w, id);
+             else if (strcmp(method, "create_game") == 0)
+                 m_create_game(&w, id, params);
++            else if (strcmp(method, "release") == 0)
++                m_release(&w, id);
+             else if (strcmp(method, "reset") == 0)
+                 m_reset(&w, id);
+             else if (strcmp(method, "save_replay") == 0)

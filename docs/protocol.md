@@ -17,12 +17,13 @@ Requests are `{"id", "cmd", "args"}`. A reply is `{"id", "ok": true, "result"}`,
 
 | Command | Args | Result |
 |---|---|---|
-| `start` | `map`, `players` (`[{"slot", "race", "control": "agent" \| "computer"}]`), `step_ms`, `seed`, `randomize_starts`, `ai_difficulty` (0 easy, 1 normal, 2 insane), `render` and `visible` (draw the game in a window on the display, for its picture), `mode` (`stepping`, or `realtime`: the game runs on its own clock and `step` only sends orders and observes) | `{"observations": {slot: observation}, "setup"}`: closes any game before, launches the game, and returns every player's first observation (wc3env's JSON observations) |
+| `start` | `map`, `players` (`[{"slot", "race", "control": "agent" \| "computer"}]`), `step_ms`, `seed`, `randomize_starts`, `ai_difficulty` (0 easy, 1 normal, 2 insane), `render` and `visible` (draw the game in a window on the display, for its picture), `mode` (`stepping`, or `realtime`: the game runs on its own clock and `step` only sends orders and observes) | `{"observations": {slot: observation}, "setup", "held"}`: closes any game before, launches the game, and returns every player's first observation (wc3env's JSON observations). `held`: a realtime game stands at its start until `release` (a wc3env without hold starts it at once) |
 | `validate` | `slot`, `actions` | `{"valid": n}`, or `bad_actions`: wc3env's own host checks against the slot's newest observation, without sending anything |
 | `step` | `actions` (`{slot: [action]}`; a slot left out sends none), `ms` (a multiple of 25, 25-60000) | `{"observations", "done", "rejected": {slot: [{"index", "reason"}]}, "placements": {slot: [{"index", "x", "y"}]}, "elapsed_ms"}` |
 | `observe` | | `{"observations", "done"}` |
 | `replay` | | `{"name": "game.w3g", "base64"}`: the episode's native replay; recording stops |
 | `debug` | `op`, `args` | wc3env's `GameSession.debug`; with `--fake`, `end` ends the game with `args.result` |
+| `release` | | `{"released": bool}`: starts the clock of a held realtime game; orders sent before run from its first frame |
 | `close` | | `{"closed": true}` |
 
 Error codes: `bad_config`, `bad_args`, `bad_actions`, `no_game`, `no_replay`, `unknown_command`, `bad_request`, and

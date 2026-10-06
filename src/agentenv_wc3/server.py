@@ -239,6 +239,9 @@ class WC3Env(AgentEnvEnvironment):
         self.step_info: dict[int, dict] = {}
         self.orders_sent: dict[int, int] = {}
         self.lockstep: Lockstep | None = None
+        self.started = asyncio.Event()
+        self.ready: set[int] = set()
+        self.created = time.monotonic()
         self.metrics: metrics.Metrics | None = None
         self.done = False
         self.names = render.Names()
@@ -287,6 +290,9 @@ class WC3Env(AgentEnvEnvironment):
                                         visible=scenario["client_view"],
                                         window=WINDOW if scenario["client_view"] else None)
         self.scenario, self.setup, self.seats = scenario, result.get("setup"), seats
+        self.started, self.ready, self.created = asyncio.Event(), set(), time.monotonic()
+        if not result.get("held"):
+            self.started.set()
         self.lead = next(x["slot"] for x in seats if x["computer"] is None)
         self.obs = {int(k): v for k, v in result["observations"].items()}
         agents = [x["slot"] for x in seats if x["computer"] is None]
@@ -379,6 +385,7 @@ class WC3Env(AgentEnvEnvironment):
     async def _play(self, slot: int, batch: list[dict], ms: int) -> dict:
         """A seat's orders and `ms` of game time: one step, or, with several agent seats stepping, a turn of the
         lockstep clock, which moves when they all wait. The step's refusals and sites for this seat's orders."""
+        await self._ready(slot)
         ms = max(25, min(ms, round((self.scenario["time_limit_seconds"] - self._seconds()) * 1000) // 25 * 25))
         self.step_info[slot] = {"rejected": [], "placements": [], "sent": len(batch)}
         if self.lockstep is None:
@@ -386,6 +393,35 @@ class WC3Env(AgentEnvEnvironment):
         else:
             await self.lockstep.step(slot, batch, ms / 1000)
         return self.step_info.pop(slot)
+
+    async def _ready(self, slot: int) -> None:
+        """A seat's first move says it is ready. A realtime game stands at its start until every agent seat is
+        ready, then starts at once with all their opening orders; a seat silent for lockstep's stall_seconds since
+        the game began doesn't hold the start. (In stepping mode time passes only as the seats step anyway.)"""
+        self.ready.add(slot)
+        stall = self.scenario["lockstep"]["stall_seconds"]
+        while not self.started.is_set() and not self._out(slot):
+            waiting = [x["slot"] for x in self.seats if x["computer"] is None and x["slot"] not in self.ready
+                       and not self._out(x["slot"])]
+            left = stall - (time.monotonic() - self.created)
+            if not waiting or left <= 0:
+                if waiting:
+                    log.warning("starting without slot(s) %s: no first move in %s s", waiting, stall)
+                await self._start()
+                break
+            try:
+                await asyncio.wait_for(self.started.wait(), timeout=min(left, 1.0))
+            except TimeoutError:
+                pass
+
+    async def _start(self) -> None:
+        """Lets a realtime game held at its start run on its own clock."""
+        async with self.lock:
+            if self.started.is_set():
+                return
+            await self.bridge.call("release")
+            self.started.set()
+            log.warning("GAME STARTED at %.1f s, ready: %s", self._seconds(), sorted(self.ready))
 
     async def _chunk(self, batches: dict[int, list], seconds: float) -> None:
         """One step of the game with every waiting seat's orders; its observations become the game's state."""
@@ -806,8 +842,10 @@ class WC3Env(AgentEnvEnvironment):
         if not 1 <= seconds <= 4 * 3600:
             raise ValueError("seconds must be 1 to 14400")
         async with self.lock:
+            await self._session_game()
+        await self._start()
+        async with self.lock:
             try:
-                await self._ensure_game()
                 start = self._seconds()
                 limit = self.scenario["time_limit_seconds"]
                 while not self.game_over and self._seconds() - start < seconds:
@@ -997,6 +1035,7 @@ class WC3Env(AgentEnvEnvironment):
             if seat is not None:
                 infos = {seat["slot"]: await self._play(seat["slot"], [a for _, a in sent.get(seat["slot"], [])], ms)}
             else:
+                await self._ready(self.lead)
                 self.step_info = {slot: {"rejected": [], "placements": [], "sent": len(k)} for slot, k in sent.items()}
                 await self._chunk({slot: [a for _, a in k] for slot, k in sent.items()}, ms / 1000)
                 infos, self.step_info = self.step_info, {}
@@ -1194,7 +1233,10 @@ class WC3Env(AgentEnvEnvironment):
         return (f"You are slot {slot}, {me['race'].replace('_', ' ')}, team {me['team']}"
                 + (f", with {', '.join(allies)}" if allies else "")
                 + f". Against: {', '.join(enemies) or 'nobody'}. The game ends when a side has no buildings left, or "
-                f"at the {self.scenario['time_limit_seconds'] // 60}-minute limit, where the higher score is ahead.")
+                f"at the {self.scenario['time_limit_seconds'] // 60}-minute limit, where the higher score is ahead."
+                + ("" if self.started.is_set() or self._out(slot) else
+                   " The clock starts once every player has made its first move: plan as long as you like; your "
+                   "first advance sends your opening orders."))
 
     def _client_frame(self) -> bytes | None:
         return self.capture.latest() if self.capture is not None else None

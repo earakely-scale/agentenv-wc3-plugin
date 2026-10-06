@@ -275,6 +275,16 @@ go.
   seats, with staged armies that fight, over 91 steps. The same seed gave the same observations at every step and the
   same end state for all four players, both in one container and in a fresh one. Another seed differed from the first
   step. Realtime games are not expected to repeat.
+- **The start:** a seat's first move says it is ready, and the game starts once every agent seat is ready, with
+  all their opening orders. A seat with no first move within lockstep's `stall_seconds` doesn't hold the start.
+  Stepping games already worked this way, since time passes only as the seats step. A realtime game is now created
+  held at its start, using the hook's `hold` and `release` from `patches/wc3env-realtime-hold.patch`; without the
+  patch, it starts when created.
+  Verified on the real game with two agents and a computer:
+  - with one agent ready, the clock, the computer and that agent's units stood still for 5 s;
+  - when the second moved, the game started at once and both openings ran.
+
+  One agent at the root starts the game with its first move.
 - **Free-for-all:** a seat that is out (it has a result) is done: its own session says so, its agent stops, and
   lockstep goes on without it; the game is over once every agent seat has a result. Verified on the real game with
   three agent seats on three teams. Slot 0 (the game's own local player) was knocked out first and the other two

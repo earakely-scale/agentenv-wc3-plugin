@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import dataclasses
 import json
 import os
 import sys
@@ -58,6 +59,7 @@ class Worker:
         self.fake = fake
         self.session = None
         self.wall_clock: float | None = None   # the fake game in realtime: its clock follows the wall's
+        self.held = False   # a realtime game standing at its start until release
 
     # ---- commands ----
 
@@ -66,15 +68,18 @@ class Worker:
               visible: bool = False, window: list[int] | None = None, mode: str = "stepping",
               ai_agents: list[int] | None = None) -> dict:
         """A new game: closes the one before, launches the game with these players, and returns every player's
-        first observation and the accepted setup. In `realtime` mode the game runs on its own clock; `render` and
-        `visible` draw the game in a window on the display, for its picture, `window` [width, height] big;
-        `ai_agents` are agent slots the game's own AI plays beside."""
+        first observation and the accepted setup. In `realtime` mode the game runs on its own clock from `release`
+        (`held` says it waits for one: a wc3env without hold starts it at once); `render` and `visible` draw the
+        game in a window on the display, for its picture, `window` [width, height] big; `ai_agents` are agent slots
+        the game's own AI plays beside."""
         from wc3env.session import GameConfig, GameSession, MatchSetup, PlayerConfig
 
         self.close()
-        # The fake game only moves when stepped, so realtime on it is stepping by the wall time that has passed.
-        self.wall_clock = time.monotonic() if self.fake and mode == "realtime" else None
-        if self.wall_clock is not None:
+        # The fake game only moves when stepped, so realtime on it is stepping by the wall time since release.
+        self.wall_clock = None
+        self.held = mode == "realtime" and (self.fake or "hold" in {f.name for f in dataclasses.fields(GameConfig)})
+        hold = {"hold": True} if self.held and not self.fake else {}
+        if self.fake and mode == "realtime":
             mode = "stepping"
         try:
             config = GameConfig(
@@ -83,7 +88,7 @@ class Worker:
                 mode=mode, step_ms=step_ms, render=render, background_visible=visible, sound=False,
                 ai_difficulty=ai_difficulty, ai_agents=tuple(ai_agents or ()),
                 setup=MatchSetup(seed=seed, randomize_starts=randomize_starts),
-                output_dir=os.environ.get("WC3_OUTPUT_DIR") or None,
+                output_dir=os.environ.get("WC3_OUTPUT_DIR") or None, **hold,
             )
         except (TypeError, ValueError) as e:
             raise WorkerError("bad_config", str(e)) from e
@@ -91,7 +96,19 @@ class Worker:
         observations = self.session.reset()
         if visible and window and not self.fake:
             self.session.game.resize(*window)
-        return {"observations": _keyed(observations), "setup": self.session.setup}
+        return {"observations": _keyed(observations), "setup": self.session.setup, "held": self.held}
+
+    def release(self) -> dict:
+        """Starts the clock of a realtime game held at its start; a game already running is left as it is."""
+        session = self._session()
+        if not self.held:
+            return {"released": False}
+        if self.fake:
+            self.wall_clock = time.monotonic()
+        else:
+            session.release()
+        self.held = False
+        return {"released": True}
 
     def validate(self, slot: int, actions: list[dict]) -> dict:
         """Checks a batch against the slot's newest observation as step() will, without sending it."""
@@ -166,7 +183,7 @@ class Worker:
 
     # ---- the loop ----
 
-    COMMANDS = ("start", "validate", "step", "observe", "replay", "debug", "close")
+    COMMANDS = ("start", "validate", "step", "observe", "replay", "debug", "release", "close")
 
     def handle(self, request: dict) -> dict:
         rid = request.get("id")

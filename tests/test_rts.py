@@ -438,6 +438,23 @@ async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
     assert summary["seats"][0]["metrics"]["workers"] == 5
 
 
+async def test_a_realtime_game_starts_once_every_seat_has_moved(env_vars):
+    async with deployed(WC3Env()) as record:
+        await client.invoke_extension(record.environment_url, record.environment_card, "urn:wc3:new-game/v1",
+                                      {"seats": SEATS, "mode": "realtime", "time_limit_seconds": 60})
+        a, b = RemoteSession(base(record) + "/seats/a"), RemoteSession(base(record) + "/seats/b")
+        async with streamable_http_client(base(record) + "/seats/b/mcp") as (read, write, _), \
+                ClientSession(read, write) as mcp:
+            await mcp.initialize()
+            state = (await mcp.call_tool("get_state", {})).content[0].text
+        assert "The clock starts once every player has made its first move" in state
+        first = asyncio.create_task(asyncio.to_thread(a.step, {0: []}, 1000))
+        await asyncio.sleep(1.5)
+        assert not first.done()   # a is ready; the game waits for b
+        await asyncio.to_thread(b.step, {1: []}, 1000)
+        assert (await first)["observations"][0]["game_time_seconds"] < 1.0   # the 1.5 s a waited were not played
+
+
 async def test_lockstep_moves_to_the_nearest_deadline():
     clock, moves = {"t": 0.0}, []
 
