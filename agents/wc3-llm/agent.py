@@ -6,7 +6,8 @@ A plain tool loop: the model calls tools until it answers without one, and is to
 times) if the game is not over then. A long game fits: once the tool results pass TRIM_CHARS, all but the last KEEP
 are trimmed, and the system prompt and the newest message are marked for prompt caching, so each turn pays for its
 history once (Anthropic models through LiteLLM; other providers ignore the marks). Spectators see its model as its
-name, what it writes between tool calls as its plan, and its running cost (urn:rts:note/v1).
+name, what it writes between tool calls as its plan, and its running cost (urn:rts:note/v1). With
+WC3_MAX_COST_USD it stops playing once a game has cost that much (the task's rts_finish then plays the game out).
 """
 
 from __future__ import annotations
@@ -111,10 +112,11 @@ class Player:
 
     def __init__(self, model: str, server: dict, environ: dict[str, str], max_turns: int):
         self.model, self.server, self.max_turns = model, server, max_turns
+        self.max_cost = float(environ.get("WC3_MAX_COST_USD") or "inf")
         self.base, self.key = endpoint(environ)
         self.session = RemoteSession(server["url"].rstrip("/").removesuffix("/mcp"), headers=server.get("headers"))
         self.stats = {"turns": 0, "tool_calls": 0, "nudges": 0, "input_tokens": 0, "output_tokens": 0,
-                      "cached_tokens": 0, "cost_usd": 0.0}
+                      "cached_tokens": 0, "cost_usd": 0.0, "stopped_at_cost_cap": False}
         self.chat: list[dict] = []
         self.reply, self.named = "", False
 
@@ -140,6 +142,9 @@ class Player:
             await mcp.initialize()
             tools = tools_of((await mcp.list_tools()).tools)
             while self.stats["turns"] < self.max_turns:
+                if self.stats["cost_usd"] >= self.max_cost:
+                    self.stats["stopped_at_cost_cap"] = True
+                    break
                 message, usage, cost = await complete(http, self.base, self.key, self.model, self.chat, tools)
                 self.count(usage, cost)
                 calls = message.get("tool_calls") or []
@@ -165,9 +170,13 @@ class Player:
                 if not self.named:   # after its first tool calls, which start the game if none has
                     self.named = True
                     await self.note("player", model_name(self.model))
-                await self.note("stats", data={"cost_usd": round(self.stats["cost_usd"], 4),
-                                               "decisions": self.stats["turns"],
-                                               "tokens": self.stats["input_tokens"] + self.stats["output_tokens"]})
+                await self.report()
+            await self.report()
+
+    async def report(self) -> None:
+        """Its spend so far, for spectators and the env's summary."""
+        await self.note("stats", data={"cost_usd": round(self.stats["cost_usd"], 4), "decisions": self.stats["turns"],
+                                       "tokens": self.stats["input_tokens"] + self.stats["output_tokens"]})
 
     async def call(self, mcp: ClientSession, function: dict) -> str:
         self.stats["tool_calls"] += 1

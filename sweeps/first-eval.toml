@@ -1,0 +1,14 @@
+# Four low-cost models against the game's easy Orc AI on two 1v1 maps, three seeds each: 24 five-minute games.
+# agent-env wc3 sweep generate sweeps/first-eval.toml runs/first-eval
+# agent-env wc3 sweep run runs/first-eval --budget 5
+name = "first-eval"
+template = "vs-ai-quick"
+models = [
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.4-mini",
+  "gemini/gemini-3.8-flash",
+  "fireworks_ai/deepseek-v4p1-flash",
+]
+maps = ["(2)EchoIsles.w3x", "(2)TerenasStand.w3x"]
+seeds = [1, 2, 3]
+max_cost_usd = 0.5

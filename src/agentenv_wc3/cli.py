@@ -26,7 +26,7 @@ from agent_env.config import get_config
 
 from agentenv_rts import broadcast
 
-from . import drills, steps
+from . import drills, steps, sweep
 
 ENVIRONMENT_NAME = "wc3"
 BASE_IMAGE = "wc3-worker:local"
@@ -455,3 +455,49 @@ def import_drills(wc3env_dir: Path | None, out_dir: Path):
         except ValueError as e:
             raise click.ClickException(str(e)) from e
     click.echo(f"Wrote {len(written)} drill tasks into {out_dir}")
+
+
+@wc3.group("sweep")
+def sweep_group():
+    """Sweeps: one template task crossed over models, maps, races, opponents and seeds, played as an eval under a
+    spend budget and tabulated."""
+
+
+@sweep_group.command("generate")
+@click.argument("spec_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("out_dir", type=click.Path(file_okay=False, path_type=Path))
+def generate_sweep(spec_file: Path, out_dir: Path):
+    """Write the sweep SPEC_FILE describes into OUT_DIR, a bundle folder: a task per combination, an eval over
+    them and sweep.json, each task's axes."""
+    try:
+        names = sweep.generate(sweep.Spec.load(spec_file), out_dir)
+    except (ValueError, TypeError) as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(f"Wrote {len(names)} tasks into {out_dir}; play them with: agent-env wc3 sweep run {out_dir} "
+               f"--budget <usd>")
+
+
+@sweep_group.command("run")
+@click.argument("out_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--budget", type=float, required=True,
+              help="The model spend, in USD, the sweep stays within: no game starts that could take it past this "
+                   "at the sweep's per-game cap.")
+@click.option("--parallel", default=2, show_default=True, help="Games at a time.")
+def run_sweep(out_dir: Path, budget: float, parallel: int):
+    """Play the sweep in OUT_DIR, one `agent-env run` per game, logged under OUT_DIR/logs. Each finished game is
+    a line of OUT_DIR/results.jsonl; run it again to play the games not in it yet."""
+    sweep.run(out_dir, budget, parallel, echo=click.echo)
+    click.echo(sweep.report(out_dir))
+
+
+@sweep_group.command("report")
+@click.argument("out_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--out", "out_file", type=click.Path(dir_okay=False, path_type=Path),
+              help="Also write the report to this Markdown file.")
+def report_sweep(out_dir: Path, out_file: Path | None):
+    """The sweep's results by model, map and seed."""
+    text = sweep.report(out_dir)
+    if out_file:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(text)
+    click.echo(text)

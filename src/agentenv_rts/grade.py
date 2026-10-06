@@ -344,6 +344,7 @@ class RTSGradeTaskStep(TaskStep):
                            "weight": GATE_WEIGHT, "evidence": repr(e)}] for k in keys}
         else:
             graded = step.grade(summary)
+            context.metadata.setdefault("rts_summary", {})[step.verifier_id] = summary   # what was graded
         verifications = context.metadata.setdefault("verifications", {})
         for key, rows in graded.items():
             verifications[key] = {"results": rows, "score": aggregate_score(rows, ScoreAggregator.WEIGHTED_AVERAGE)}

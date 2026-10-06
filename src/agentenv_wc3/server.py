@@ -832,6 +832,7 @@ class WC3Env(AgentEnvEnvironment):
                            "orders_sent": self.orders_sent.get(x["slot"], 0),
                            "stalls": self.lockstep.stalls.get(x["slot"], 0) if self.lockstep else 0,
                            "last_move_seconds": self.last_move.get(x["slot"]), "forfeit": x["slot"] in self.forfeits,
+                           "spend": self.agents.get(x["slot"]) or {},
                            "metrics": self.metrics.of(x["slot"], self.obs.get(x["slot"]) or {})
                            if self.metrics is not None and self.obs else {}} for x in self.seats],
                 "finish": self.finished,
