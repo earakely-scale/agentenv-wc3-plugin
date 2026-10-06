@@ -34,6 +34,19 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3",
+      "opponent"
+    ],
+    "depends_on": [
+      "agent",
+      "opponent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -53,8 +66,7 @@
       }
     ],
     "depends_on": [
-      "agent",
-      "opponent"
+      "deploy"
     ]
   },
   {
@@ -115,7 +127,8 @@
     "prompt": "Two Grunts and a Headhunter are raiding your Peasants; your only soldiers are two Footmen across the base. Human bases defend with the Town Hall: cast Call to Arms at the Town Hall so nearby Peasants turn into Militia, fight the raiders with the Militia and the Footmen right next to the hall, and once the raiders are dead cast Back to Work at the Town Hall so everyone mines again (Militia lasts 45 seconds).",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
     ]
   },
   {
@@ -126,7 +139,17 @@
     "prompt": "Play your seat with the script.",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play",
+      "play-opponent"
     ]
   },
   {
@@ -171,7 +194,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

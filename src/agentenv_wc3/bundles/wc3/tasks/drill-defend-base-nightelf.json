@@ -34,6 +34,19 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3",
+      "opponent"
+    ],
+    "depends_on": [
+      "agent",
+      "opponent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -53,8 +66,7 @@
       }
     ],
     "depends_on": [
-      "agent",
-      "opponent"
+      "deploy"
     ]
   },
   {
@@ -142,7 +154,8 @@
     "prompt": "Three Footmen and a Rifleman are raiding your Wisps; three Archers are across the base. Wisps cannot fight: move them behind the Tree of Life. Your buildings can fight: cast Uproot at the Ancient of War so it walks and attacks (cast Root when it is over), the Ancient Protector shoots on its own, and the Moon Well heals a hurt unit standing next to it (cast Replenish Mana and Life at the Moon Well on the unit). Bring the Archers back and fight beside the Ancient Protector and the Moon Well.",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
     ]
   },
   {
@@ -153,7 +166,17 @@
     "prompt": "Play your seat with the script.",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play",
+      "play-opponent"
     ]
   },
   {
@@ -193,7 +216,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

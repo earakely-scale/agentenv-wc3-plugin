@@ -24,6 +24,8 @@ OBSERVE = "urn:rts:observe/v1"
 STEP = "urn:rts:step/v1"
 DEBUG = "urn:rts:debug/v1"
 NOTE = "urn:rts:note/v1"
+FINISH = "urn:rts:finish/v1"
+FINISH_RULES = ("play_out", "forfeit", "as_is")
 NOTE_KINDS = ("plan", "player", "stats")
 CARD_PATH = "/.well-known/agent-env.json"
 

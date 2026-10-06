@@ -19,6 +19,17 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3"
+    ],
+    "depends_on": [
+      "agent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -37,7 +48,7 @@
       }
     ],
     "depends_on": [
-      "agent"
+      "deploy"
     ]
   },
   {
@@ -49,7 +60,16 @@
     "prompt": "Play a real game against the easy computer for ten minutes. Build an economy, a hero and an army, creep for levels, and be strong at the end.",
     "timeout_seconds": 7200,
     "depends_on": [
-      "match"
+      "match",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play"
     ]
   },
   {
@@ -94,7 +114,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

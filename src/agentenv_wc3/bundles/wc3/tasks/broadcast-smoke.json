@@ -1,0 +1,178 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "wc3"
+  },
+  {
+    "id": "agent-red",
+    "type": "deploy_agent",
+    "agent_name": "red",
+    "a2a_agent_id": "wc3-scripted",
+    "env_ids": [],
+    "env_vars": {
+      "SCRIPT": "attack"
+    },
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-blue",
+    "type": "deploy_agent",
+    "agent_name": "blue",
+    "a2a_agent_id": "wc3-scripted",
+    "env_ids": [],
+    "env_vars": {
+      "SCRIPT": "raid",
+      "SCRIPT_AFTER_SECONDS": "30"
+    },
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "red",
+      "blue"
+    ],
+    "depends_on": [
+      "agent-red",
+      "agent-blue"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "wc3_match",
+    "env_id": "wc3",
+    "map": "(2)EchoIsles.w3x",
+    "seed": 3,
+    "time_limit_seconds": 120,
+    "mode": "stepping",
+    "allow_debug": false,
+    "seats": [
+      {
+        "agent": "red",
+        "race": "human"
+      },
+      {
+        "agent": "blue",
+        "race": "orc"
+      }
+    ],
+    "labels": {
+      "0": "Red",
+      "1": "Blue"
+    },
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "stage",
+    "type": "apply_server_config",
+    "env_id": "wc3",
+    "timeout_seconds": 600,
+    "directives": [
+      {
+        "service": "wc3",
+        "uri": "urn:wc3:stage/v1",
+        "args": {
+          "ops": [
+            {
+              "op": "spawn",
+              "player": "red",
+              "type": "hfoo",
+              "n": 4,
+              "at": "toward:enemy_home:3000",
+              "as": "army"
+            },
+            {
+              "op": "spawn",
+              "player": "blue",
+              "type": "ogru",
+              "n": 3,
+              "at": "toward:enemy_home:2600",
+              "as": "enemy"
+            }
+          ]
+        }
+      }
+    ],
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "broadcast",
+    "type": "rts_broadcast",
+    "env_id": "wc3",
+    "cast": false,
+    "title": "Broadcast smoke",
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "play-red",
+    "type": "prompt_agent",
+    "agent_name": "red",
+    "prompt_id": "broadcast-smoke-red",
+    "prompt": "Play your seat with the script.",
+    "timeout_seconds": 3600,
+    "depends_on": [
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "play-blue",
+    "type": "prompt_agent",
+    "agent_name": "blue",
+    "prompt_id": "broadcast-smoke-blue",
+    "prompt": "Play your seat with the script.",
+    "timeout_seconds": 3600,
+    "depends_on": [
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play-red",
+      "play-blue"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "rts_grade",
+    "env_id": "wc3",
+    "rubric": "dense",
+    "verifier_id": "broadcast-smoke",
+    "depends_on": [
+      "finish"
+    ]
+  },
+  {
+    "id": "replay",
+    "type": "save_wc3_replay",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_rts_recording",
+    "env_id": "wc3",
+    "depends_on": [
+      "grade"
+    ]
+  }
+]

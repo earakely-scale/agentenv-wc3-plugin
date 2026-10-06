@@ -2,22 +2,31 @@
 the ffmpeg commands it runs, the page it shows, what it keeps out of its output, when it ends the stream, and the
 docker run the command builds, its secrets in the environment only."""
 
+import asyncio
 import http.server
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from agent_env.artifact import FileArtifact
 from agent_env.config import ConfigError
+from agent_env.task_step.context import TaskStepContext
 from click.testing import CliRunner
+from test_steps import deployed, run_context
 
+from agentenv_rts import broadcast
+from agentenv_rts.session import RemoteSession
+from agentenv_rts.steps import RTSBroadcastTaskStep, RTSFinishTaskStep
 from agentenv_rts.streamer import stream
 from agentenv_wc3 import cli
+from agentenv_wc3.server import WC3Env
 
 STREAM_KEY, X_KEY, MODEL_KEY = "live_123_secret", "x_456_secret", "sk-model-key-456"
 
@@ -181,6 +190,7 @@ class Docker:
 def docker(monkeypatch):
     fake = Docker()
     monkeypatch.setattr(cli, "subprocess", fake)
+    monkeypatch.setattr(broadcast, "subprocess", fake)
     monkeypatch.setattr(cli.sys, "platform", "linux")
     return fake
 
@@ -188,7 +198,7 @@ def docker(monkeypatch):
 @pytest.fixture
 def playing(monkeypatch):
     """Every live view answers, with a game under way."""
-    monkeypatch.setattr(cli, "_state", lambda url: {"game_over": False, "result": "", "t": 0.0, "client": False})
+    monkeypatch.setattr(broadcast, "state", lambda url: {"game_over": False, "result": "", "t": 0.0, "client": False})
 
 
 def configure(monkeypatch, *, model: bool = True, **secrets):
@@ -203,7 +213,7 @@ def configure(monkeypatch, *, model: bool = True, **secrets):
     config = SimpleNamespace(get_secret_store=lambda: SimpleNamespace(get=secrets.get),
                              get_litellm_base_url=endpoint("http://localhost:4000"),
                              get_litellm_api_key=endpoint(MODEL_KEY))
-    monkeypatch.setattr(cli, "get_config", lambda: config)
+    monkeypatch.setattr(broadcast, "get_config", lambda: config)
 
 
 def invoke(*args: str):
@@ -215,13 +225,13 @@ def test_stream_sends_the_newest_game_still_playing_to_twitch_with_the_casters(d
     docker.ps = ("mcp-server-wc3\t127.0.0.1:42000->18765/tcp\tagent-local-over\n"
                  "postgres:16\t127.0.0.1:5432->5432/tcp\tdb\n"
                  "mcp-server-wc3\t127.0.0.1:41000->18765/tcp\tagent-local-playing\n")
-    monkeypatch.setattr(cli, "_state", lambda url: {"game_over": "42000" in url, "t": 300.0})
+    monkeypatch.setattr(broadcast, "state", lambda url: {"game_over": "42000" in url, "t": 300.0})
     result = invoke("--linger", "30")
     assert result.exit_code == 0, result.output
     (build,), [(args, env)] = docker.builds, docker.runs
     image = build[3]
     assert re.fullmatch(r"rts-streamer:[0-9a-f]{12}", image) and build == ["docker", "build", "-t", image,
-                                                                         str(cli.STREAMER)]
+                                                                         str(broadcast.STREAMER)]
     assert args == ["docker", "run", "--rm", "--shm-size", "1g", "--network", "host", "-e", "STREAM_URL",
                     "-e", "CAST_BASE_URL", "-e", "CAST_API_KEY", image, "--url", "http://127.0.0.1:41000/live",
                     "--size", "1920x1080", "--fps", "30", "--bitrate", "4500k", "--linger", "30",
@@ -301,7 +311,7 @@ def test_stream_explains_what_it_needs_before_it_runs_anything(docker, playing, 
     result = invoke("--offline", "--record", str(tmp_path))
     assert result.exit_code == 1
     assert "the casters need agent-env's model endpoint: No model endpoint configured" in result.output
-    assert result.output.rstrip().endswith("or stream without them: --no-cast")
+    assert result.output.rstrip().endswith("or broadcast without them (--no-cast, or cast: false)")
     assert docker.builds == docker.runs == []
 
     docker.code = 1
@@ -311,13 +321,13 @@ def test_stream_explains_what_it_needs_before_it_runs_anything(docker, playing, 
 
 def test_stream_waits_until_the_env_has_a_game_under_way(docker, monkeypatch, env_state, tmp_path):
     url, box = env_state
-    assert cli._ready(url)
+    assert broadcast.ready(url)
     box["doc"] = {"game_over": True, "result": "defeat", "t": 300.0, "client": False}
-    assert not cli._ready(url)
+    assert not broadcast.ready(url)
     box["doc"] = None
-    assert cli._state(url) is None and not cli._ready(url)
+    assert broadcast.state(url) is None and not broadcast.ready(url)
     box["doc"] = {"game_over": False, "result": "", "t": None, "client": False}   # deployed, its match not begun
-    assert not cli._ready(url)
+    assert not broadcast.ready(url)
 
     waits = []
 
@@ -333,3 +343,97 @@ def test_stream_waits_until_the_env_has_a_game_under_way(docker, monkeypatch, en
     assert f"Waiting for the game at {url} to start" in result.output and waits == [5, 5]
     args, _ = docker.runs[-1]
     assert args[args.index("--url") + 1] == url
+
+
+FAKE_DOCKER = """#!{python}
+import json, os, pathlib, signal, sys, time
+args = sys.argv[1:]
+here = pathlib.Path(os.environ["FAKE_DOCKER_DIR"])
+with (here / "calls.jsonl").open("a") as f:
+    f.write(json.dumps(args) + "\\n")
+if args[0] == "stop":
+    os.kill(int((here / (args[-1] + ".pid")).read_text()), signal.SIGTERM)
+elif args[0] == "run":
+    (here / (args[args.index("--name") + 1] + ".pid")).write_text(str(os.getpid()))
+    rec = next(a.split(":")[0] for a in args if a.endswith(":/rec"))
+
+    def finish(*_):
+        pathlib.Path(rec, "stream-test.mp4").write_bytes(b"\\0\\0\\0\\x18ftypisom" + b"x" * 100)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, finish)
+    if os.environ.get("FAKE_STREAM") == "end":
+        time.sleep(1)
+        finish()
+    while True:
+        time.sleep(0.1)
+"""
+
+
+@pytest.fixture
+def fake_docker(tmp_path, monkeypatch):
+    """A `docker` on PATH that records its calls; `run` records a broadcast and exits after a second (FAKE_STREAM=end)
+    or streams until `docker stop` (SIGTERM), as the streamer does."""
+    directory = tmp_path / "docker-bin"
+    directory.mkdir()
+    (directory / "docker").write_text(FAKE_DOCKER.format(python=sys.executable))
+    (directory / "docker").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}:{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_DOCKER_DIR", str(directory))
+    monkeypatch.setattr(RTSBroadcastTaskStep, "POLL_SECONDS", 0.2)
+    return lambda: [json.loads(line) for line in (directory / "calls.jsonl").read_text().splitlines()]
+
+
+async def broadcast_of(record, **options) -> TaskStepContext:
+    step = RTSBroadcastTaskStep(id="broadcast", version=None, env_id="wc3", cast=False, **options)
+    return await step.execute(run_context(record))
+
+
+@pytest.mark.anyio
+async def test_a_broadcast_step_records_the_game_and_keeps_its_keys_off_the_command_line(
+        env_vars, local_stores, fake_docker, monkeypatch):
+    monkeypatch.setenv("FAKE_STREAM", "end")
+    async with deployed(WC3Env()) as record:
+        await asyncio.to_thread(RemoteSession(record.mcp_url.removesuffix("/mcp")).step, {0: []})
+        context = await broadcast_of(record)
+    [saved] = context.metadata["broadcasts"]["broadcast"]
+    assert saved["name"] == "stream-test.mp4" and FileArtifact.get(saved["artifact_id"], 1).load()[4:8] == b"ftyp"
+    run = next(c for c in fake_docker() if c[0] == "run")
+    live = record.environment_url + "/live"
+    assert run[run.index("--url") + 1] == (broadcast.from_container(live) if sys.platform == "darwin" else live)
+    assert run[-2:] == ["--record", "/rec"]
+    assert "STREAM_URL" in run and "--cast-config" not in run
+
+
+@pytest.mark.anyio
+async def test_a_broadcast_ends_when_the_game_stands_still_or_the_step_is_cancelled(
+        env_vars, local_stores, fake_docker, monkeypatch):
+    monkeypatch.setenv("FAKE_STREAM", "hang")
+    async with deployed(WC3Env()) as record:
+        await asyncio.to_thread(RemoteSession(record.mcp_url.removesuffix("/mcp")).step, {0: []})
+        context = await asyncio.wait_for(broadcast_of(record, stall_seconds=1), 20)   # nobody plays: it stalls
+        assert [c[0] for c in fake_docker()][-2:] == ["run", "stop"]
+        assert context.metadata["broadcasts"]["broadcast"][0]["name"] == "stream-test.mp4"
+        running = asyncio.create_task(broadcast_of(record))
+        await asyncio.sleep(2)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        assert [c[0] for c in fake_docker()][-2:] == ["run", "stop"]   # the container did not outlive the step
+
+
+@pytest.mark.anyio
+async def test_a_broadcast_of_a_finished_game_or_without_its_key_starts_nothing(env_vars, local_stores, fake_docker,
+                                                                             monkeypatch):
+    monkeypatch.delenv("TWITCH_STREAM_KEY", raising=False)
+    async with deployed(WC3Env()) as record:
+        session = RemoteSession(record.mcp_url.removesuffix("/mcp"))
+        await asyncio.to_thread(session.step, {0: []})
+        with pytest.raises(broadcast.BroadcastError, match="TWITCH_STREAM_KEY"):
+            await broadcast_of(record, to=["twitch"])
+        await RTSFinishTaskStep(id="finish", version=None, env_id="wc3", rule="forfeit").execute(run_context(record))
+        context = await broadcast_of(record)
+    assert context.metadata["broadcasts"]["broadcast"] == []
+    assert not any(c[0] == "run" for c in fake_docker())
+    with pytest.raises(ValueError, match="goes nowhere"):
+        RTSBroadcastTaskStep(id="b", version=None, env_id="wc3", record=False)

@@ -19,6 +19,17 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3"
+    ],
+    "depends_on": [
+      "agent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -37,7 +48,7 @@
       }
     ],
     "depends_on": [
-      "agent"
+      "deploy"
     ]
   },
   {
@@ -114,7 +125,16 @@
     "prompt": "Your Archmage is caught alone by Grunts far from base and will die. Your Altar of Kings stands at home and you have gold. Get the Archmage back into play.",
     "timeout_seconds": 2160,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play"
     ]
   },
   {
@@ -134,7 +154,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

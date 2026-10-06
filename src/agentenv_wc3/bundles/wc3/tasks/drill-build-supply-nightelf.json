@@ -19,6 +19,17 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3"
+    ],
+    "depends_on": [
+      "agent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -37,7 +48,7 @@
       }
     ],
     "depends_on": [
-      "agent"
+      "deploy"
     ]
   },
   {
@@ -90,7 +101,16 @@
     "prompt": "You are almost at the food cap with money in the bank. Build Moon Wells right away, at least three, so production never stops: keep the hall training workers the whole time and never get supply blocked. Send workers to gold and lumber first.",
     "timeout_seconds": 2160,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play"
     ]
   },
   {
@@ -125,7 +145,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

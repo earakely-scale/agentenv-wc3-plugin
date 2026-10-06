@@ -13,8 +13,8 @@ from agentenv_wc3.cli import wc3
 
 TASKS = Path(__file__).resolve().parents[1] / "src/agentenv_wc3/bundles/wc3/tasks"
 DRILLS = sorted(p.stem for p in TASKS.glob("drill-*.json"))
-STEP_TYPES = {"deploy_env", "deploy_agent", "wc3_match", "apply_server_config", "prompt_agent", "rts_grade",
-              "save_wc3_replay", "save_rts_recording"}
+STEP_TYPES = {"deploy_env", "deploy_agent", "rts_seat_agents", "wc3_match", "apply_server_config", "prompt_agent",
+              "rts_finish", "rts_grade", "save_wc3_replay", "save_rts_recording"}
 
 
 def definition(name: str) -> dict:
@@ -39,10 +39,12 @@ def test_fight_even_is_the_design_docs_drill():
         {"id": "opponent", "type": "deploy_agent", "agent_name": "opponent", "a2a_agent_id": "wc3-scripted",
          "env_ids": [], "env_vars": {"SCRIPT": "attack", "SCRIPT_AFTER_SECONDS": "0", "SCRIPT_EVERY_SECONDS": "5"},
          "depends_on": ["deploy"]},
+        {"id": "seat", "type": "rts_seat_agents", "env_id": "wc3", "agents": ["wc3", "opponent"],
+         "depends_on": ["agent", "opponent"]},
         {"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)EchoIsles.w3x", "seed": 1,
          "time_limit_seconds": 150, "mode": "stepping",
          "seats": [{"agent": "wc3", "race": "human"}, {"agent": "opponent", "race": "orc", "omniscient": True}],
-         "depends_on": ["agent", "opponent"]},
+         "depends_on": ["deploy"]},
         {"id": "stage", "type": "apply_server_config", "env_id": "wc3", "timeout_seconds": 600, "directives": [
             {"service": "wc3", "uri": "urn:wc3:stage/v1", "args": {"warmup_seconds": 0, "ops": [
                 {"op": "spawn", "player": "wc3", "type": "Hamg", "at": "home", "dx": -1300, "as": "hero"},
@@ -57,26 +59,28 @@ def test_fight_even_is_the_design_docs_drill():
                  "as": "enemy"}]}}],
          "depends_on": ["match"]},
         {"id": "play", "type": "prompt_agent", "agent_name": "wc3", "model": "anthropic/claude-haiku-4-5",
-         "prompt_id": "drill-fight-even", "prompt": goal, "timeout_seconds": 1800, "depends_on": ["stage"]},
+         "prompt_id": "drill-fight-even", "prompt": goal, "timeout_seconds": 1800, "depends_on": ["stage", "seat"]},
         {"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
          "prompt_id": "drill-fight-even-opponent", "prompt": "Play your seat with the script.", "timeout_seconds": 1800,
-         "depends_on": ["stage"]},
+         "depends_on": ["stage", "seat"]},
+        {"id": "finish", "type": "rts_finish", "env_id": "wc3", "depends_on": ["play", "play-opponent"]},
         {"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks", "checks": [
             {"metric": "enemy_army_destroyed_percent", "op": ">=", "value": 100},
             {"metric": "army_kept_percent", "op": ">=", "value": 40},
             {"metric": "hero_alive", "op": "==", "value": True},
             {"metric": "unspent_skill_points", "op": "<=", "value": 0},
-            {"metric": "units_lost", "op": "<=", "value": 4}], "verifier_id": "drill", "depends_on": ["play"]},
+            {"metric": "units_lost", "op": "<=", "value": 4}], "verifier_id": "drill", "depends_on": ["finish"]},
         {"id": "replay", "type": "save_wc3_replay", "env_id": "wc3", "depends_on": ["grade"]},
         {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}]
 
 
 def test_a_computer_opponent_is_a_computer_seat_with_its_ai_paused_by_the_stage():
     steps = steps_of("expansion")
-    assert list(steps) == ["deploy", "agent", "match", "stage", "play", "grade", "replay", "recording"]
+    assert list(steps) == ["deploy", "agent", "seat", "match", "stage", "play", "finish", "grade", "replay",
+                           "recording"]
     match = steps["match"]
     assert match["seats"] == [{"agent": "wc3", "race": "human"}, {"computer": "easy", "race": "orc"}]
-    assert match["depends_on"] == ["agent"] and match["time_limit_seconds"] == 300
+    assert match["depends_on"] == ["deploy"] and match["time_limit_seconds"] == 300
     assert ops(steps)[:5] == [
         {"op": "ai", "player": "opponent", "paused": True},
         {"op": "resources", "player": "wc3", "gold": 1500, "lumber": 800},
@@ -93,7 +97,7 @@ def test_a_raid_is_a_scripted_agent_seat_with_its_own_prompt():
     assert steps["match"]["seats"][1] == {"agent": "opponent", "race": "orc", "omniscient": True}
     assert steps["match"]["time_limit_seconds"] == 270
     assert steps["play-opponent"]["agent_name"] == "opponent" and "model" not in steps["play-opponent"]
-    assert steps["play-opponent"]["depends_on"] == steps["play"]["depends_on"] == ["stage"]
+    assert steps["play-opponent"]["depends_on"] == steps["play"]["depends_on"] == ["stage", "seat"]
     assert not any(o["op"] == "ai" for o in ops(steps))
     assert ops(steps)[-1] == {"op": "spawn", "player": "opponent", "type": "ogru", "n": 3,
                               "at": "toward:enemy_home:7500", "dx": 0, "dy": 0, "as": "enemy"}
@@ -105,7 +109,7 @@ def test_places_pass_through_and_checks_are_copied_verbatim():
     assert [o["dx"] for o in ops(steps) if o["op"] == "spawn"] == [0, 150, -150]
     assert steps["grade"]["checks"] == definition("creep_hard")["checks"]
     assert {"metric": "camp_cleared:camp:9", "op": "==", "value": True} in steps["grade"]["checks"]
-    assert "finish" not in json.dumps(list(steps.values()))
+    assert not {"finish", "finish_after_seconds"} & {k for s in steps.values() for k in s}   # wc3agent's own
 
 
 def test_skip_seconds_warm_the_game_up_and_count_toward_the_time_limit():
@@ -178,7 +182,14 @@ def test_every_drill_is_a_consistent_task(task):
     deployed = {s["agent_name"]: s["id"] for s in steps if s["type"] == "deploy_agent"}
     prompted = {s["agent_name"] for s in steps if s["type"] == "prompt_agent"}
     seats = {seat["agent"] for seat in match["seats"] if "agent" in seat}
-    assert set(deployed) == seats == prompted and sorted(match["depends_on"]) == sorted(deployed.values())
+    seated = next(s for s in steps if s["type"] == "rts_seat_agents")
+    assert set(deployed) == seats == prompted == set(seated["agents"]) and match["depends_on"] == ["deploy"]
+    assert sorted(seated["depends_on"]) == sorted(deployed.values())
+    plays = [s for s in steps if s["type"] == "prompt_agent"]
+    assert all(seated["id"] in s["depends_on"] for s in plays)
+    finish = next(s for s in steps if s["type"] == "rts_finish")
+    assert sorted(finish["depends_on"]) == sorted(s["id"] for s in plays)
+    assert next(s for s in steps if s["type"] == "rts_grade")["depends_on"] == [finish["id"]]
     handles = {None}
     for op in next((s["directives"][0]["args"]["ops"] for s in steps if s["type"] == "apply_server_config"), []):
         assert op.get("player", "wc3") in ("wc3", "opponent") and op.get("unit") in handles, op

@@ -43,13 +43,21 @@
     ]
   },
   {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play"
+    ]
+  },
+  {
     "id": "grade",
     "type": "rts_grade",
     "env_id": "wc3",
     "rubric": "melee",
     "verifier_id": "wc3",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

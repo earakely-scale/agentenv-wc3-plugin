@@ -19,6 +19,17 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3"
+    ],
+    "depends_on": [
+      "agent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -37,7 +48,7 @@
       }
     ],
     "depends_on": [
-      "agent"
+      "deploy"
     ]
   },
   {
@@ -74,7 +85,16 @@
     "prompt": "Play the first four minutes of a normal game as well as you can: constant worker production, no idle workers, Altar, Barracks and Farms on time, first hero out early, first soldiers trained.",
     "timeout_seconds": 2880,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play"
     ]
   },
   {
@@ -134,7 +154,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

@@ -34,6 +34,19 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3",
+      "opponent"
+    ],
+    "depends_on": [
+      "agent",
+      "opponent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -53,8 +66,7 @@
       }
     ],
     "depends_on": [
-      "agent",
-      "opponent"
+      "deploy"
     ]
   },
   {
@@ -112,7 +124,8 @@
     "prompt": "Three Grunts will raid your Peasants in about two and a half minutes; you have two Footmen. Get towers up in time: a Guard Tower needs a Lumber Mill, so build the Lumber Mill at once, then two Scout Towers between the Gold Mine and the Town Hall (build #peasant Scout Tower near the gold mine), and upgrade each to a Guard Tower as soon as the mill stands (upgrade #tower Guard Tower). Keep the other Peasants mining. When the raid comes, cast Call to Arms at the Town Hall and fight under the towers.",
     "timeout_seconds": 3240,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
     ]
   },
   {
@@ -123,7 +136,17 @@
     "prompt": "Play your seat with the script.",
     "timeout_seconds": 3240,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play",
+      "play-opponent"
     ]
   },
   {
@@ -163,7 +186,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

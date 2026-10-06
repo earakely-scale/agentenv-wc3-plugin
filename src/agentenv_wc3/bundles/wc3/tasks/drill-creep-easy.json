@@ -19,6 +19,17 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3"
+    ],
+    "depends_on": [
+      "agent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -37,7 +48,7 @@
       }
     ],
     "depends_on": [
-      "agent"
+      "deploy"
     ]
   },
   {
@@ -95,7 +106,16 @@
     "prompt": "Your Archmage and four Footmen stand next to the nearest creep camp. Clear it quickly, lose nobody, keep the hero healthy, spend the hero's skill point, and pick up whatever the creeps drop.",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play"
     ]
   },
   {
@@ -140,7 +160,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

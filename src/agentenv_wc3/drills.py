@@ -99,12 +99,14 @@ def convert(name: str, definition: dict) -> list[dict]:
                       "env_vars": {"SCRIPT": opponent,
                                    "SCRIPT_AFTER_SECONDS": str(definition.get("opponent_after_seconds", 0)),
                                    "SCRIPT_EVERY_SECONDS": "5"}, "depends_on": ["deploy"]})
+    agents = ["wc3", "opponent"] if scripted else ["wc3"]
+    steps.append({"id": "seat", "type": "rts_seat_agents", "env_id": "wc3", "agents": agents,
+                  "depends_on": ["agent", "opponent"] if scripted else ["agent"]})
     seat = ({"agent": "opponent", "race": "orc", "omniscient": True} if scripted
             else {"computer": AI_DIFFICULTY, "race": "orc"})
     steps.append({"id": "match", "type": "wc3_match", "env_id": "wc3", "map": MAP, "seed": 1,
                   "time_limit_seconds": seconds + warmup, "mode": "stepping",
-                  "seats": [{"agent": "wc3", "race": RACES[race]}, seat],
-                  "depends_on": ["agent", "opponent"] if scripted else ["agent"]})
+                  "seats": [{"agent": "wc3", "race": RACES[race]}, seat], "depends_on": ["deploy"]})
     start = "match"
     if ops or warmup:
         start = "stage"
@@ -113,14 +115,16 @@ def convert(name: str, definition: dict) -> list[dict]:
                                       "args": {"warmup_seconds": warmup, "ops": ops}}],
                       "depends_on": ["match"]})
     steps.append({"id": "play", "type": "prompt_agent", "agent_name": "wc3", "model": MODEL, "prompt_id": task,
-                  "prompt": definition["goal"], "timeout_seconds": timeout, "depends_on": [start]})
+                  "prompt": definition["goal"], "timeout_seconds": timeout, "depends_on": [start, "seat"]})
     if scripted:
         steps.append({"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
                       "prompt_id": f"{task}-opponent", "prompt": "Play your seat with the script.",
-                      "timeout_seconds": timeout, "depends_on": [start]})
+                      "timeout_seconds": timeout, "depends_on": [start, "seat"]})
     return [*steps,
+            {"id": "finish", "type": "rts_finish", "env_id": "wc3",
+             "depends_on": ["play", "play-opponent"] if scripted else ["play"]},
             {"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks",
-             "checks": checks(definition), "verifier_id": "drill", "depends_on": ["play"]},
+             "checks": checks(definition), "verifier_id": "drill", "depends_on": ["finish"]},
             {"id": "replay", "type": "save_wc3_replay", "env_id": "wc3", "depends_on": ["grade"]},
             {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}]
 

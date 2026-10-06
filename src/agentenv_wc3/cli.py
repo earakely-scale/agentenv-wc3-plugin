@@ -5,9 +5,7 @@ or X."""
 
 from __future__ import annotations
 
-import hashlib
 import io
-import json
 import os
 import platform
 import re
@@ -23,9 +21,10 @@ import urllib.request
 from pathlib import Path
 
 import click
-from agent_env.config import ConfigError, get_config
+import yaml
+from agent_env.config import get_config
 
-import agentenv_rts
+from agentenv_rts import broadcast
 
 from . import drills, steps
 
@@ -43,10 +42,6 @@ AGENTS = {
                 {"default_model": "anthropic/claude-haiku-4-5"}),
 }
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
-STREAMER = Path(agentenv_rts.__file__).with_name("streamer")
-STREAMER_IMAGE = "rts-streamer"
-STREAM_KEY, X_SERVER, X_STREAM_KEY = "TWITCH_STREAM_KEY", "X_STREAM_SERVER", "X_STREAM_KEY"
-CASTER_MODEL = "anthropic/claude-haiku-4-5"
 
 
 def _checkout(source: Path | None) -> Path:
@@ -147,14 +142,80 @@ def check(base: str, license_dir: Path | None):
         ok = False
         click.echo(f"✗ no image {base}: build it from your own installation as {WC3ENV}/blob/main/docker/README.md "
                    "shows (docker build --platform linux/amd64 --target environment -t wc3-worker:local ...)")
+    where, problem = _license_source(license_dir)
+    ok = ok and problem is None
+    click.echo(f"✓ activation files in {where}" if problem is None else f"✗ {problem}")
+    if not ok:
+        raise SystemExit(1)
+
+
+def _license_source(license_dir: Path | None = None) -> tuple[str, str | None]:
+    """Where wc3_match would get the activation files here, and what is wrong if it can't (no contents shown)."""
+    try:
+        if steps.license_from_secrets(steps.LICENSE_SECRETS):
+            return "agent-env's secret store (" + ", ".join(steps.LICENSE_SECRETS.values()) + ")", None
+    except RuntimeError as e:
+        return "agent-env's secret store", str(e)
     directory = steps.license_dir(str(license_dir) if license_dir else None)
     missing = [n for n in steps.LICENSE_FILES if not (directory / n).is_file()]
     if missing:
-        ok = False
-        click.echo(f"✗ no {', '.join(missing)} in {directory}: copy them from your Warcraft III Legacy installation")
-    else:
-        click.echo(f"✓ activation files in {directory}")
-    if not ok:
+        return str(directory), (f"no {', '.join(missing)} in agent-env's secret store or {directory}: copy them from "
+                                "your Warcraft III Legacy installation, then agent-env wc3 license import DIR")
+    return str(directory), None
+
+
+def _local_secrets_file() -> Path | None:
+    """The YAML file behind agent-env's local secret store ([stores.secret] config.file_path), if it is one."""
+    section = get_config().section("stores", "secret")
+    if section.get("impl") and "LocalSecretStore" not in str(section["impl"]):
+        return None
+    path = (section.get("config") or {}).get("file_path")
+    return Path(path).expanduser() if path else None
+
+
+@wc3.group("license")
+def license_group():
+    """Your activation files (roc.w3k, tft.w3k). wc3_match sends them to the env when a game starts: from
+    agent-env's secret store (WC3_ROC_W3K and WC3_TFT_W3K, each file in base64), so a run on any machine finds
+    them, else from a folder on this machine ([plugins.agentenv-wc3] license_dir, $WC3_LICENSE_DIR, ~/.wc3-license)."""
+
+
+@license_group.command("import")
+@click.argument("directory", required=False, type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--secrets-file", type=click.Path(dir_okay=False, path_type=Path),
+              help="The YAML secrets file to write. Default: the file of agent-env's local secret store "
+                   "([stores.secret] config.file_path).")
+def import_license(directory: Path | None, secrets_file: Path | None):
+    """Store the activation files in DIRECTORY (default: the license folder) in agent-env's local secret store, as
+    WC3_ROC_W3K and WC3_TFT_W3K. For a cloud secret store, store the base64 of each file under those names."""
+    directory = directory or steps.license_dir()
+    files = steps.read_license(directory)
+    if files is None:
+        raise click.ClickException(f"no roc.w3k and tft.w3k in {directory}")
+    configured = _local_secrets_file()
+    target = (secrets_file.expanduser() if secrets_file else None) or configured
+    if target is None:
+        raise click.ClickException(
+            "agent-env's secret store here has no local file: name one with --secrets-file and set [stores.secret] "
+            "config.file_path to it, or store the base64 of roc.w3k as WC3_ROC_W3K and of tft.w3k as WC3_TFT_W3K in "
+            "your secret store yourself")
+    doc = (yaml.safe_load(target.read_text()) if target.is_file() else None) or {}
+    if not isinstance(doc, dict):
+        raise click.ClickException(f"{target} is not a flat mapping of secret names to values")
+    doc.update({steps.LICENSE_SECRETS[name]: value for name, value in files.items()})
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(yaml.safe_dump(doc, sort_keys=False, width=float("inf")))
+    target.chmod(0o600)
+    click.echo(f"Stored roc.w3k and tft.w3k from {directory} as WC3_ROC_W3K and WC3_TFT_W3K in {target}"
+               + ("" if target == configured else f"; set [stores.secret] config.file_path to {target}"))
+
+
+@license_group.command("show")
+def show_license():
+    """Where wc3_match gets the activation files here (their contents are never shown)."""
+    where, problem = _license_source()
+    click.echo(f"The activation files come from {where}" if problem is None else problem)
+    if problem is not None:
         raise SystemExit(1)
 
 
@@ -173,14 +234,15 @@ def check(base: str, license_dir: Path | None):
 @click.option("--wc3env", "wc3env_dir", type=click.Path(exists=True, file_okay=False, path_type=Path),
               envvar="WC3ENV_DIR", help="A wc3env checkout for --fake. Default: $WC3ENV_DIR, else wc3env at the "
                                         "pinned commit, downloaded.")
-@click.option("--agent", is_flag=True, help="Also build and register the agents: wc3-macro-micro (wc3env's wc3agent) "
-                                            "and wc3-scripted (its scripted opponent).")
+@click.option("--agent", is_flag=True, help="Also build and register the agents: wc3-llm (any chat model through the "
+                                            "tools), wc3-macro-micro (wc3env's wc3agent) and wc3-scripted (its "
+                                            "scripted opponent).")
 def setup(env_id: str, base: str, source: Path | None, image: str | None, fake: bool, wc3env_dir: Path | None,
           agent: bool):
     """Build the env image on top of your wc3env worker image and register it as an MCP server env. The image holds
     your game files: it stays in agent-env's local registry; never push it anywhere public. With --fake, the env is
-    built on wc3env's fake game instead; with --agent, the wc3-macro-micro and wc3-scripted agents are built and
-    registered too."""
+    built on wc3env's fake game instead; with --agent, the wc3-llm, wc3-macro-micro and wc3-scripted agents are
+    built and registered too."""
     from agent_env.artifact import DockerImageArtifact
     from agent_env.env import MCPServerEnv
 
@@ -247,44 +309,6 @@ def watch(open_page: bool):
         click.launch(views[0][0])
 
 
-def _streamer_image() -> str:
-    """The streamer image's tag: a digest of agentenv_rts/streamer's files, so a changed streamer builds a new image
-    instead of running an older one."""
-    digest = hashlib.sha256()
-    for path in sorted(p for p in STREAMER.iterdir() if p.is_file()):
-        digest.update(path.name.encode() + b"\0" + path.read_bytes())
-    return f"{STREAMER_IMAGE}:{digest.hexdigest()[:12]}"
-
-
-def _secret(name: str) -> str | None:
-    """A secret from agent-env's secret store ([stores.secret] in .agentenv/config.toml), else the environment."""
-    return get_config().get_secret_store().get(name) or os.environ.get(name)
-
-
-def _state(url: str) -> dict | None:
-    """Where the game behind a live view stands (/live/state.json); None while the env doesn't answer."""
-    try:
-        with urllib.request.urlopen(f"{url.rstrip('/')}/state.json", timeout=10) as r:
-            return json.load(r)
-    except (OSError, ValueError):
-        return None
-
-
-def _ready(url: str) -> bool:
-    """Whether the env behind a live view has a game under way: a deployed env has none until its match starts one
-    (until then the casters would have no players to talk about), and a finished one keeps serving its end."""
-    state = _state(url) or {}
-    return state.get("t") is not None and not state.get("game_over")
-
-
-def _from_container(url: str) -> str:
-    """`url` as a Docker Desktop container reaches it: this machine's loopback is host.docker.internal there."""
-    parts = urllib.parse.urlsplit(url)
-    if parts.hostname not in ("127.0.0.1", "localhost"):
-        return url
-    return parts._replace(netloc=parts.netloc.replace(parts.hostname, "host.docker.internal", 1)).geturl()
-
-
 @wc3.command()
 @click.option("--url", help="The live view to stream. Default: the newest wc3 env in Docker with a game under way; "
                             "the command waits for one to start.")
@@ -296,12 +320,12 @@ def _from_container(url: str) -> str:
 @click.option("--server", default="rtmp://live.twitch.tv/app", show_default=True,
               help="Twitch's RTMP ingest server, or any other RTMP server to stream to instead; the stream key is "
                    "appended to it.")
-@click.option("--key-secret", default=STREAM_KEY, show_default=True,
+@click.option("--key-secret", default=broadcast.STREAM_KEY, show_default=True,
               help="The secret that holds that server's stream key, from agent-env's secret store ([stores.secret] in "
                    ".agentenv/config.toml) or an environment variable of that name.")
-@click.option("--x-server-secret", default=X_SERVER, show_default=True,
+@click.option("--x-server-secret", default=broadcast.X_SERVER, show_default=True,
               help="The secret that holds the server URL of X's Live Studio source.")
-@click.option("--x-key-secret", default=X_STREAM_KEY, show_default=True,
+@click.option("--x-key-secret", default=broadcast.X_STREAM_KEY, show_default=True,
               help="The secret that holds the stream key of X's Live Studio source.")
 @click.option("--size", default="1920x1080", show_default=True, help="The stream's resolution.")
 @click.option("--fps", default=30, show_default=True)
@@ -310,7 +334,8 @@ def _from_container(url: str) -> str:
 @click.option("--cast/--no-cast", default=True, show_default=True,
               help="Two AI casters talk over the game, voiced and captioned, through agent-env's model endpoint "
                    "([model] in .agentenv/config.toml).")
-@click.option("--caster-model", default=CASTER_MODEL, show_default=True, help="The model that writes their lines.")
+@click.option("--caster-model", default=broadcast.CASTER_MODEL, show_default=True,
+              help="The model that writes their lines.")
 @click.option("--title", help="The broadcast's title, on screen and in the casters' intro.")
 @click.option("--record", "record_dir", type=click.Path(file_okay=False, path_type=Path),
               help="Also write the stream to DIR/stream-<UTC time>.mp4.")
@@ -325,63 +350,30 @@ def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secr
     stream starts with the game and ends after GAME OVER."""
     if offline and record_dir is None:
         raise click.UsageError("--offline only records: add --record DIR")
-    test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
-    targets, where = [], []
-    for name in [] if offline else dict.fromkeys(destinations):
-        if name == "twitch":
-            key = _secret(key_secret)
-            if not key:
-                raise click.ClickException(
-                    f"no stream key: store your Twitch stream key as the secret {key_secret} in agent-env's secret "
-                    f"store, or export {key_secret}; or record only with --offline --record DIR")
-            targets.append(f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else ""))
-            where.append(f"to {server.rstrip('/')}/<stream key>{test}")
-        else:
-            x_server, key = _secret(x_server_secret), _secret(x_key_secret)
-            if not x_server or not key:
-                raise click.ClickException(
-                    f"no X stream: create a source in X's Live Studio and store its server URL and stream key as the "
-                    f"secrets {x_server_secret} and {x_key_secret}, as for the Twitch key")
-            targets.append(f"{x_server.rstrip('/')}/{key}")
-            where.append(f"to {x_server.rstrip('/')}/<stream key> (press Go Live in X's Live Studio once it starts)")
-    env = {"STREAM_URL": "\n".join(targets)}
-    if cast:
-        config = get_config()
-        try:
-            env["CAST_BASE_URL"], env["CAST_API_KEY"] = config.get_litellm_base_url(), config.get_litellm_api_key()
-        except ConfigError as e:
-            raise click.ClickException(f"the casters need agent-env's model endpoint: {e}; or stream without them: "
-                                       "--no-cast") from e
-    image = _streamer_image()
-    if not _image_exists(image):
-        click.echo(f"Building {image} from {STREAMER}")
-        if subprocess.run(["docker", "build", "-t", image, str(STREAMER)]).returncode:
-            raise click.ClickException("docker build of the streamer failed")
+    show = broadcast.Broadcast(destinations=() if offline else tuple(destinations), server=server,
+                               key_secret=key_secret, x_server_secret=x_server_secret, x_key_secret=x_key_secret,
+                               size=size, fps=fps, bitrate=bitrate, linger=linger, cast=cast,
+                               caster_model=caster_model, title=title, bandwidth_test=bandwidth_test)
+    try:
+        where, env, image = show.targets()[1], show.environment(), broadcast.image()
+        if not broadcast.image_exists(image):
+            click.echo(f"Building {image} from {broadcast.STREAMER}")
+            broadcast.build(image)
+    except broadcast.BroadcastError as e:
+        raise click.ClickException(str(e)) from e
     if url is None:
         click.echo("Waiting for a Warcraft III game to start (agent-env run wc3 --task ...)")
-        while (url := next((u for u, _ in _live_views() if _ready(u)), None)) is None:
+        while (url := next((u for u, _ in _live_views() if broadcast.ready(u)), None)) is None:
             time.sleep(5)
-    elif not _ready(url):
+    elif not broadcast.ready(url):
         click.echo(f"Waiting for the game at {url} to start")
-        while not _ready(url):
+        while not broadcast.ready(url):
             time.sleep(5)
-    if sys.platform == "darwin":
-        network, page = [], _from_container(url)
-        if cast:
-            env["CAST_BASE_URL"] = _from_container(env["CAST_BASE_URL"])
-    else:
-        network, page = ["--network", "host"], url
-    mount = []
     if record_dir is not None:
         record_dir.mkdir(parents=True, exist_ok=True)
-        mount = ["-v", f"{record_dir.resolve()}:/rec", "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
         where.append(f"into {record_dir}")
     click.echo(f"Streaming {url} {' and '.join(where)}{', with the casters' if cast else ''}; Ctrl-C ends the stream")
-    cmd = ["docker", "run", "--rm", "--shm-size", "1g", *network, *mount, *[a for name in env for a in ("-e", name)],
-           image, "--url", page, "--size", size, "--fps", str(fps), "--bitrate", bitrate, "--linger", str(linger),
-           *(["--cast-config", json.dumps({"model": caster_model})] if cast else []),
-           *(["--title", title] if title else []), *(["--record", "/rec"] if record_dir is not None else [])]
-    run = subprocess.Popen(cmd, env={**os.environ, **env})
+    run = subprocess.Popen(show.command(url, image, record_dir), env={**os.environ, **env})
     try:
         code = run.wait()
     except KeyboardInterrupt:   # docker passes Ctrl-C on: the streamer ends the stream and finishes the recording

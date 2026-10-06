@@ -34,6 +34,19 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3",
+      "opponent"
+    ],
+    "depends_on": [
+      "agent",
+      "opponent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -53,8 +66,7 @@
       }
     ],
     "depends_on": [
-      "agent",
-      "opponent"
+      "deploy"
     ]
   },
   {
@@ -133,7 +145,8 @@
     "prompt": "Three Footmen and a Rifleman are raiding your Acolytes; two Ghouls are across the base and one stands by the Necropolis. Acolytes cannot fight and cannot hide: move them behind the Necropolis, between the two Spirit Towers, not out into the open. Fight the raiders under the towers with the Ghouls and do not chase beyond tower range.",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
     ]
   },
   {
@@ -144,7 +157,17 @@
     "prompt": "Play your seat with the script.",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play",
+      "play-opponent"
     ]
   },
   {
@@ -179,7 +202,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

@@ -31,6 +31,19 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "p1",
+      "p2"
+    ],
+    "depends_on": [
+      "agent-p1",
+      "agent-p2"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -49,8 +62,7 @@
       }
     ],
     "depends_on": [
-      "agent-p1",
-      "agent-p2"
+      "deploy"
     ]
   },
   {
@@ -62,7 +74,8 @@
     "prompt": "Play the game the env has started to its end.",
     "timeout_seconds": 3600,
     "depends_on": [
-      "match"
+      "match",
+      "seat"
     ]
   },
   {
@@ -74,7 +87,17 @@
     "prompt": "Play the game the env has started to its end.",
     "timeout_seconds": 3600,
     "depends_on": [
-      "match"
+      "match",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play-p1",
+      "play-p2"
     ]
   },
   {
@@ -84,8 +107,7 @@
     "rubric": "dense",
     "verifier_id": "duel",
     "depends_on": [
-      "play-p1",
-      "play-p2"
+      "finish"
     ]
   },
   {

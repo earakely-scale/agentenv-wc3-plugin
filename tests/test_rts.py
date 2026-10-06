@@ -15,20 +15,23 @@ import urllib.request
 
 import pytest
 from agent_env.artifact import FileArtifact
+from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import DeployedAgent, TaskStepContext
 from agentenv_protocol import client
+from agentenv_protocol.types import WELL_KNOWN_PATH
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from test_steps import deployed, run_context
 
 from agentenv_rts import choices, display, highlights, recording
+from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_rts.seats import Lockstep
 from agentenv_rts.session import RemoteSession, SessionError
-from agentenv_rts.steps import SaveRTSRecordingTaskStep
+from agentenv_rts.steps import RTSFinishTaskStep, RTSSeatAgentsTaskStep, SaveRTSRecordingTaskStep, seat_agents
 from agentenv_rts.timeline import Timeline, model_name
 from agentenv_wc3 import frames, metrics, render
 from agentenv_wc3.server import WC3Env, check_scenario, seats_of
-from agentenv_wc3.steps import WC3MatchTaskStep, seat_agents
+from agentenv_wc3.steps import WC3MatchTaskStep
 
 pytestmark = pytest.mark.anyio
 
@@ -115,11 +118,13 @@ async def test_the_recording_is_saved_as_file_artifacts(env_vars, local_stores):
         context = await SaveRTSRecordingTaskStep(id="recording", version=None, env_id="wc3").execute(
             run_context(record))
     saved = context.metadata["recordings"]["recording"]
-    assert sorted(f["name"].rpartition(".")[2] for f in saved) == ["html", "mp4"]
+    assert sorted(f["name"].rpartition(".")[2] for f in saved) == ["html", "json", "mp4"]
     load = {f["name"].rpartition(".")[2]: FileArtifact.get(f["artifact_id"], f["version"]).load() for f in saved}
     assert load["mp4"][4:8] == b"ftyp"
     html = load["html"]
     assert b"window.RTS_DATA = {" in html and b"</script>" in html
+    timeline = json.loads(load["json"])
+    assert timeline["static"]["game"] and len(timeline["frames"]) == 5 and timeline["frames"][-1]["t"] == 4.0
 
 
 async def test_each_file_of_the_recording_is_its_own_artifact(env_vars, local_stores, monkeypatch):
@@ -404,7 +409,7 @@ async def test_a_runs_recording_is_copied_into_one_folder(env_vars, local_stores
         "context": {"metadata": {"recordings": context.metadata["recordings"]}}})
     result = CliRunner().invoke(wc3, ["recordings", "--out", str(tmp_path / "match")])
     assert result.exit_code == 0, result.output
-    assert sorted(p.suffix for p in (tmp_path / "match").iterdir()) == [".html", ".mp4"]
+    assert sorted(p.suffix for p in (tmp_path / "match").iterdir()) == [".html", ".json", ".mp4"]
     assert "wc3-smoke-abc" in result.output and "Open " in result.output
     assert CliRunner().invoke(wc3, ["recordings", "nope", "--out", str(tmp_path / "x")]).exit_code != 0
 
@@ -561,7 +566,7 @@ def test_a_free_for_all_plays_on_after_one_seat_is_out(env_vars):
     assert env.game_over
 
 
-async def test_the_match_gives_each_agent_its_seat():
+async def test_each_agent_gets_its_seat():
     posted, servers = [], {"a": {}, "b": {"x": {"url": "http://env:1/mcp"}}}
 
     class Agent(http.server.BaseHTTPRequestHandler):
@@ -590,15 +595,17 @@ async def test_the_match_gives_each_agent_its_seat():
                                              "params": {"endpoint": "/ext/mcp-config"}}]}}
     agents = [DeployedAgent(agent_name=n, api_url="", a2a_url=f"http://127.0.0.1:{server.server_port}/{n}",
                             a2a_card=card) for n in ("a", "b")]
-    env = type("Env", (), {"mcp_url": "http://env:1/mcp", "environment_card": {"name": "wc3"}})()
-    context = TaskStepContext(deployed_agents=agents)
+    env = DeployedEnv(env_id="wc3", env_version=1, environment_card_url="http://env:1" + WELL_KNOWN_PATH,
+                      environment_card={"name": "wc3"})
+    context = TaskStepContext(deployed_envs=[env], deployed_agents=agents)
+    step = RTSSeatAgentsTaskStep.from_dict({"id": "seat", "type": "rts_seat_agents", "env_id": "wc3", "agents": ["a"]})
     try:
-        assert await seat_agents(context, env, [{"agent": "a"}]) == {"a": "http://env:1/seats/a/mcp"}
-        assert await seat_agents(context, env, [{"agent": "a"}]) == {"a": "http://env:1/seats/a/mcp"}   # once
-        with pytest.raises(RuntimeError, match="env_ids"):
-            await seat_agents(context, env, [{"agent": "a"}, {"agent": "b"}])
+        assert (await step.execute(context)).metadata["rts_seats"] == {"a": "http://env:1/seats/a/mcp"}
+        assert await seat_agents(context, env, ["a"]) == {"a": "http://env:1/seats/a/mcp"}   # once
+        with pytest.raises(RuntimeError, match="env_ids"):   # by default every deployed agent: a and b
+            await RTSSeatAgentsTaskStep(id="seat", version=None, env_id="wc3").execute(context)
         with pytest.raises(RuntimeError, match="no deploy_agent"):
-            await seat_agents(context, env, [{"agent": "c"}])
+            await seat_agents(context, env, ["c"])
     finally:
         server.shutdown()
     assert posted == [("a", {"url": "http://env:1/seats/a/mcp", "headers": None, "name": "wc3"})]
@@ -726,3 +733,39 @@ def test_any_chat_model_answers_choice_questions_in_jevs_shape():
     checked = {"request": payload, "status": 200, "response": response}
     jev.validate_choice_response(checked)
     assert checked["contract_valid"] is True
+
+
+async def finished(rule: str) -> tuple[dict, dict]:
+    """A 60-second game whose agent stopped after 5 s, settled by rts_finish's `rule`: the summary, and its grade."""
+    async with deployed(WC3Env()) as record:
+        await match(record)
+        session = RemoteSession(base(record))
+        for _ in range(5):
+            await asyncio.to_thread(session.step, {0: []})
+        context = await RTSFinishTaskStep(id="finish", version=None, env_id="wc3", rule=rule).execute(
+            run_context(record))
+        context = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3").execute(context)
+        summary = (await client.get_data(base(record))).parts[0].data
+    return summary, context.metadata
+
+
+async def test_a_game_its_agents_left_is_played_out_to_its_end(env_vars):
+    summary, metadata = await finished("play_out")
+    assert summary["game_over"] and summary["result"] == "time_limit" and summary["game_time_seconds"] == 60
+    assert summary["harness"]["finish_seconds"] == 55 and summary["harness"]["idle_seconds"] == 0
+    assert summary["finish"] == metadata["rts_finish"]["finish"] == {
+        "rule": "play_out", "from_seconds": 5.0, "to_seconds": 60.0, "open_seats": [{"slot": 0, "agent": None}],
+        "game_over": True}
+    rows = {r["name"]: r for r in metadata["verifications"]["grade"]["results"]}
+    assert rows["agent_played"]["result"] is False   # it sent no orders: finishing the game is not playing it
+    assert rows["finish"]["weight"] == 0 and "stopped before the end (last move at 4.0 s)" in rows["finish"]["evidence"]
+
+
+async def test_a_forfeit_loses_now_and_as_is_leaves_the_game_alone(env_vars):
+    summary, _ = await finished("forfeit")
+    assert summary["game_over"] and summary["result"] == "defeat" and summary["game_time_seconds"] == 5
+    assert [(x["result"], x["forfeit"]) for x in summary["seats"]] == [("defeat", True), ("victory", False)]
+    summary, _ = await finished("as_is")
+    assert not summary["game_over"] and summary["game_time_seconds"] == 5 and summary["finish"]["rule"] == "as_is"
+    with pytest.raises(ValueError, match="rule must be one of"):
+        RTSFinishTaskStep(id="finish", version=None, env_id="wc3", rule="resign")

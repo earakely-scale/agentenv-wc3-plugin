@@ -2,22 +2,33 @@
 
 import asyncio
 import base64
+import os
 import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 import uvicorn
+import yaml
 from agent_env.artifact import FileArtifact
+from agent_env.config import reset_config
 from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.registry import get_task_step_registry
 from agentenv_protocol import AgentEnvEnvironment, client, environment_card, extension
 from agentenv_protocol.types import WELL_KNOWN_PATH
+from click.testing import CliRunner
 
 from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_wc3.server import IDLE_EXTENSION, WC3Env
-from agentenv_wc3.steps import REPLAY_EXTENSION, SaveWC3ReplayTaskStep, WC3MatchTaskStep, read_license
+from agentenv_wc3.steps import (
+    LICENSE_SECRETS,
+    REPLAY_EXTENSION,
+    SaveWC3ReplayTaskStep,
+    WC3MatchTaskStep,
+    license_from_secrets,
+    read_license,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -103,6 +114,36 @@ def test_read_license(license_dir):
     assert read_license(license_dir) is None
 
 
+def test_the_license_comes_from_the_secret_store_first(license_dir, local_stores, tmp_path):
+    from agentenv_wc3.cli import wc3
+
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text("OTHER: keep\n")
+    config = Path(os.environ["AGENT_ENV_CONFIG"])
+    config.write_text(config.read_text() + '\n[stores.secret]\nimpl = "agent_env.store.secret_store:LocalSecretStore"\n'
+                      f'config = {{file_path = "{secrets}"}}\n')
+    reset_config()
+    assert license_from_secrets(LICENSE_SECRETS) is None
+    result = CliRunner().invoke(wc3, ["license", "import"])   # from the license folder into the store's file
+    assert result.exit_code == 0, result.output
+    doc = yaml.safe_load(secrets.read_text())
+    assert doc["OTHER"] == "keep" and base64.b64decode(doc["WC3_TFT_W3K"]) == b"tft key"
+    assert secrets.stat().st_mode & 0o777 == 0o600 and "tft key" not in result.output
+    reset_config()
+    expected = read_license(license_dir)
+    (license_dir / "roc.w3k").unlink()   # the folder no longer matters
+    assert license_from_secrets(LICENSE_SECRETS) == expected
+    assert "secret store" in CliRunner().invoke(wc3, ["license", "show"]).output
+    secrets.write_text(yaml.safe_dump({"WC3_ROC_W3K": doc["WC3_ROC_W3K"]}))
+    reset_config()
+    with pytest.raises(RuntimeError, match="WC3_TFT_W3K missing"):
+        license_from_secrets(LICENSE_SECRETS)
+    secrets.write_text(yaml.safe_dump({"WC3_ROC_W3K": "not base64!", "WC3_TFT_W3K": doc["WC3_TFT_W3K"]}))
+    reset_config()
+    with pytest.raises(RuntimeError, match="not roc.w3k in base64"):
+        license_from_secrets(LICENSE_SECRETS)
+
+
 @environment_card(name="wc3")
 class FakeReplay(AgentEnvEnvironment):
     @extension(REPLAY_EXTENSION, description="The replay.")
@@ -144,8 +185,13 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
     assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
     grade = by_type["rts_grade"]
     expected = (("smoke", "smoke") if task == "smoke" else ("checks", "drill") if task.startswith("drill-")
-                else ("dense", "duel") if task.startswith("duel") else ("melee", "wc3"))
+                else ("dense", "duel") if task.startswith("duel") else ("dense", task) if task.startswith("broadcast")
+                else ("melee", "wc3"))
     assert grade["id"] == "grade" and (grade["rubric"], grade["verifier_id"]) == expected
+    if task != "smoke":   # a game played by agents is settled before it is graded
+        assert by_type["rts_finish"]["id"] in grade["depends_on"]
+        plays = [s["id"] for s in steps if s["type"] == "prompt_agent"]
+        assert sorted(by_type["rts_finish"]["depends_on"]) == sorted(plays)
     if task.startswith("macro-micro"):
         agent = by_type["deploy_agent"]
         assert agent["a2a_agent_id"] == "wc3-macro-micro" and agent["env_vars"]["WC3_MICRO_MODEL"]

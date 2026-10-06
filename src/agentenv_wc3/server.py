@@ -52,7 +52,7 @@ from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
 from agentenv_rts.seats import Lockstep, SeatPaths, current_seat
-from agentenv_rts.session import DEBUG, NOTE, NOTE_KINDS, OBSERVE, STEP
+from agentenv_rts.session import DEBUG, FINISH, FINISH_RULES, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
 
 from . import frames, metrics, render
@@ -244,6 +244,9 @@ class WC3Env(AgentEnvEnvironment):
         self.started = asyncio.Event()
         self.ready: set[int] = set()
         self.created, self.begun = time.monotonic(), False
+        self.forfeits: dict[int, str] = {}
+        self.last_move: dict[int, float] = {}
+        self.finished: dict | None = None
         self.metrics: metrics.Metrics | None = None
         self.done = False
         self.names = render.Names()
@@ -259,7 +262,7 @@ class WC3Env(AgentEnvEnvironment):
         self.agents: dict[int, dict] = {}
         self.stats = {"games": 0, "tool_calls": 0, "invalid_calls": 0, "advances": 0, "orders_sent": 0,
                       "orders_rejected": 0, "extension_calls": 0, "idle_seconds": 0, "session_steps": 0,
-                      "staged_seconds": 0}
+                      "staged_seconds": 0, "finish_seconds": 0}
 
     # ---- the game ----
 
@@ -294,6 +297,7 @@ class WC3Env(AgentEnvEnvironment):
                                         window=WINDOW if scenario["client_view"] else None)
         self.scenario, self.setup, self.seats = scenario, result.get("setup"), seats
         self.started, self.ready, self.created, self.begun = asyncio.Event(), set(), time.monotonic(), False
+        self.forfeits, self.last_move, self.finished = {}, {}, None
         if not result.get("held"):
             self.started.set()
         self.lead = next(x["slot"] for x in seats if x["computer"] is None)
@@ -373,15 +377,19 @@ class WC3Env(AgentEnvEnvironment):
     def _seconds(self) -> float:
         return max((o.get("game_time_seconds") or 0.0 for o in self.obs.values()), default=0.0)
 
+    def _given(self, slot: int) -> str:
+        """The game's own result for a seat, else the defeat the harness gave it for a forfeit."""
+        return (self.obs.get(slot) or {}).get("result") or self.forfeits.get(slot, "")
+
     def _result_of(self, slot: int) -> str:
         """The game's result for a seat, else victory once every seat on the other teams is defeated: the game
         lets allies win together only with the lobby's allied victory, which teams made by alliances don't have."""
-        own = (self.obs.get(slot) or {}).get("result")
+        own = self._given(slot)
         if own:
             return own
         team = next((x["team"] for x in self.seats if x["slot"] == slot), None)
         rivals = [x["slot"] for x in self.seats if x["team"] != team]
-        if rivals and all((self.obs.get(r) or {}).get("result") == "defeat" for r in rivals):
+        if rivals and all(self._given(r) == "defeat" for r in rivals):
             return "victory"
         return "time_limit" if self._seconds() >= self.scenario["time_limit_seconds"] else ""
 
@@ -389,6 +397,7 @@ class WC3Env(AgentEnvEnvironment):
         """A seat's orders and `ms` of game time: one step, or, with several agent seats stepping, a turn of the
         lockstep clock, which moves when they all wait. The step's refusals and sites for this seat's orders."""
         await self._ready(slot)
+        self.last_move[slot] = self._seconds()
         ms = max(25, min(ms, round((self.scenario["time_limit_seconds"] - self._seconds()) * 1000) // 25 * 25))
         self.step_info[slot] = {"rejected": [], "placements": [], "sent": len(batch)}
         if self.lockstep is None:
@@ -804,8 +813,10 @@ class WC3Env(AgentEnvEnvironment):
                            "result": self._result_of(x["slot"]) if self.obs else "",
                            "orders_sent": self.orders_sent.get(x["slot"], 0),
                            "stalls": self.lockstep.stalls.get(x["slot"], 0) if self.lockstep else 0,
+                           "last_move_seconds": self.last_move.get(x["slot"]), "forfeit": x["slot"] in self.forfeits,
                            "metrics": self.metrics.of(x["slot"], self.obs.get(x["slot"]) or {})
                            if self.metrics is not None and self.obs else {}} for x in self.seats],
+                "finish": self.finished,
                 "handles": {n: {"slot": h["slot"], "staged": len(h["ids"]),
                                 "alive": len(set(h["ids"]) - self.metrics.deaths)}
                             for n, h in (self.metrics.handles if self.metrics else {}).items()},
@@ -857,22 +868,57 @@ class WC3Env(AgentEnvEnvironment):
         await self._start()
         async with self.lock:
             try:
-                start = self._seconds()
-                limit = self.scenario["time_limit_seconds"]
-                while not self.game_over and self._seconds() - start < seconds:
-                    step = min(MAX_ADVANCE_SECONDS, seconds - (self._seconds() - start), limit - self._seconds())
-                    result = await self.bridge.call("step", actions={}, ms=max(25, round(step * 1000) // 25 * 25))
-                    self._observed(result)
-                    self._record()
-                    await self._aim()
-                    if self.scenario["mode"] == "realtime":   # the game runs on its own: just look in now and then
-                        await asyncio.sleep(1)
-                played = self._seconds() - start
+                played = await self._run_out(seconds)
             except WorkerError as e:
                 self.failed = self.failed or (e.message if e.code in DEAD or e.code == "game_failed" else None)
                 raise RuntimeError(f"{e.code}: {e.message}") from e
             self.stats["idle_seconds"] += round(played)
             return {"played_seconds": played, "game_time_seconds": self._seconds(), "result": self.result}
+
+    async def _run_out(self, seconds: float) -> float:
+        """Lets the game run with no orders for `seconds` or to its end, under the lock: stepped in chunks, or in
+        realtime, where the game runs on its own, looked in on every second. The game seconds that passed."""
+        start, limit = self._seconds(), self.scenario["time_limit_seconds"]
+        while not self.game_over and self._seconds() - start < seconds:
+            step = min(MAX_ADVANCE_SECONDS, seconds - (self._seconds() - start), limit - self._seconds())
+            result = await self.bridge.call("step", actions={}, ms=max(25, round(step * 1000) // 25 * 25))
+            self._observed(result)
+            self._record()
+            await self._aim()
+            if self.scenario["mode"] == "realtime":
+                await asyncio.sleep(1)
+        return self._seconds() - start
+
+    @extension(FINISH, description="Settle the game once its agents have stopped playing, before it is graded: "
+                                   "play_out lets it run with no orders to its end (the time limit at most); "
+                                   "forfeit gives every agent seat without a result a defeat; as_is leaves it where "
+                                   "it stopped. Harness time, counted apart from idle (finish_seconds).")
+    async def finish(self, rule: str = "play_out") -> dict:
+        self.stats["extension_calls"] += 1
+        if rule not in FINISH_RULES:
+            raise ValueError(f"rule must be one of {', '.join(FINISH_RULES)}")
+        async with self.lock:
+            await self._session_game()
+            before = self._seconds()
+            open_seats = [{"slot": x["slot"], "agent": x["agent"]} for x in self.seats
+                          if x["computer"] is None and not self._result_of(x["slot"])]
+        if rule == "play_out" and not self.game_over:
+            await self._start()
+        async with self.lock:
+            try:
+                if rule == "forfeit" and not self.game_over:
+                    self.forfeits.update({x["slot"]: "defeat" for x in open_seats})
+                    self.result = self._result_of(self.lead)
+                    self._record()
+                elif rule == "play_out" and not self.game_over:
+                    played = await self._run_out(self.scenario["time_limit_seconds"] - self._seconds() + 1)
+                    self.stats["finish_seconds"] += round(played)
+            except WorkerError as e:
+                self.failed = self.failed or (e.message if e.code in DEAD or e.code == "game_failed" else None)
+                raise RuntimeError(f"{e.code}: {e.message}") from e
+            self.finished = {"rule": rule, "from_seconds": before, "to_seconds": self._seconds(),
+                             "open_seats": open_seats, "game_over": self.game_over}
+            return self.finished
 
     @extension(STAGE_EXTENSION,
                description="Stage the game before play, for drills: the hook's staging ops in order (spawn, level, "
@@ -1047,6 +1093,7 @@ class WC3Env(AgentEnvEnvironment):
                 infos = {seat["slot"]: await self._play(seat["slot"], [a for _, a in sent.get(seat["slot"], [])], ms)}
             else:
                 await self._ready(self.lead)
+                self.last_move[self.lead] = self._seconds()
                 self.step_info = {slot: {"rejected": [], "placements": [], "sent": len(k)} for slot, k in sent.items()}
                 await self._chunk({slot: [a for _, a in k] for slot, k in sent.items()}, ms / 1000)
                 infos, self.step_info = self.step_info, {}
@@ -1163,7 +1210,8 @@ class WC3Env(AgentEnvEnvironment):
     # ---- spectators: the live view and the recording (agentenv_rts) ----
 
     @extension(rts_recording.RECORDING, description="The game played so far as spectators see it: an MP4 of the "
-                                                    "map (mp4), a self-contained HTML replay (html) and, for a match "
+                                                    "map (mp4), a self-contained HTML replay (html), the timeline as "
+                                                    "JSON (timeline) and, for a match "
                                                     "with client_view, the game's own video with chapters (client; "
                                                     "the replay plays it beside the map) and a highlight reel cut "
                                                     "from it (highlights). Lists the files, each to fetch from its "
@@ -1171,7 +1219,7 @@ class WC3Env(AgentEnvEnvironment):
                                                     "ends the capture.")
     async def recording(self, formats: list[str] | None = None) -> dict:
         self.stats["extension_calls"] += 1
-        formats = tuple(formats or ("mp4", "html"))
+        formats = tuple(formats or ("mp4", "html", "timeline"))
         async with self.lock:
             timeline = self.timeline
             if timeline is None or not timeline.frames:

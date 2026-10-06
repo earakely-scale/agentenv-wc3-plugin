@@ -34,6 +34,19 @@
     ]
   },
   {
+    "id": "seat",
+    "type": "rts_seat_agents",
+    "env_id": "wc3",
+    "agents": [
+      "wc3",
+      "opponent"
+    ],
+    "depends_on": [
+      "agent",
+      "opponent"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -53,8 +66,7 @@
       }
     ],
     "depends_on": [
-      "agent",
-      "opponent"
+      "deploy"
     ]
   },
   {
@@ -120,7 +132,8 @@
     "prompt": "A raiding party is attacking your workers while your army stands on the far side of the base. Bring the army back, kill the raiders, and lose as few workers and buildings as you can.",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
     ]
   },
   {
@@ -131,7 +144,17 @@
     "prompt": "Play your seat with the script.",
     "timeout_seconds": 1800,
     "depends_on": [
-      "stage"
+      "stage",
+      "seat"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "rts_finish",
+    "env_id": "wc3",
+    "depends_on": [
+      "play",
+      "play-opponent"
     ]
   },
   {
@@ -166,7 +189,7 @@
     ],
     "verifier_id": "drill",
     "depends_on": [
-      "play"
+      "finish"
     ]
   },
   {

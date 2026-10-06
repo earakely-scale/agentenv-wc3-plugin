@@ -212,6 +212,17 @@ def agent_played(g: Game) -> dict:
             "result": orders > 0 and not idle, "evidence": f"{orders} orders; the harness let {idle} game seconds pass"}
 
 
+def settled(finish: dict, seat: dict) -> dict:
+    """How the game came to its end once the agents stopped (rts_finish), for the record: no weight."""
+    stopped = any(x.get("slot") == seat.get("slot") for x in finish.get("open_seats") or ())
+    last = seat.get("last_move_seconds")
+    return {"name": "finish", "criterion": "how the game ended once the agents stopped (information only)",
+            "result": True, "weight": 0,
+            "evidence": (f"this seat stopped before the end (last move at {last} s); " if stopped else "")
+            + f"rts_finish {finish.get('rule')}: from {finish.get('from_seconds')} to {finish.get('to_seconds')} "
+              f"game seconds" + (", a forfeit" if seat.get("forfeit") else "")}
+
+
 def check(g: Game, c: dict) -> dict:
     """A metric against a value; one without an op only reports the metric, as wc3agent's do."""
     measured = g.metric(c["metric"])
@@ -314,6 +325,8 @@ class RTSGradeTaskStep(TaskStep):
             out[key] = [{"name": k, **CRITERIA[k](g), "weight": w} for k, w in self.criteria().items()]
             out[key] += [check(g, c) for c in self.checks]
             out[key] += [{"name": k, **GATE_CHECKS[k](g), "weight": GATE_WEIGHT} for k in gates]
+            if finish := summary.get("finish"):
+                out[key].append(settled(finish, seat))
         return out
 
     async def execute(self, context: TaskStepContext) -> TaskStepContext:

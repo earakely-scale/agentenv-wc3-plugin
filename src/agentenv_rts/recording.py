@@ -1,12 +1,14 @@
 """A finished game's recording from its Timeline: an MP4 of the map, a frame per step (Pillow draws, ffmpeg
 encodes), the spectator page with the whole game embedded, which plays in any browser, and the game's own picture
-when the env captured it (display.py), with chapters and a highlight reel (highlights.py). `files()` writes them to a
-folder the env serves; `urn:rts:recording/v1` lists them and the `save_rts_recording` step fetches each one into a
-file artifact, so a long game's video never travels inside a reply."""
+when the env captured it (display.py), with chapters and a highlight reel (highlights.py); and the timeline itself
+as JSON (every frame: units, events, notes), to recut or analyse a game without playing it again. `files()` writes
+them to a folder the env serves; `urn:rts:recording/v1` lists them and the `save_rts_recording` step fetches each
+one into a file artifact, so a long game's video never travels inside a reply."""
 
 from __future__ import annotations
 
 import base64
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,7 +23,7 @@ BAR = 64
 FPS = 10
 
 
-def files(timeline: Timeline, out: Path, stem: str, formats: tuple[str, ...] = ("mp4", "html"),
+def files(timeline: Timeline, out: Path, stem: str, formats: tuple[str, ...] = ("mp4", "html", "timeline"),
           client: Path | None = None) -> tuple[list[dict], list[str]]:
     """Writes the recording into the folder `out`: its files as `{"name", "content_type", "bytes"}`, and notes on
     what could not be made. `client` is the game's own video: the `client` file, with the game's chapters, and what
@@ -55,6 +57,10 @@ def files(timeline: Timeline, out: Path, stem: str, formats: tuple[str, ...] = (
         beside = f"{stem}-client.mp4" if video is not None and "client" in formats else None
         (path := out / f"{stem}.html").write_text(live.standalone(timeline, beside), encoding="utf-8")
         made.append(_made(path, "text/html"))
+    if "timeline" in formats:
+        (path := out / f"{stem}-timeline.json").write_text(json.dumps(timeline.doc(), separators=(",", ":")),
+                                                            encoding="utf-8")
+        made.append(_made(path, "application/json"))
     if "mp4" in formats:
         path = out / f"{stem}.mp4"
         try:
