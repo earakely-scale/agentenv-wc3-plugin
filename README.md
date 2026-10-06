@@ -460,6 +460,11 @@ name, went to the game unresolved, and the game refused it. Since the fix (887d7
 game. Armies come 50 to 100 s sooner, but the grades held: in 5 minutes against the easy AI, only fighting moves
 the score.
 
+**Against the normal AI** ([docs/evals/vs-normal.md](docs/evals/vs-normal.md)): `vs-normal` is three of those models
+for 12 minutes against the normal Orc AI, 12 games for $1.45. Here games are decided: three ended in defeat, all on
+Echo Isles. DeepSeek V4.1 Flash came first at 0.41, surviving all four games and giving the most attack orders by
+far. Haiku 4.5 came second at 0.35 with one defeat, and GPT-5.4 mini third at 0.30 with two. No model won.
+
 ## The wc3-llm agent
 
 `agents/wc3-llm` lets any chat model play through the env's MCP tools (`get_state`, `act`, `advance`, …). The model
