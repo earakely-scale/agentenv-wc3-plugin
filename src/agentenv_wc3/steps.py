@@ -1,7 +1,6 @@
-"""The plugin's task steps: `wc3_match` opens a deployed Warcraft III env's lobby for a match, sending your
-activation files first (from agent-env's secret store, else a folder on this machine), and `save_wc3_replay` stores
-the finished game's replay as a file artifact. The match's players are the lobby's slots (agentenv_game's
-add_player_slot), and start_match creates the game."""
+"""The plugin's task steps: `wc3_license` sends your activation files to a deployed Warcraft III env (from
+agent-env's secret store, else a folder on this machine), and `save_wc3_replay` stores the finished game's replay as a
+file artifact. A match is agentenv_game's create_match, add_player_slot and start_match."""
 
 from __future__ import annotations
 
@@ -20,7 +19,6 @@ from agent_env.entity_refs import EntityRef
 from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.task_step import TaskStep
-from agentenv_game import LOBBY
 from agentenv_protocol import client
 from httpx import HTTPStatusError
 
@@ -34,10 +32,6 @@ REPLAY_EXTENSION = "urn:wc3:replay/v1"
 LICENSE_FILES = ("roc.w3k", "tft.w3k")
 LICENSE_SECRETS = {"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}
 DEFAULT_LICENSE_DIR = "~/.wc3-license"
-MATCH_OPTIONS = ("map", "seed", "randomize_starts", "time_limit_seconds", "mode", "allow_debug", "client_view",
-                 "step_ms", "lockstep")
-SEATED = ("seats", "race", "opponent_race", "ai_difficulty", "labels")
-"""What wc3_match took before the lobby: who plays is the lobby's slots now."""
 
 
 def _deployed_env(context: TaskStepContext, env_id: str) -> DeployedEnv:
@@ -77,14 +71,14 @@ def license_from_secrets(names: dict[str, str]) -> dict[str, str] | None:
     if not any(found.values()):
         return None
     if missing := [names[f] for f, value in found.items() if not value]:
-        raise RuntimeError(f"wc3_match: the secret store has only some activation files: {', '.join(missing)} "
+        raise RuntimeError(f"wc3_license: the secret store has only some activation files: {', '.join(missing)} "
                            "missing (agent-env wc3 license import stores both)")
     for f, value in found.items():
         try:
             if not base64.b64decode(value, validate=True):
                 raise binascii.Error("empty")
         except binascii.Error as e:
-            raise RuntimeError(f"wc3_match: the secret {names[f]} is not {f} in base64 ({e})") from e
+            raise RuntimeError(f"wc3_license: the secret {names[f]} is not {f} in base64 ({e})") from e
     return found
 
 
@@ -93,75 +87,54 @@ def read_license(directory: Path) -> dict[str, str] | None:
     which the fake game doesn't mind and the real one refuses with a clear error."""
     missing = [n for n in LICENSE_FILES if not (directory / n).is_file() or not (directory / n).stat().st_size]
     if missing:
-        log.warning("wc3_match: no Warcraft III activation files in agent-env's secret store or at %s (missing %s); "
+        log.warning("wc3_license: no Warcraft III activation files in agent-env's secret store or at %s (missing %s); "
                     "the fake game needs none, the real one does: agent-env wc3 license import stores yours", directory,
                     ", ".join(missing))
         return None
     return {n: base64.b64encode((directory / n).read_bytes()).decode() for n in LICENSE_FILES}
 
 
-class WC3MatchTaskStep(TaskStep):
-    """Open a deployed env's lobby for a match: a map, a seed, a time limit, `mode` (`stepping`: time passes as the
-    agents step, in lockstep when there are several; `realtime`: the game runs on its own clock), `allow_debug` (the
-    session's debug extension may stage the game), `client_view` (the game draws itself for spectators, live and
-    in the recording). Your activation files go to the env first. The players are add_player_slot steps after it
-    (an agent, or the game's AI, with its faction, team, ai_level and label), and start_match creates the game."""
+class WC3LicenseTaskStep(TaskStep):
+    """Send your activation files (roc.w3k, tft.w3k) to a deployed env, which the game needs when start_match
+    creates it: from agent-env's secret store (`license_secrets`, by default WC3_ROC_W3K and WC3_TFT_W3K, each file in
+    base64), else your license folder (`license_dir`, else [plugins.agentenv-wc3] license_dir, $WC3_LICENSE_DIR or
+    ~/.wc3-license). Without them the fake game plays and the real one refuses to start."""
 
-    type: ClassVar[str] = "wc3_match"
+    type: ClassVar[str] = "wc3_license"
     entity_refs = (EntityRef.env("env_id"),)
 
-    def __init__(self, id: str, version: int | None, env_id: str, map: str = "(2)EchoIsles.w3x",
-                 seed: int | None = None, randomize_starts: bool = False, time_limit_seconds: int = 1200,
-                 mode: str = "stepping", allow_debug: bool = False, client_view: bool = False,
-                 step_ms: int | None = None, lockstep: dict | None = None, license_dir: str | None = None,
-                 license_secrets: dict | None = None, timeout_seconds: int = 120, depends_on: list | None = None,
+    def __init__(self, id: str, version: int | None, env_id: str, license_dir: str | None = None,
+                 license_secrets: dict | None = None, timeout_seconds: int = 60, depends_on: list | None = None,
                  fail_task_on_error: bool = True):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
-        self.env_id, self.map, self.seed, self.randomize_starts = env_id, map, seed, randomize_starts
-        self.time_limit_seconds, self.license_dir = time_limit_seconds, license_dir
-        self.license_secrets = dict(license_secrets) if license_secrets is not None else None
         if license_secrets is not None and set(license_secrets) != set(LICENSE_FILES):
-            raise ValueError(f"wc3_match license_secrets names the secrets of {', '.join(LICENSE_FILES)}")
-        self.mode, self.allow_debug, self.client_view = mode, allow_debug, client_view
-        self.step_ms, self.lockstep, self.timeout_seconds = step_ms, lockstep, timeout_seconds
-        if mode not in ("stepping", "realtime"):
-            raise ValueError(f"wc3_match mode must be stepping or realtime, got {mode!r}")
+            raise ValueError(f"wc3_license license_secrets names the secrets of {', '.join(LICENSE_FILES)}")
+        self.env_id, self.license_dir, self.timeout_seconds = env_id, license_dir, timeout_seconds
+        self.license_secrets = dict(license_secrets) if license_secrets is not None else None
 
     def to_dict(self) -> dict:
-        return {**super().to_dict(), "env_id": self.env_id, **{k: getattr(self, k) for k in MATCH_OPTIONS},
-                "license_dir": self.license_dir, "license_secrets": self.license_secrets,
-                "timeout_seconds": self.timeout_seconds}
+        return {**super().to_dict(), "env_id": self.env_id, "license_dir": self.license_dir,
+                "license_secrets": self.license_secrets, "timeout_seconds": self.timeout_seconds}
 
     @classmethod
-    def from_dict(cls, data: dict) -> WC3MatchTaskStep:
-        if seated := [k for k in SEATED if k in data]:
-            raise ValueError(f"wc3_match takes no {', '.join(seated)}: seat each player with an add_player_slot step "
-                             "(faction, team, ai_level, label) and create the game with start_match")
-        options = {k: data[k] for k in (*MATCH_OPTIONS, "license_dir", "license_secrets", "timeout_seconds")
-                   if k in data}
-        return cls(**cls._base_from_dict(data), env_id=data["env_id"], **options)
+    def from_dict(cls, data: dict) -> WC3LicenseTaskStep:
+        return cls(**cls._base_from_dict(data), env_id=data["env_id"],
+                   **{k: data[k] for k in ("license_dir", "license_secrets", "timeout_seconds") if k in data})
 
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
         deployed = _deployed_env(context, self.env_id)
         files = (await asyncio.to_thread(license_from_secrets, self.license_secrets or LICENSE_SECRETS)
                  or await asyncio.to_thread(read_license, license_dir(self.license_dir)))
-        overrides = {k: v for k, v in self.step_param_overrides(context).items() if k in MATCH_OPTIONS}
-        settings = {**{k: getattr(self, k) for k in MATCH_OPTIONS if getattr(self, k) is not None}, **overrides}
+        if files is None:
+            return context
         try:
-            if files is not None:
-                await client.invoke_extension(deployed.environment_url, _extension_card(deployed, LICENSE_EXTENSION),
-                                              LICENSE_EXTENSION, {"files": files}, timeout=self.timeout_seconds)
-            lobby = await client.invoke_extension(deployed.environment_url, _extension_card(deployed, LOBBY), LOBBY,
-                                                  {"additional_settings": settings}, timeout=self.timeout_seconds,
-                                                  method="open")
+            result = await client.invoke_extension(deployed.environment_url,
+                                                   _extension_card(deployed, LICENSE_EXTENSION), LICENSE_EXTENSION,
+                                                   {"files": files}, timeout=self.timeout_seconds)
         except HTTPStatusError as e:
-            raise RuntimeError(f"env {self.env_id!r} did not open the match: {error_message(e.response.text)}") from e
-        base_url = deployed.mcp_url.removesuffix("/mcp")
-        context.metadata["wc3_match"] = {"settings": lobby["additional_settings"], "live_url": f"{base_url}/live"}
-        log.info("wc3_match: %s, %d game seconds, %s; up to %d players; watch it live at %s/live",
-                 lobby["additional_settings"]["map"], lobby["additional_settings"]["time_limit_seconds"],
-                 lobby["additional_settings"]["mode"], (lobby.get("player_slot_settings") or {}).get("max", 0),
-                 base_url)
+            raise RuntimeError(f"env {self.env_id!r} refused the activation files: "
+                               f"{error_message(e.response.text)}") from e
+        log.info("wc3_license: the activation files went to %s (licensed: %s)", self.env_id, result.get("licensed"))
         return context
 
 

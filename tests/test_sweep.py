@@ -38,7 +38,8 @@ def test_a_spec_becomes_one_task_per_combination_and_an_eval_over_them(generated
     for s in steps:
         registry[s["type"]].from_dict(s)
     by_id = {s["id"]: s for s in steps}
-    assert (by_id["match"]["map"], by_id["match"]["seed"]) == ("(2)TerenasStand.w3x", 2)
+    settings = by_id["match"]["additional_settings"]
+    assert (settings["map"], settings["seed"], settings["time_limit_seconds"]) == ("(2)TerenasStand.w3x", 2, 300)
     assert by_id["slot-wc3"]["additional_settings"] == {"faction": "orc", "team": 1}
     assert by_id["slot-ai"]["additional_settings"] == {"faction": "orc", "team": 2, "ai_level": "easy"}
     play = by_id["play"]
@@ -51,7 +52,7 @@ def test_a_spec_becomes_one_task_per_combination_and_an_eval_over_them(generated
 
 
 def test_a_template_of_agents_gets_the_race_on_the_players_slot_and_the_opponent_on_the_ais(tmp_path):
-    template = [{"id": "match", "type": "wc3_match"},
+    template = [{"id": "match", "type": "create_match"},
                 {"id": "slot-wc3", "type": "add_player_slot", "occupant": {"kind": "agent", "name": "wc3"},
                  "additional_settings": {"faction": "human", "team": 1}},
                 {"id": "slot-ai", "type": "add_player_slot", "occupant": {"kind": "ai"},

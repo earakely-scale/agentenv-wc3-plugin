@@ -127,10 +127,10 @@ def task_of(spec: Spec, template: list[dict], c: dict, name: str) -> list[dict]:
     """The template with one combination's axes: the match's map, seed and time limit; the player's slot's race and
     the AI slot's race and level; the player's model, prompt and per-game cost cap."""
     steps = copy.deepcopy(template)
-    match = next(s for s in steps if s["type"] == "wc3_match")
-    match.update({"map": c["map"], "seed": c["seed"]})
+    settings = next(s for s in steps if s["type"] == "create_match").setdefault("additional_settings", {})
+    settings.update({"map": c["map"], "seed": c["seed"]})
     if spec.time_limit_seconds:
-        match["time_limit_seconds"] = spec.time_limit_seconds
+        settings["time_limit_seconds"] = spec.time_limit_seconds
     play = next(s for s in steps if s["id"] == spec.player_step)
     play.update({"model": c["model"], "prompt_id": name})
     opponent, slots = c["opponent"], [s for s in steps if s["type"] == "add_player_slot"]
@@ -143,7 +143,7 @@ def task_of(spec: Spec, template: list[dict], c: dict, name: str) -> list[dict]:
         pretty, players = map_name(c["map"])
         play["prompt"] = spec.prompt.format(
             race=RACES[c["race"]], map=pretty, players=players, difficulty=opponent["computer"],
-            opponent=RACES[opponent["race"]], minutes=round(match.get("time_limit_seconds", 1200) / 60),
+            opponent=RACES[opponent["race"]], minutes=round(settings.get("time_limit_seconds", 1200) / 60),
             worker=WORKER[c["race"]], supply=SUPPLY[c["race"]])
     agent_step = next(s for s in steps if s["type"] == "deploy_agent" and s.get("agent_name") == play.get("agent_name"))
     agent_step["env_vars"] = {**agent_step.get("env_vars", {}), "WC3_MAX_COST_USD": str(spec.max_cost_usd)}

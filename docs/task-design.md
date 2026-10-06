@@ -15,29 +15,30 @@ score per seat). Phase 4, the task-set generator, is `agent-env wc3 sweep` (READ
    built from seats, an optional staging step and a rubric. There is no scenario concept: wc3agent's 25 scenarios
    become 25 drill tasks built from these primitives.
 5. **Game-agnostic where it can be.** `rts_grade`, `save_rts_recording`, the summary contract and the scripted
-   opponent's session live in `agentenv_rts`; `wc3_match`, the staging extension and the replay are Warcraft III's.
+   opponent's session live in `agentenv_rts`; the lobby and its steps (`create_match`, `add_player_slot`,
+   `start_match`) in agentenv-game-env; the license, the staging extension and the replay are Warcraft III's.
 
 ## A task's steps
 
 ```
-deploy_env ─┬─ deploy_agent (one per agent seat, the scripted opponent included) ──┐
-            └─ wc3_match (opens the lobby) ─┬─ add_player_slot (one per seat) ◄────┘
-                                            └──────────────── start_match (the game is created)
-                                                                     │
-                                         stage (optional: apply_server_config → urn:wc3:stage/v1)
-                                                                     │
-                                          prompt_agent (one per agent seat, in parallel)
-                                                                     │
-                                                    rts_finish ─ rts_grade ─┬─ save_wc3_replay
-                                                                            └─ save_rts_recording
+deploy_env
+ ├─ deploy_agent (one per agent seat, the scripted opponent included)
+ ├─ wc3_license
+ └─ create_match (opens the lobby)
+     └─ add_player_slot (one per seat; an agent's also waits for its deploy_agent)
+         └─ start_match (after every slot and the license: the game is created)
+             └─ stage (optional: apply_server_config → urn:wc3:stage/v1)
+                 └─ prompt_agent (one per agent seat, in parallel)
+                     └─ rts_finish ─ rts_grade ─┬─ save_wc3_replay
+                                                └─ save_rts_recording
 ```
 
 | Step | From | Status |
 |---|---|---|
 | `deploy_env` | agent-env | as today |
 | `deploy_agent` | agent-env | as today, with `"env_ids": []`: its seat's slot gives it its address |
-| `wc3_match` | plugin | opens the match's lobby with its settings; sends the activation files |
-| `add_player_slot`, `start_match` | [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env) | fill the lobby one seat at a time; close it, which creates the game |
+| `wc3_license` | plugin | sends the activation files, which the game needs when it is created |
+| `create_match`, `add_player_slot`, `start_match` | [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env) | open the lobby with the match's settings; fill it one seat at a time; close it, which creates the game |
 | `apply_server_config` with `urn:wc3:stage/v1` | agent-env step, plugin extension | stages the game before play |
 | `prompt_agent` | agent-env | as today; the prompt carries a drill's goal |
 | `rts_finish` | plugin (`agentenv_rts`) | settles a game its agents stopped before its end |
@@ -46,11 +47,10 @@ deploy_env ─┬─ deploy_agent (one per agent seat, the scripted opponent inc
 | `save_rts_recording` | plugin (`agentenv_rts`) | as today: `mp4`, `html`, `client`, `highlights` |
 | `rts_broadcast` | plugin (`agentenv_rts`) | streams or records the game, and holds its start until it is live |
 
-## `wc3_match`: the game's settings
+## The game's settings: `create_match`'s `additional_settings`
 
-| Field | Values | Default | Notes |
+| Setting | Values | Default | Notes |
 |---|---|---|---|
-| `env_id` | string | required | |
 | `map` | a stock map | `(2)EchoIsles.w3x` | any of the installation's maps plays; 16 have prepared spectator data |
 | `seed` | int or `null` | `null`: a new game each run | tasks pin it for reproducibility |
 | `randomize_starts` | bool | `false` | |
@@ -60,11 +60,10 @@ deploy_env ─┬─ deploy_agent (one per agent seat, the scripted opponent inc
 | `client_view` | bool | `false` | the game draws itself for spectators; stepping about 3x slower |
 | `lockstep` | `{stall_seconds}` | `{600}` | stepping with several agents: a seat that stalls this long is stepped with no orders, and flagged |
 | `allow_debug` | bool | `false` | lets an agent's own session stage the game (research only; staging steps don't need it) |
-| `license_dir`, `license_secrets`, `timeout_seconds` | | | operational |
 
 ## Seats: the lobby's slots
 
-Who plays is the env's lobby (`urn:game:lobby/v1`, agentenv-game-env): `wc3_match` opens it with the settings above,
+Who plays is the env's lobby (`urn:game:lobby/v1`, agentenv-game-env): `create_match` opens it with the settings above,
 an `add_player_slot` step fills each seat, and `start_match` closes it, which creates the game. A seat is a slot:
 
 - **`occupant`:** `{"kind": "agent", "name": "<deploy_agent's agent_name>"}`, or `{"kind": "ai"}` for the game's AI.
@@ -95,7 +94,7 @@ goal (the prompt).
 
 ## Staging: `urn:wc3:stage/v1`
 
-A harness extension, called from an `apply_server_config` step after `wc3_match` and before play. It runs a list of
+A harness extension, called from an `apply_server_config` step after `start_match` and before play. It runs a list of
 the hook's staging ops in order, with two things the raw ops lack: **named places** and **handles**.
 
 ```json
@@ -155,7 +154,7 @@ was met, so nothing is lost.
 
 1. `deploy_env`, then two `deploy_agent`s, both with `"env_ids": []` (each slot gives its agent its address): the
    player, `wc3-macro-micro` with `WC3_GOAL=prompt`, and the attacker, `wc3-scripted` with `SCRIPT=attack`.
-2. `wc3_match`: 150 game seconds, stepping (so the two play in lockstep). Then a slot each, `wc3` as `human` and
+2. `wc3_license`, and `create_match`: 150 game seconds, stepping (so the two play in lockstep). Then a slot each, `wc3` as `human` and
    `opponent` as `orc` with `omniscient`, and `start_match`.
 3. `stage`: an `apply_server_config` step calling `urn:wc3:stage/v1` with the hero, its level and potion, the army
    and the enemy army, by named places and handles.
@@ -228,7 +227,7 @@ read `env_outcome_verifier`'s. Every criterion records its evidence (`army 2715 
 ## Variety
 
 1. **In the task:** every field above.
-2. **Per run:** `wc3_match`, the stage extension and `rts_grade` honour agent-env's
+2. **Per run:** `create_match`, the stage extension and `rts_grade` honour agent-env's
    `user_overrides.step_params.<step id>`, so a runner changes the seed, map or opponent without new tasks.
 3. **Generated sets:** `agent-env wc3 sweep generate SPEC OUT` crosses a template task over the models, maps, races,
    opponents and seeds a TOML spec names into named tasks (`first-eval-gpt-5.4-mini-terenasstand-s2`) and an eval of
@@ -239,7 +238,7 @@ read `env_outcome_verifier`'s. Every criterion records its evidence (`army 2715 
 **Agent versus the game's AI** (today's `macro-micro-quick`):
 
 ```json
-{"id": "match", "type": "wc3_match", "env_id": "wc3", "seed": 1, "time_limit_seconds": 300},
+{"id": "match", "type": "create_match", "env_id": "wc3", "additional_settings": {"seed": 1, "time_limit_seconds": 300}},
 {"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "wc3"},
  "additional_settings": {"faction": "human"}, "depends_on": ["match", "agent"]},
 {"id": "slot-ai", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "ai"},
@@ -250,8 +249,8 @@ read `env_outcome_verifier`'s. Every criterion records its evidence (`army 2715 
 **Agent versus agent**, two MCP agents in lockstep:
 
 ```json
-{"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)TerenasStand.w3x", "seed": 3,
- "time_limit_seconds": 1200},
+{"id": "match", "type": "create_match", "env_id": "wc3",
+ "additional_settings": {"map": "(2)TerenasStand.w3x", "seed": 3, "time_limit_seconds": 1200}},
 {"id": "slot-claude", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "claude"},
  "additional_settings": {"faction": "human"}, "depends_on": ["match", "agent-claude"]},
 {"id": "slot-codex", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "codex"},
@@ -280,8 +279,9 @@ with a `prompt_agent` step per agent, after `start`, and `{"type": "rts_grade", 
 ## Compatibility
 
 `rts_grade`'s `melee` and `smoke` give the grades `wc3-verifier` and `smoke-verifier` gave (0.5s stay 0.5). The seats
-moved from `wc3_match` (`seats`, and its shorthand `race`, `opponent_race`, `ai_difficulty` and `labels`) to the lobby;
-`wc3_match` refuses those fields and says where they went. A one-seat game's verification keeps its name
+moved from the old `wc3_match` step (`seats`, and its shorthand `race`, `opponent_race`, `ai_difficulty` and `labels`)
+to the lobby, and its match settings to agentenv-game-env's `create_match`. Its license is `wc3_license`. A one-seat
+game's verification keeps its name
 (`<verifier_id>`); several seats' are `<verifier_id>:<agent>`.
 
 ## Verified, and still open

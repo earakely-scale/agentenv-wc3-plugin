@@ -19,7 +19,7 @@ from agentenv_protocol import client
 from conftest import new_game
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from test_steps import deployed, run_context, seat_and_start
+from test_steps import deployed, open_match, run_context, seat_and_start
 
 from agentenv_rts import choices, display, highlights, recording
 from agentenv_rts.grade import RTSGradeTaskStep
@@ -30,16 +30,14 @@ from agentenv_rts.timeline import Timeline, model_name
 from agentenv_wc3 import frames, metrics, render
 from agentenv_wc3.bridge import WorkerError
 from agentenv_wc3.server import WC3Env, check_scenario, seats_of
-from agentenv_wc3.steps import WC3MatchTaskStep
 
 pytestmark = pytest.mark.anyio
 
 
-async def match(record, seats=None, **options):
-    """A game as a task makes one: wc3_match opens the lobby, a slot per seat (one agent against the normal AI by
+async def match(record, seats=None, **settings):
+    """A game as a task makes one: create_match opens the lobby, a slot per seat (one agent against the normal AI by
     default), start_match creates the game."""
-    step = WC3MatchTaskStep(id="match", version=None, env_id="wc3", **{"seed": 2, "time_limit_seconds": 60, **options})
-    return await seat_and_start(await step.execute(run_context(record)), seats)
+    return await seat_and_start(await open_match(record, **{"seed": 2, "time_limit_seconds": 60, **settings}), seats)
 
 
 def base(record) -> str:

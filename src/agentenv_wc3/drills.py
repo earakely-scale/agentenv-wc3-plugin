@@ -99,8 +99,10 @@ def convert(name: str, definition: dict) -> list[dict]:
                       "env_vars": {"SCRIPT": opponent,
                                    "SCRIPT_AFTER_SECONDS": str(definition.get("opponent_after_seconds", 0)),
                                    "SCRIPT_EVERY_SECONDS": "5"}, "depends_on": ["deploy"]})
-    steps.append({"id": "match", "type": "wc3_match", "env_id": "wc3", "map": MAP, "seed": 1,
-                  "time_limit_seconds": seconds + warmup, "mode": "stepping", "depends_on": ["deploy"]})
+    steps.append({"id": "license", "type": "wc3_license", "env_id": "wc3", "depends_on": ["deploy"]})
+    steps.append({"id": "match", "type": "create_match", "env_id": "wc3",
+                  "additional_settings": {"map": MAP, "seed": 1, "time_limit_seconds": seconds + warmup,
+                                          "mode": "stepping"}, "depends_on": ["deploy"]})
     steps.append({"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3",
                   "occupant": {"kind": "agent", "name": "wc3"}, "slot": 0,
                   "additional_settings": {"faction": RACES[race]}, "depends_on": ["match", "agent"]})
@@ -114,7 +116,7 @@ def convert(name: str, definition: dict) -> list[dict]:
                       "slot": 1, "additional_settings": {"faction": "orc", "ai_level": AI_DIFFICULTY},
                       "depends_on": ["match"]})
     steps.append({"id": "start", "type": "start_match", "env_id": "wc3",
-                  "depends_on": ["slot-wc3", "slot-opponent" if scripted else "slot-ai"]})
+                  "depends_on": ["slot-wc3", "slot-opponent" if scripted else "slot-ai", "license"]})
     start = "start"
     if ops or warmup:
         start = "stage"

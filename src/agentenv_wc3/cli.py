@@ -160,7 +160,7 @@ def check(base: str, license_dir: Path | None):
 
 
 def _license_source(license_dir: Path | None = None) -> tuple[str, str | None]:
-    """Where wc3_match would get the activation files here, and what is wrong if it can't (no contents shown)."""
+    """Where wc3_license would get the activation files here, and what is wrong if it can't (no contents shown)."""
     try:
         if steps.license_from_secrets(steps.LICENSE_SECRETS):
             return "agent-env's secret store (" + ", ".join(steps.LICENSE_SECRETS.values()) + ")", None
@@ -185,7 +185,7 @@ def _local_secrets_file() -> Path | None:
 
 @wc3.group("license")
 def license_group():
-    """Your activation files (roc.w3k, tft.w3k). wc3_match sends them to the env when a game starts: from
+    """Your activation files (roc.w3k, tft.w3k). wc3_license sends them to the env before a game starts: from
     agent-env's secret store (WC3_ROC_W3K and WC3_TFT_W3K, each file in base64), so a run on any machine finds
     them, else from a folder on this machine ([plugins.agentenv-wc3] license_dir, $WC3_LICENSE_DIR, ~/.wc3-license)."""
 
@@ -222,7 +222,7 @@ def import_license(directory: Path | None, secrets_file: Path | None):
 
 @license_group.command("show")
 def show_license():
-    """Where wc3_match gets the activation files here (their contents are never shown)."""
+    """Where wc3_license gets the activation files here (their contents are never shown)."""
     where, problem = _license_source()
     click.echo(f"The activation files come from {where}" if problem is None else problem)
     if problem is not None:

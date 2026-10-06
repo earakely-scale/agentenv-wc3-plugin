@@ -14,12 +14,11 @@ from pathlib import Path
 import pytest
 from agentenv_protocol import client
 from agentenv_protocol.a2a_agent import TaskOutcome, TaskRequest, TextPart
-from test_steps import deployed, run_context, seat_and_start
+from test_steps import deployed, open_match, seat_and_start
 
 from agentenv_rts import choices
 from agentenv_rts.session import DEBUG, NOTE, OBSERVE, STEP
 from agentenv_wc3.server import WC3Env
-from agentenv_wc3.steps import WC3MatchTaskStep
 
 pytest.importorskip("wc3agent")
 fake_server = pytest.importorskip("wc3env.fake_server")
@@ -80,8 +79,7 @@ async def test_wc3agent_plays_the_game_through_the_rts_session(env_vars, tmp_pat
                **({"WC3_MAX_GAME_SECONDS": "4"} if mode == "realtime" else {})}
     monkeypatch.setattr(agent.os, "environ", dict(agent.os.environ))
     async with deployed(WC3Env()) as record:
-        await seat_and_start(await WC3MatchTaskStep(id="match", version=None, env_id="wc3", time_limit_seconds=60,
-                                                    mode=mode).execute(run_context(record)))
+        await seat_and_start(await open_match(record, time_limit_seconds=60, mode=mode))
         config = agent.WC3Config(model="anthropic/claude-sonnet-5-5")
         servers = {"wc3": {"url": record.mcp_url}}
         summary = await asyncio.to_thread(agent.play_game, config, servers, environ, tmp_path / "session")

@@ -2,9 +2,9 @@ Warcraft III (wc3env): agents play melee games on Echo Isles against the game's 
 drills, through the env's MCP tools or raw wc3env orders. Each game is graded per seat, and its replay and recording
 are saved.
 
-Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once) and starts its game with the
-plugin's `wc3_match` step, which also sends your activation files (`roc.w3k`, `tft.w3k`) from your license
-directory: `license_dir` in `[plugins.agentenv-wc3]` of `.agentenv/config.toml`, `$WC3_LICENSE_DIR`, or
+Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once), sends your activation files
+(`roc.w3k`, `tft.w3k`) with the plugin's `wc3_license` step, and opens its match with agentenv-game-env's
+`create_match`. The files come from agent-env's secret store, else from your license directory: `license_dir` in `[plugins.agentenv-wc3]` of `.agentenv/config.toml`, `$WC3_LICENSE_DIR`, or
 `~/.wc3-license`.
 
 - `smoke` needs no model and no agent: the harness lets a 2-minute game run with no orders (`urn:wc3:idle/v1`)
@@ -30,7 +30,7 @@ by the `smoke` rubric.
   TypeSafe's Jev); the `prompt_agent` model is the macro model. `agent-env wc3 setup --agent` registers the agent.
 
 Every task with agents settles its game before grading it (`rts_finish`, `play_out`: the game runs to its end once
-its agents have stopped). Each player is a slot of the env's lobby: `wc3_match` opens it, an `add_player_slot` step
+its agents have stopped). Each player is a slot of the env's lobby: `create_match` opens it, an `add_player_slot` step
 fills a slot per player (an agent, or the game's AI), and `start_match` creates the game. `broadcast-smoke` plays two
 `wc3-scripted` seats against each other for two minutes with a recorded broadcast (`rts_broadcast`), at no model
 cost.

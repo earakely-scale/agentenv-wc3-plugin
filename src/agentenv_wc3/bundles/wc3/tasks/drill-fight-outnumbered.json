@@ -34,13 +34,23 @@
     ]
   },
   {
-    "id": "match",
-    "type": "wc3_match",
+    "id": "license",
+    "type": "wc3_license",
     "env_id": "wc3",
-    "map": "(2)EchoIsles.w3x",
-    "seed": 1,
-    "time_limit_seconds": 120,
-    "mode": "stepping",
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "create_match",
+    "env_id": "wc3",
+    "additional_settings": {
+      "map": "(2)EchoIsles.w3x",
+      "seed": 1,
+      "time_limit_seconds": 120,
+      "mode": "stepping"
+    },
     "depends_on": [
       "deploy"
     ]
@@ -86,7 +96,8 @@
     "env_id": "wc3",
     "depends_on": [
       "slot-wc3",
-      "slot-opponent"
+      "slot-opponent",
+      "license"
     ]
   },
   {

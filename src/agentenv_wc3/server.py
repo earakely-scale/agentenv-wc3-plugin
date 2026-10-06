@@ -14,7 +14,7 @@ at the agent's fights and key moments (frames.Director), and the recording has t
 (agentenv_rts.display). Spectators read a feed of what happened (frames.Feed), and what players tell them through
 `urn:rts:note/v1`: their plans (also shown in the game's picture), their names and their running costs.
 
-Who plays comes from the env's lobby (agentenv_game, `urn:game:lobby/v1`): wc3_match opens it with the match's
+Who plays comes from the env's lobby (agentenv_game, `urn:game:lobby/v1`): create_match opens it with the match's
 settings, add_player_slot fills a slot per player (an agent, which plays at `/players/<name>/mcp`, or the game's AI),
 and start_match closes it, which creates the game. An env whose lobby was never opened plays its default game: an
 agent at the env's own address against the game's AI.
@@ -331,7 +331,7 @@ class WC3Env(AgentEnvGameEnv):
     async def _new_game(self, scenario: dict) -> None:
         if not self._license_ready():
             raise WorkerError("no_license", "the game needs your Warcraft III activation files (roc.w3k, tft.w3k): "
-                                            "the wc3_match task step sends them from your license directory "
+                                            "the wc3_license task step sends them from your license directory "
                                             "(agent-env wc3 setup --help)")
         await self._drop_capture()
         if self.bridge is None or not self.bridge.alive:
@@ -912,7 +912,7 @@ class WC3Env(AgentEnvGameEnv):
     # ---- extensions (the harness's; each counts in data/get's harness) ----
 
     @extension(LICENSE_EXTENSION, description='Your activation files, {"roc.w3k": base64, "tft.w3k": base64}, which '
-                                              "the game needs once per env: wc3_match sends them from agent-env's "
+                                              "the game needs once per env: wc3_license sends them from agent-env's "
                                               "secret store or your license folder. Their contents never enter the "
                                               "image or the env's replies.")
     async def license(self, files: dict) -> dict:

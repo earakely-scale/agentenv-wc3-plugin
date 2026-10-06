@@ -13,8 +13,8 @@ from agentenv_wc3.cli import wc3
 
 TASKS = Path(__file__).resolve().parents[1] / "src/agentenv_wc3/bundles/wc3/tasks"
 DRILLS = sorted(p.stem for p in TASKS.glob("drill-*.json"))
-STEP_TYPES = {"deploy_env", "deploy_agent", "wc3_match", "add_player_slot", "start_match", "apply_server_config",
-              "prompt_agent", "rts_finish", "rts_grade", "save_wc3_replay", "save_rts_recording"}
+STEP_TYPES = {"deploy_env", "deploy_agent", "wc3_license", "create_match", "add_player_slot", "start_match",
+              "apply_server_config", "prompt_agent", "rts_finish", "rts_grade", "save_wc3_replay", "save_rts_recording"}
 
 
 def definition(name: str) -> dict:
@@ -39,14 +39,16 @@ def test_fight_even_is_the_design_docs_drill():
         {"id": "opponent", "type": "deploy_agent", "agent_name": "opponent", "a2a_agent_id": "wc3-scripted",
          "env_ids": [], "env_vars": {"SCRIPT": "attack", "SCRIPT_AFTER_SECONDS": "0", "SCRIPT_EVERY_SECONDS": "5"},
          "depends_on": ["deploy"]},
-        {"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)EchoIsles.w3x", "seed": 1,
-         "time_limit_seconds": 150, "mode": "stepping", "depends_on": ["deploy"]},
+        {"id": "license", "type": "wc3_license", "env_id": "wc3", "depends_on": ["deploy"]},
+        {"id": "match", "type": "create_match", "env_id": "wc3", "additional_settings": {
+            "map": "(2)EchoIsles.w3x", "seed": 1, "time_limit_seconds": 150, "mode": "stepping"},
+         "depends_on": ["deploy"]},
         {"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "wc3"},
          "slot": 0, "additional_settings": {"faction": "human"}, "depends_on": ["match", "agent"]},
         {"id": "slot-opponent", "type": "add_player_slot", "env_id": "wc3",
          "occupant": {"kind": "agent", "name": "opponent"}, "slot": 1,
          "additional_settings": {"faction": "orc", "omniscient": True}, "depends_on": ["match", "opponent"]},
-        {"id": "start", "type": "start_match", "env_id": "wc3", "depends_on": ["slot-wc3", "slot-opponent"]},
+        {"id": "start", "type": "start_match", "env_id": "wc3", "depends_on": ["slot-wc3", "slot-opponent", "license"]},
         {"id": "stage", "type": "apply_server_config", "env_id": "wc3", "timeout_seconds": 600, "directives": [
             {"service": "wc3", "uri": "urn:wc3:stage/v1", "args": {"warmup_seconds": 0, "ops": [
                 {"op": "spawn", "player": "wc3", "type": "Hamg", "at": "home", "dx": -1300, "as": "hero"},
@@ -78,12 +80,13 @@ def test_fight_even_is_the_design_docs_drill():
 
 def test_a_computer_opponent_is_a_computer_seat_with_its_ai_paused_by_the_stage():
     steps = steps_of("expansion")
-    assert list(steps) == ["deploy", "agent", "match", "slot-wc3", "slot-ai", "start", "stage", "play", "finish",
-                           "grade", "replay", "recording"]
+    assert list(steps) == ["deploy", "agent", "license", "match", "slot-wc3", "slot-ai", "start", "stage", "play",
+                           "finish", "grade", "replay", "recording"]
     assert steps["slot-wc3"]["additional_settings"] == {"faction": "human"}
     assert (steps["slot-ai"]["occupant"], steps["slot-ai"]["additional_settings"]) == (
         {"kind": "ai"}, {"faction": "orc", "ai_level": "easy"})
-    assert steps["match"]["depends_on"] == ["deploy"] and steps["match"]["time_limit_seconds"] == 300
+    assert steps["match"]["depends_on"] == ["deploy"]
+    assert steps["match"]["additional_settings"]["time_limit_seconds"] == 300
     assert ops(steps)[:5] == [
         {"op": "ai", "player": "opponent", "paused": True},
         {"op": "resources", "player": "wc3", "gold": 1500, "lumber": 800},
@@ -98,7 +101,7 @@ def test_a_raid_is_a_scripted_agent_seat_with_its_own_prompt():
     assert steps["opponent"]["env_vars"] == {"SCRIPT": "raid", "SCRIPT_AFTER_SECONDS": "150",
                                              "SCRIPT_EVERY_SECONDS": "5"}
     assert steps["slot-opponent"]["additional_settings"] == {"faction": "orc", "omniscient": True}
-    assert steps["match"]["time_limit_seconds"] == 270
+    assert steps["match"]["additional_settings"]["time_limit_seconds"] == 270
     assert steps["play-opponent"]["agent_name"] == "opponent" and "model" not in steps["play-opponent"]
     assert steps["play-opponent"]["depends_on"] == steps["play"]["depends_on"] == ["stage"]
     assert not any(o["op"] == "ai" for o in ops(steps))
@@ -118,7 +121,7 @@ def test_places_pass_through_and_checks_are_copied_verbatim():
 def test_skip_seconds_warm_the_game_up_and_count_toward_the_time_limit():
     steps = steps_of("shopping")
     assert steps["stage"]["directives"][0]["args"]["warmup_seconds"] == 460
-    assert steps["match"]["time_limit_seconds"] == 2 * 60 + 460
+    assert steps["match"]["additional_settings"]["time_limit_seconds"] == 2 * 60 + 460
     assert ops(steps)[-2:] == [
         {"op": "spawn", "player": "wc3", "type": "Hmkg", "at": "home", "dx": -750, "dy": -600, "as": "hero"},
         {"op": "level", "unit": "hero", "level": 2}]
@@ -182,7 +185,7 @@ def test_every_drill_is_a_consistent_task(task):
     assert len(set(ids)) == len(ids) and {s["type"] for s in steps} <= STEP_TYPES
     for i, s in enumerate(steps):
         assert set(s.get("depends_on", [])) <= set(ids[:i]), s["id"]
-    match = next(s for s in steps if s["type"] == "wc3_match")
+    match = next(s for s in steps if s["type"] == "create_match")
     deployed = {s["agent_name"]: s["id"] for s in steps if s["type"] == "deploy_agent"}
     prompted = {s["agent_name"] for s in steps if s["type"] == "prompt_agent"}
     slots = [s for s in steps if s["type"] == "add_player_slot"]
@@ -190,7 +193,7 @@ def test_every_drill_is_a_consistent_task(task):
     assert set(deployed) == set(seated) == prompted and match["depends_on"] == ["deploy"]
     assert all(seated[name]["depends_on"] == ["match", deployed[name]] for name in seated)
     start = next(s for s in steps if s["type"] == "start_match")
-    assert start["depends_on"] == [s["id"] for s in slots]
+    assert start["depends_on"] == [*(s["id"] for s in slots), "license"]
     plays = [s for s in steps if s["type"] == "prompt_agent"]
     assert all(s["depends_on"] in (["start"], ["stage"]) for s in plays)
     assert all(s["env_ids"] == [] for s in steps if s["type"] == "deploy_agent")

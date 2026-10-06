@@ -129,7 +129,7 @@ agent-env wc3 license import ~/.wc3-license  # into agent-env's secret store, so
 ```
 
 **How the activation files reach the game:**
-- **Never in an image.** The `wc3_match` step sends them to the env when a game starts.
+- **Never in an image.** The `wc3_license` step sends them to the env before a game starts.
 - **From agent-env's secret store first.** They're the secrets `WC3_ROC_W3K` and `WC3_TFT_W3K`, each file in base64.
   `license import` writes them into a local secrets file. For a cloud store (AWS or GCP), store them there yourself.
 - **Then from a folder on the machine running the task:** `license_dir` in `[plugins.agentenv-wc3]`,
@@ -230,8 +230,9 @@ is built from a few steps:
 |---|---|
 | `deploy_env` | Starts the env registered as `wc3` |
 | `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. An agent that plays deploys with `"env_ids": []`: its slot gives it its address |
-| `wc3_match` | Opens the match's lobby: map, seed, time limit, clock. It sends your activation files first |
-| `add_player_slot` | One per player, from [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env): an agent, which then plays at `<env>/players/<name>/mcp`, or the game's AI, with its race, team, AI level and label |
+| `wc3_license` | Sends your activation files to the env, which the game needs when it is created |
+| `create_match` | From [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env): opens the match's lobby with its settings (map, seed, time limit, clock) |
+| `add_player_slot` | From agentenv-game-env, one per player: an agent, which then plays at `<env>/players/<name>/mcp`, or the game's AI, with its race, team, AI level and label |
 | `start_match` | From agentenv-game-env: closes the lobby, which creates the game |
 | `apply_server_config` with `urn:wc3:stage/v1` | Optional: stages the board before play (units, levels, items, resources, a paused AI) |
 | `prompt_agent` | One per agent: the prompt, and the model it plays on. It lasts the whole game |
@@ -243,14 +244,15 @@ is built from a few steps:
 A game runs as this DAG:
 
 ```
-deploy ─┬─► wc3_match ─┬─► add_player_slot (the AI) ─────────────────┐
-        │              └─► add_player_slot (an agent) ◄─ deploy_agent ┴─► start_match ─► stage ─► play (one per agent)
-        │                                                                                       ─► rts_finish ─► rts_grade ─► replay, recording
+deploy ─┬─► create_match ─┬─► add_player_slot (the AI) ──────────────────┐
+        │                 └─► add_player_slot (an agent) ◄─ deploy_agent ┤
+        ├─► wc3_license ─────────────────────────────────────────────────┴─► start_match ─► stage ─► play (per agent)
+        │                                                                     ─► rts_finish ─► rts_grade ─► replay, recording
         └─► rts_broadcast (optional: holds the start until it is live, ends after GAME OVER)
 ```
 
 **Who plays** is the env's lobby (`urn:game:lobby/v1`, from
-[agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)). `wc3_match` opens it with the match's
+[agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)). `create_match` opens it with the match's
 settings. Each `add_player_slot` fills one slot, either with an agent or with the game's AI. `start_match` closes the
 lobby, which creates the game from its slots.
 
@@ -273,13 +275,14 @@ an example; the bundled agent-against-agent task is `duel-quick`:
    "depends_on": ["deploy"]},
   {"id": "agent-b", "type": "deploy_agent", "agent_name": "bot", "a2a_agent_id": "wc3-macro-micro", "env_ids": [],
    "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}, "depends_on": ["deploy"]},
-  {"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)EchoIsles.w3x", "seed": 7,
-   "time_limit_seconds": 900, "depends_on": ["deploy"]},
+  {"id": "license", "type": "wc3_license", "env_id": "wc3", "depends_on": ["deploy"]},
+  {"id": "match", "type": "create_match", "env_id": "wc3", "depends_on": ["deploy"],
+   "additional_settings": {"map": "(2)EchoIsles.w3x", "seed": 7, "time_limit_seconds": 900}},
   {"id": "slot-a", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "sonnet"},
    "additional_settings": {"faction": "human", "label": "Claude Sonnet 5.5"}, "depends_on": ["match", "agent-a"]},
   {"id": "slot-b", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "bot"},
    "additional_settings": {"faction": "orc"}, "depends_on": ["match", "agent-b"]},
-  {"id": "start", "type": "start_match", "env_id": "wc3", "depends_on": ["slot-a", "slot-b"]},
+  {"id": "start", "type": "start_match", "env_id": "wc3", "depends_on": ["slot-a", "slot-b", "license"]},
   {"id": "broadcast", "type": "rts_broadcast", "env_id": "wc3", "title": "Sonnet vs wc3agent", "depends_on": ["deploy"]},
   {"id": "play-a", "type": "prompt_agent", "agent_name": "sonnet", "model": "anthropic/claude-sonnet-5-5",
    "prompt_id": "duel-a", "prompt": "Win this game of Warcraft III.", "depends_on": ["start"]},
@@ -346,9 +349,9 @@ expansions, and settles a game at the time limit on score:
 
 ### Reference
 
-**`wc3_match`**
+**`create_match`'s `additional_settings`**, Warcraft III's match settings:
 
-| Field | What | Default |
+| Setting | What | Default |
 |---|---|---|
 | `map` | A stock map, e.g. `(2)EchoIsles.w3x` or `(4)TurtleRock.w3x` (both played on the real game) | `(2)EchoIsles.w3x` |
 | `seed`, `randomize_starts` | The match's seed: in stepping mode the same seed and the same orders replay a game exactly | a new seed each game |
@@ -358,7 +361,17 @@ expansions, and settles a game at the time limit on score:
 | `step_ms` | Game milliseconds a program's step plays | `1000` |
 | `client_view` | Draws the game: its picture live and in the recording (stepping runs about 3× slower) | `false` |
 | `allow_debug` | Lets an agent's `urn:rts:debug/v1` stage the game (keep it off for evaluations) | `false` |
-| `license_secrets` | The secret-store names of the activation files | `{"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}` |
+
+A setting the env doesn't take is refused as the lobby opens. A run can override any of them through agent-env's
+per-run step overrides (`{"additional_settings": {"seed": 7}}`).
+
+**`wc3_license`:**
+- **`license_secrets`:** the secret-store names of the activation files. Default
+  `{"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}`.
+- **`license_dir`:** the folder to fall back on. Default: `license_dir` in `[plugins.agentenv-wc3]`, else
+  `$WC3_LICENSE_DIR`, else `~/.wc3-license`.
+
+Without the files, the fake game plays and the real one refuses to start.
 
 **A slot** (`add_player_slot`): `occupant` is `{"kind": "agent", "name": <a deploy_agent step's agent_name>}` or
 `{"kind": "ai"}`. `slot` is optional (the next free one). Its `additional_settings` are:
@@ -499,7 +512,7 @@ fixed policies and cadence:
   5 game seconds apart.
 - **Micro (System 1)** answers one multiple-choice question per army unit, at most once a second per group.
 
-It plays the game the task's `wc3_match` started, through the env's `urn:rts` session (raw observations in, raw
+It plays the game the task's `start_match` created, through the env's `urn:rts` session (raw observations in, raw
 wc3env actions out). It plays stepped (the game waits for the models) or in realtime (the game runs on, and slow
 answers just mean fewer decisions), as the match's `mode` says. At a seat's address it plays that seat. The
 `prompt_agent` step's prompt is wc3agent's goal, which it keeps first in every macro request.
@@ -540,7 +553,7 @@ session. It reads the other side's units from its seat's observations, so it pla
 
 While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 watch --open` prints and opens it.
 
-- **The game's own picture:** with `client_view` in `wc3_match`, the game draws itself in a 1280×720 window on the
+- **The game's own picture:** with `client_view` in the match's settings, the game draws itself in a 1280×720 window on the
   container's 1920×1080 display (`WC3_WINDOW`, `WC3_SCREEN`), the env captures it with ffmpeg at 24 fps, and the page
   shows it as the main view (`/live/client`, an MJPEG stream at 12 fps; `/live/client.jpg` is the newest frame) with
   the map beside it. `save_rts_recording` with the `client` format stores the match's video, with chapters, and with
@@ -645,7 +658,7 @@ registers with it. It sees and orders only its own side, unless its slot is `omn
 | AgentEnv piece | Here |
 |---|---|
 | Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level); six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:wc3:license/v1`, `urn:wc3:stage/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:finish/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
-| Task steps | `wc3_match` (opens the match's lobby and sends the activation files) and `save_wc3_replay`, in `steps.py`; `add_player_slot` and `start_match`, from agentenv-game-env; `rts_finish`, `rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
+| Task steps | `wc3_license` (sends the activation files) and `save_wc3_replay`, in `steps.py`; `create_match`, `add_player_slot` and `start_match`, from agentenv-game-env; `rts_finish`, `rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
 | Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
 | CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `license` (`import`, `show`), `serve`, `watch`, `stream`, `recordings`, `drills import` |
