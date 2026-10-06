@@ -448,11 +448,18 @@ async def test_a_realtime_game_starts_once_every_seat_has_moved(env_vars):
             await mcp.initialize()
             state = (await mcp.call_tool("get_state", {})).content[0].text
         assert "The clock starts once every player has made its first move" in state
+
+        def waiting():
+            with urllib.request.urlopen(base(record) + "/live/data.json") as r:
+                return json.load(r)["live"]["waiting"]
+
+        assert await asyncio.to_thread(waiting) == [0, 1]
         first = asyncio.create_task(asyncio.to_thread(a.step, {0: []}, 1000))
         await asyncio.sleep(1.5)
-        assert not first.done()   # a is ready; the game waits for b
+        assert not first.done() and await asyncio.to_thread(waiting) == [1]   # a is ready; the game waits for b
         await asyncio.to_thread(b.step, {1: []}, 1000)
         assert (await first)["observations"][0]["game_time_seconds"] < 1.0   # the 1.5 s a waited were not played
+        assert await asyncio.to_thread(waiting) == []
 
 
 async def test_lockstep_moves_to_the_nearest_deadline():

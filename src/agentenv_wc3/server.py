@@ -241,7 +241,7 @@ class WC3Env(AgentEnvEnvironment):
         self.lockstep: Lockstep | None = None
         self.started = asyncio.Event()
         self.ready: set[int] = set()
-        self.created = time.monotonic()
+        self.created, self.begun = time.monotonic(), False
         self.metrics: metrics.Metrics | None = None
         self.done = False
         self.names = render.Names()
@@ -290,7 +290,7 @@ class WC3Env(AgentEnvEnvironment):
                                         visible=scenario["client_view"],
                                         window=WINDOW if scenario["client_view"] else None)
         self.scenario, self.setup, self.seats = scenario, result.get("setup"), seats
-        self.started, self.ready, self.created = asyncio.Event(), set(), time.monotonic()
+        self.started, self.ready, self.created, self.begun = asyncio.Event(), set(), time.monotonic(), False
         if not result.get("held"):
             self.started.set()
         self.lead = next(x["slot"] for x in seats if x["computer"] is None)
@@ -416,6 +416,7 @@ class WC3Env(AgentEnvEnvironment):
 
     async def _start(self) -> None:
         """Lets a realtime game held at its start run on its own clock."""
+        self.begun = True
         async with self.lock:
             if self.started.is_set():
                 return
@@ -423,8 +424,15 @@ class WC3Env(AgentEnvEnvironment):
             self.started.set()
             log.warning("GAME STARTED at %.1f s, ready: %s", self._seconds(), sorted(self.ready))
 
+    def _waiting(self) -> list[int]:
+        """The agent seats the game waits for before it begins: those yet to make their first move."""
+        if self.begun or self.game_over:
+            return []
+        return [x["slot"] for x in self.seats if x["computer"] is None and x["slot"] not in self.ready]
+
     async def _chunk(self, batches: dict[int, list], seconds: float) -> None:
         """One step of the game with every waiting seat's orders; its observations become the game's state."""
+        self.begun = True
         async with self.lock:
             ms = max(25, round(seconds * 1000) // 25 * 25)
             result = await self.bridge.call("step", actions={str(k): v for k, v in batches.items()}, ms=ms)
@@ -1186,7 +1194,8 @@ class WC3Env(AgentEnvEnvironment):
         return HTMLResponse(rts_live.page(), headers={"Cache-Control": "no-cache"})
 
     async def _live_data(self, request: Request) -> Response:
-        return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since"), self.capture is not None),
+        return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since"), self.capture is not None,
+                                          self._waiting()),
                             headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
 
     async def _live_state(self, request: Request) -> Response:

@@ -12,7 +12,7 @@ const CAST = (QUERY.get("cast") || "").replace(/\/$/, "");
 const TERRAIN = ["#2f4a2a", "#46452f", "#1f4466", "#121418"];
 const NEUTRAL = "#b8b8b8";
 const S = {static: null, frames: [], idx: -1, follow: true, playing: false, terrain: null, scale: 1, client: false,
-  video: null, chyrons: [], chyronOn: false, seenUpTo: null};
+  video: null, chyrons: [], chyronOn: false, seenUpTo: null, waiting: []};
 const BASE = location.pathname.replace(/\/$/, "");
 
 if (STREAM) document.body.classList.add("stream");
@@ -114,9 +114,10 @@ function plans() {
 
 function sidebar(frame) {
   $("clock").textContent = clock(frame && frame.t);
-  const result = frame && frame.result, live = !S.embedded && !result;
-  $("badge").className = "badge " + (result ? "over" : live ? "live" : "");
-  $("badge").textContent = result ? result.replace(/_/g, " ").toUpperCase() : live ? "● LIVE" : "REPLAY";
+  const result = frame && frame.result, live = !S.embedded && !result, waiting = live && S.waiting.length;
+  $("badge").className = "badge " + (result ? "over" : waiting ? "waiting" : live ? "live" : "");
+  $("badge").textContent = result ? result.replace(/_/g, " ").toUpperCase() : waiting ? "WAITING" : live ? "● LIVE"
+    : "REPLAY";
   const said = plans();
   $("plans").innerHTML = said.map(([slot, [t, text]]) => `<div class="plan" style="--c:${colorOf(slot)}">
     <div class="who">${esc(labelOf(slot))}<time>${clock(t)}</time></div><p>${esc(text)}</p></div>`).join("");
@@ -214,7 +215,16 @@ function syncVideo(frame) {
 function onClient() {
   S.client = true;
   document.body.classList.add("has-client");
-  $("client").parentElement.append($("bug"), $("chyron"), $("caption"));
+  $("client").parentElement.append($("bug"), $("chyron"), $("caption"), $("waiting"));
+}
+
+// Before the game begins: who it waits for (the game starts once every player has made its first move).
+function waitingFor() {
+  const names = S.waiting.map(labelOf), el = $("waiting");
+  el.hidden = !names.length;
+  if (!names.length) return;
+  const who = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
+  el.innerHTML = `<b>Waiting for ${esc(who)}</b><span>The game starts once every player has made its first move</span>`;
 }
 
 function showClient() {
@@ -231,12 +241,15 @@ async function poll() {
     const r = await fetch(`${BASE}/data.json?since=${since}`, {cache: "no-store"});
     const doc = await r.json();
     if (doc.live && doc.live.client && !S.client) showClient();
+    S.waiting = (doc.live && doc.live.waiting) || [];
     if (!S.static || (doc.static && doc.static.game !== S.static.game)) { S.frames = []; S.seenUpTo = null; setStatic(doc.static); }
     else if (doc.static) S.static.players = doc.static.players;   // names a player gave itself
     if (S.seenUpTo != null) chyrons(doc.frames.filter(f => f.t > S.seenUpTo));
     if (doc.frames.length) S.seenUpTo = doc.frames.at(-1).t; else if (S.seenUpTo == null) S.seenUpTo = -1;
     S.frames.push(...doc.frames);
     if (S.follow || STREAM) show(S.frames.length - 1);
+    waitingFor();
+    if (S.idx >= 0) sidebar(S.frames[S.idx]);
   } catch (e) { /* the env is restarting or gone: try again */ }
   setTimeout(poll, 1000);
 }
