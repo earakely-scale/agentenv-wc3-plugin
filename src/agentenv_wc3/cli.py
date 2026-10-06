@@ -39,6 +39,8 @@ AGENTS = {
     "wc3-macro-micro": ("wc3-player", "Warcraft III wc3agent (macro + micro)",
                         {"default_model": "anthropic/claude-sonnet-5-5"}),
     "wc3-scripted": ("wc3-scripted", "Warcraft III scripted opponent (attack, raid or idle)", {}),
+    "wc3-llm": ("wc3-llm", "Warcraft III: any chat model through the env's MCP tools",
+                {"default_model": "anthropic/claude-haiku-4-5"}),
 }
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
 STREAMER = Path(agentenv_rts.__file__).with_name("streamer")
