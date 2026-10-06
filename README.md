@@ -608,6 +608,10 @@ sees and orders only its own side, unless its seat is `omniscient`.
 **How orders are checked:**
 - Orders given with `act` are checked against wc3env's own rules: the unit is yours, the target is in view, and the
   arguments are well formed.
+- A type given by name resolves to the one the ordering unit makes. That matters because names are shared: a
+  Peasant's "Barracks" is the Human one, and an Altar's "Archmage" is not a campaign version. A build, train or
+  research the unit can't do is refused at `act`, naming the units that can ("Town Hall can't build Farm; your
+  Peasant can").
 - `advance` sends them and reports what the game refused, the sites it chose for buildings, and what happened.
 - A program's batch is checked the same way. Orders that no longer apply are reported as rejected, by their index.
 

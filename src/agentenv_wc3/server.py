@@ -111,6 +111,9 @@ class Action(BaseModel):
                     "them.")] = {}
 
 
+MAKES = {"build": ("builds",), "train": ("trains", "upgrades_to", "sells_units"), "research": ("researches",)}
+
+
 def scenario_from_env() -> dict:
     """The default game, from WC3_* environment variables (tests and `agent-env wc3 serve`)."""
     scenario = dict(DEFAULT_SCENARIO)
@@ -755,8 +758,8 @@ class WC3Env(AgentEnvEnvironment):
         empty."""
         args = dict(action.get("arguments") or {})
         command = action["command"]
-        if command in ("build", "train", "research") and isinstance(args.get("type_id"), str):
-            args["type_id"] = self.ref.type_id(args["type_id"])
+        if command in MAKES and isinstance(args.get("type_id"), str):
+            args["type_id"] = self._made_by(slot, action["unit_id"], command, args["type_id"])
         if command == "buy" and isinstance(args.get("item_type_id"), str):
             hits = self.ref.find(args["item_type_id"], ("item",))
             args["item_type_id"] = hits[0][1] if len(hits) == 1 else args["item_type_id"]
@@ -770,6 +773,27 @@ class WC3Env(AgentEnvEnvironment):
                 named = [s for s in skills if self.ref.name(s).lower() == args["ability_id"].strip().lower()]
                 args["ability_id"] = named[0] if named else args["ability_id"]
         return {"unit_id": action["unit_id"], "command": command, **({"arguments": args} if args else {})}
+
+    def _made_by(self, slot: int, unit_id: int, command: str, value: str) -> str:
+        """The type `value` names for this unit's build, train or research: of the types a name covers (Human and
+        Orc Barracks), the one the unit makes. One it doesn't make is refused here, naming the units that do."""
+        own = self._me(slot).get("units") or ()
+        unit = next((u for u in own if u["unit_id"] == unit_id), None)
+        facts, named = self.ref.units.get(unit["type_id"]) if unit else None, self.ref.named(value)
+        if not facts or not named:
+            return self.ref.type_id(value)
+
+        def makes(type_id: str) -> list[str]:
+            return [t for key in MAKES[command] for t in (self.ref.units.get(type_id) or {}).get(key) or ()]
+
+        if fits := [t for t in named if t in makes(unit["type_id"])]:
+            return fits[0]
+        who = sorted({self.ref.name(u["type_id"]) for u in own if set(named) & set(makes(u["type_id"]))})
+        makers = sorted({self.ref.name(t) for t, f in self.ref.units.items()
+                         if f.get("race") == facts.get("race") and set(named) & set(makes(t))})
+        raise ValueError(f"{unit_id} {self.ref.name(unit['type_id'])} can't {command} {value}" + (
+            f"; your {', '.join(who)} can" if who else f"; none of your units can yet ({', '.join(makers)} can)"
+            if makers else ""))
 
     def _describe(self, action: dict) -> str:
         args = action.get("arguments") or {}

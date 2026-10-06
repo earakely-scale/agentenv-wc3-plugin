@@ -78,14 +78,17 @@ class Reference:
         close = difflib.get_close_matches(query.lower(), list(named), n=5, cutoff=0.75)
         return [h for name in close for h in named[name] if h[0] in tables]
 
-    def type_id(self, value: str, tables: tuple[str, ...] = ("unit", "upgrade")) -> str:
-        """A type id for `value`: itself if it is one, else the id of the unit or upgrade it names exactly."""
+    def named(self, value: str, tables: tuple[str, ...] = ("unit", "upgrade")) -> list[str]:
+        """The type ids `value` is: itself if it is one, else every unit or upgrade it names exactly. One name can be
+        several: Human and Orc Barracks, a hero and its campaign versions."""
         if any(value in t for t in (self.units, self.upgrades)):
-            return value
-        exact = [h for h in self._named().get(value.strip().lower(), []) if h[0] in tables]
-        if len({type_id for _, type_id in exact}) == 1:
-            return exact[0][1]
-        return value
+            return [value]
+        return list(dict.fromkeys(i for t, i in self._named().get(value.strip().lower(), []) if t in tables))
+
+    def type_id(self, value: str, tables: tuple[str, ...] = ("unit", "upgrade")) -> str:
+        """A type id for `value`: itself if it is one, else the id of the one unit or upgrade it names exactly."""
+        named = self.named(value, tables)
+        return named[0] if len(named) == 1 else value
 
     def cast_order(self, value: str, ability_ids: list[str]) -> str:
         """An order name for `value`: itself, or the cast order of the unit's ability that it names."""

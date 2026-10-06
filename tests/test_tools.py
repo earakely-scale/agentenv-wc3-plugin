@@ -54,6 +54,29 @@ async def test_type_names_resolve_to_ids(env, tools):
                                                                                       "command": "stop"}
 
 
+async def test_a_name_several_types_share_resolves_to_the_one_the_unit_makes(env, tools):
+    await tools("get_state")
+    env.obs[0]["units"].append({"unit_id": 78, "type_id": "halt", "owner": 0, "x": 0, "y": 0, "hp": 900,
+                                "max_hp": 900, "structure": True})
+
+    def made(unit_id, command, type_id):
+        return env._resolve(0, {"unit_id": unit_id, "command": command,
+                                "arguments": {"type_id": type_id}})["arguments"]["type_id"]
+
+    assert made(PEASANT, "build", "Barracks") == "hbar"   # not the Orc one
+    assert (made(78, "train", "Archmage"), made(78, "train", "mountain king")) == ("Hamg", "Hmkg")
+    assert made(HALL, "train", "Keep") == "hkee"
+
+
+async def test_an_order_the_unit_cannot_make_is_refused_with_who_can(tools):
+    error = await tools.error("act", actions=[{"unit_id": HALL, "command": "build",
+                                               "arguments": {"type_id": "Farm", "auto_place": True, "x": 0, "y": 0}}])
+    assert "1000 Town Hall can't build Farm; your Peasant can" in error
+    error = await tools.error("act", actions=[{"unit_id": HALL, "command": "train",
+                                               "arguments": {"type_id": "Footman"}}])
+    assert "can't train Footman; none of your units can yet (Barracks can)" in error
+
+
 async def test_the_game_ends_at_its_time_limit(tools, env):
     for _ in range(2):
         report = await tools("advance", seconds=60)
