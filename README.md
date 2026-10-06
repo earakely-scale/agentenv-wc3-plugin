@@ -44,6 +44,13 @@ call it. Claude won on score at the 10-minute limit, 30.7k to 28.5k, after killi
   - a free-for-all plays to the last seat;
   - a fixed seed replays a game step for step;
   - no game starts until every player has made its first move.
+- **Chaos-tested there**, by breaking things on purpose mid-game:
+  - **An agent's container killed:** the others play on without it.
+  - **The game process killed:** every seat is told the game failed.
+  - **The broadcast's container killed:** the game is still played, graded and recorded.
+  - **Activation-file secrets corrupted or missing:** refused, with a clear error.
+  - **Path traversal on recordings, bogus seats, and invalid holds and finishes:** refused.
+  - **Two tasks at once:** both pass.
 
 Everything above the game also runs on wc3env's **fake game**, on macOS (Apple Silicon) and Linux, without
 Warcraft III.
@@ -139,6 +146,10 @@ agent-env run wc3 --task macro-micro-realtime   # Sonnet 5.5 + Haiku 4.5 against
 agent-env wc3 recordings --out match         # its video, highlights, HTML replay and .w3g, in ./match
 ```
 
+**Disk:** each `setup` stores the env image, about 2.6 GB with the game, as a new version in agent-env's object
+store (`~/.local/state/agent-env/object_store/artifacts/docker_image/mcp-server-wc3/<version>`). Old versions stay
+until you delete them; keep the one your env is registered at.
+
 **Watch from your laptop:** the env listens on the host's loopback. `agent-env wc3 watch` on the host prints its
 address; forward it with `ssh -L 8080:127.0.0.1:<port> <host>` and open `http://localhost:8080/live`.
 
@@ -158,7 +169,8 @@ streams it, with `to`), and stores the video as an artifact of the run:
 
 - **When it ends:** after GAME OVER. It also ends if the game clock stands still for `stall_seconds` (a run whose play
   failed) or if the run is cancelled, so it never holds a run open.
-- **If it fails,** the run goes on, unless the step sets `fail_task_on_error`.
+- **If it fails,** the run goes on, and the error is noted in the run's `broadcast_errors`, unless the step sets
+  `fail_task_on_error`. If the streamer dies mid-game, the video it had recorded so far is kept.
 - **An example:** `broadcast-smoke` records two scripted players, at no model cost.
 
 **Beside any run: `agent-env wc3 stream`.** It waits for the game and stops after GAME OVER:
@@ -176,7 +188,7 @@ To go out live, give a stream key: `to` in the step, or `--to twitch`, `--to x` 
 | Task | Who plays | Game | Measured on the real game |
 |---|---|---|---|
 | `smoke` | nobody: the harness lets the game run | 2 minutes | 40 s, $0 |
-| `broadcast-smoke` | two `wc3-scripted` seats (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per seat | BROADCAST_SMOKE_RESULT |
+| `broadcast-smoke` | two `wc3-scripted` seats (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per seat | 2 min, $0; red 0.25, blue 0.43, the same both times it ran; a 1080p broadcast of 105 s |
 | `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
@@ -602,6 +614,9 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
   `data/get`, the root session and `/live`. The agents here don't: they reach only their seat's tools or session. A
   separate harness port, or a per-match token, would close it.
 - **Realtime and the MCP tools:** in realtime, `get_state` shows the game as of the agent's last `advance`.
+- **A dead agent holds its play step to its timeout.** agent-env's `prompt_agent` keeps polling an agent whose
+  container died until the step's `timeout_seconds`. The game itself goes on without it. Keep play timeouts in
+  proportion to the game.
 - **Container options.** wc3env runs its worker with `--shm-size 256m` and `--init`; agent-env's `server`
   provider sets neither, and the real game has run without them so far.
 - **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
@@ -619,6 +634,16 @@ uv venv && uv pip install -e ".[dev]"
 PYTHONPATH=path/to/wc3env/src:path/to/wc3env/wc3agent/src .venv/bin/pytest
 .venv/bin/ruff check .
 ```
+
+**Chaos tests** (real or fake game, no model):
+
+```bash
+scripts/chaos/run.sh chaos-agent-crash agent        # kill red's agent mid-game
+scripts/chaos/run.sh chaos-game-crash game          # kill the game inside the env
+scripts/chaos/run.sh chaos-broadcast-crash broadcast   # kill the streamer
+```
+
+Each one runs a `broadcast-smoke` with short timeouts, breaks it 10 game seconds in, and reports how the run ended.
 
 `scripts/ci.yml` is the CI workflow: the tests, then the images and `smoke` on the fake game. Copy it to
 `.github/workflows/` to turn it on. `scripts/standin.sh path/to/wc3env` builds `wc3-worker:standin`, wc3env's
