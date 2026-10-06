@@ -30,6 +30,7 @@ from agentenv_rts.session import RemoteSession, SessionError
 from agentenv_rts.steps import RTSFinishTaskStep, RTSSeatAgentsTaskStep, SaveRTSRecordingTaskStep, seat_agents
 from agentenv_rts.timeline import Timeline, model_name
 from agentenv_wc3 import frames, metrics, render
+from agentenv_wc3.bridge import WorkerError
 from agentenv_wc3.server import WC3Env, check_scenario, seats_of
 from agentenv_wc3.steps import WC3MatchTaskStep
 
@@ -487,6 +488,25 @@ async def test_a_hold_keeps_the_game_from_starting_until_it_is_let_go(env_vars):
         assert (await first)["observations"][0]["game_time_seconds"] == 1.0
         await client.invoke_extension(url, card, "urn:rts:hold/v1", {"name": "late"})   # under way: no pause
         assert (await asyncio.to_thread(session.step, {0: []}, 1000))["observations"][0]["game_time_seconds"] == 2.0
+
+
+async def test_when_the_game_fails_every_seat_hears_why(env_vars):
+    env = WC3Env()
+    async with deployed(env) as record:
+        await client.invoke_extension(record.environment_url, record.environment_card, "urn:wc3:new-game/v1",
+                                      {"seats": SEATS, "time_limit_seconds": 60})
+        real, failures = env.bridge.call, iter([("game_failed", "ConnectionError: pipe closed")])
+
+        async def call(cmd, **args):   # as the worker does: the game fails, then it has no game
+            if cmd == "step":
+                raise WorkerError(*next(failures, ("no_game", "no game has started")))
+            return await real(cmd, **args)
+
+        env.bridge.call = call
+        a, b = RemoteSession(base(record) + "/seats/a"), RemoteSession(base(record) + "/seats/b")
+        results = await asyncio.gather(asyncio.to_thread(a.step, {0: []}, 1000),
+                                       asyncio.to_thread(b.step, {1: []}, 1000), return_exceptions=True)
+    assert all(isinstance(r, SessionError) and "game_failed" in str(r) and "no_game" not in str(r) for r in results)
 
 
 async def test_lockstep_moves_to_the_nearest_deadline():

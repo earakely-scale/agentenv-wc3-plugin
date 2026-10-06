@@ -371,7 +371,8 @@ class WC3Env(AgentEnvEnvironment):
         return self.done or all(self._result_of(x["slot"]) for x in self.seats if x["computer"] is None)
 
     def _out(self, slot: int) -> bool:
-        return self.game_over or bool(self._result_of(slot))
+        """This seat's game is over: the game is, or the seat has a result, or the game stopped working."""
+        return self.failed is not None or self.game_over or bool(self._result_of(slot))
 
     def _seconds(self) -> float:
         return max((o.get("game_time_seconds") or 0.0 for o in self.obs.values()), default=0.0)
@@ -403,6 +404,8 @@ class WC3Env(AgentEnvEnvironment):
             await self._chunk({slot: batch}, ms / 1000)
         else:
             await self.lockstep.step(slot, batch, ms / 1000)
+        if self.failed:   # another seat's step found the game dead
+            raise WorkerError("game_failed", f"the game stopped working: {self.failed}")
         return self.step_info.pop(slot)
 
     async def _ready(self, slot: int) -> None:

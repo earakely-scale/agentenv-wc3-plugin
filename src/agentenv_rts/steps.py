@@ -235,8 +235,9 @@ class RTSBroadcastTaskStep(TaskStep):
     with its casters (`cast`), to `to` (twitch, x; empty, the default, only records) and ends `linger_seconds`
     after GAME OVER. It also ends when the game clock has stood still for
     `stall_seconds` (a run whose play failed, so its game never ends), or when the step is cancelled. The video
-    becomes a file artifact; stream keys come from agent-env's secret store. A failed broadcast doesn't fail the
-    task unless `fail_task_on_error` says so."""
+    becomes a file artifact (what a streamer that died had recorded too); stream keys come from agent-env's secret
+    store. A broadcast that fails is noted in `broadcast_errors` and the run goes on, unless `fail_task_on_error`
+    says it should fail the task."""
 
     type: ClassVar[str] = "rts_broadcast"
     entity_refs = (EntityRef.env("env_id"),)
@@ -286,11 +287,21 @@ class RTSBroadcastTaskStep(TaskStep):
                 await client.invoke_extension(deployed.environment_url, card, HOLD,
                                               {"name": self.id, "hold": on, "seconds": self.wait_seconds + 900})
 
-        await hold(True)
         try:
+            await hold(True)
             return await self._broadcast(context, url, hold)
+        except (RuntimeError, OSError, httpx.HTTPError) as e:   # BroadcastError is a RuntimeError
+            if self.fail_task_on_error:
+                raise
+            log.error("rts_broadcast: %s", e)
+            context.metadata.setdefault("broadcasts", {})[self.id] = []
+            context.metadata.setdefault("broadcast_errors", {})[self.id] = str(e)
+            return context
         finally:
-            await hold(False)
+            try:
+                await hold(False)
+            except (RuntimeError, OSError, httpx.HTTPError) as e:   # the env may be gone already
+                log.info("rts_broadcast: letting go of the start: %s", e)
 
     async def _broadcast(self, context: TaskStepContext, url: str, hold) -> TaskStepContext:
         env = await asyncio.to_thread(self.show.environment)
@@ -310,7 +321,8 @@ class RTSBroadcastTaskStep(TaskStep):
             stem = f"{context.metadata.get('task_id', self.env_id)}-broadcast-{context.instance_id or uuid.uuid4().hex}"
             with tempfile.TemporaryDirectory(prefix="rts-broadcast-") as tmp:
                 code = await self._stream(url, image, env, Path(tmp) if self.record else None, hold)
-                for path in sorted(Path(tmp).glob("*.mp4")):
+                videos = sorted(Path(tmp).glob("*.mp4")) or sorted(Path(tmp).glob("*.mkv"))   # a cut-off one
+                for path in videos:
                     artifact = await asyncio.to_thread(FileArtifact.put, f"{stem}-{path.name}",
                                                        description=f"Broadcast of env {self.env_id!r}",
                                                        file_path=str(path))

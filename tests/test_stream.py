@@ -368,6 +368,9 @@ elif args[0] == "run":
     if os.environ.get("FAKE_STREAM") == "end":
         time.sleep(1)
         finish()
+    if os.environ.get("FAKE_STREAM") == "die":   # killed: its live recording is all there is
+        time.sleep(1)
+        os._exit(137)
     while True:
         time.sleep(0.1)
 """
@@ -432,11 +435,23 @@ async def test_a_broadcast_of_a_finished_game_or_without_its_key_starts_nothing(
     async with deployed(WC3Env()) as record:
         session = RemoteSession(record.mcp_url.removesuffix("/mcp"))
         await asyncio.to_thread(session.step, {0: []})
+        noted = await broadcast_of(record, to=["twitch"])   # the run goes on, the error noted
+        assert "TWITCH_STREAM_KEY" in noted.metadata["broadcast_errors"]["broadcast"]
         with pytest.raises(broadcast.BroadcastError, match="TWITCH_STREAM_KEY"):
-            await broadcast_of(record, to=["twitch"])
+            await broadcast_of(record, to=["twitch"], fail_task_on_error=True)
         await RTSFinishTaskStep(id="finish", version=None, env_id="wc3", rule="forfeit").execute(run_context(record))
         context = await broadcast_of(record)
     assert context.metadata["broadcasts"]["broadcast"] == []
     assert not any(c[0] == "run" for c in fake_docker())
     with pytest.raises(ValueError, match="goes nowhere"):
         RTSBroadcastTaskStep(id="b", version=None, env_id="wc3", record=False)
+
+
+@pytest.mark.anyio
+async def test_a_streamer_that_dies_leaves_what_it_recorded(env_vars, local_stores, fake_docker, monkeypatch):
+    monkeypatch.setenv("FAKE_STREAM", "die")
+    async with deployed(WC3Env()) as record:
+        await asyncio.to_thread(RemoteSession(record.mcp_url.removesuffix("/mcp")).step, {0: []})
+        context = await broadcast_of(record)
+    [saved] = context.metadata["broadcasts"]["broadcast"]
+    assert saved["name"] == "stream-test.mkv" and "broadcast_errors" not in context.metadata
