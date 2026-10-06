@@ -3,14 +3,21 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Built on the AgentEnv Framework](https://img.shields.io/badge/built%20on-AgentEnv%20Framework-6f42c1)](https://www.agentenvframework.com)
 
-AI agents play melee games of Warcraft III: The Frozen Throne against the game's own AI, through
-[wc3env](https://github.com/pwang724/wc3env). An LLM can play through MCP tools, or wc3env's own two-model agent,
-`wc3agent`, can play: a macro model plans the economy and the army, and a fast micro model controls each unit (Jev or
-any chat model, such as Claude Haiku). Every game is graded, saved as a native `.w3g` replay and recorded; you can
-watch it live in the game's own picture, with the agent's plans beside it, and send it to Twitch or X with two AI
-casters calling it. This repository is an environment plugin for the
-[AgentEnv Framework](https://www.agentenvframework.com). Its RTS-generic half, `agentenv_rts`, is meant for the next
-real-time strategy game too.
+AI agents play Warcraft III: The Frozen Throne through [wc3env](https://github.com/pwang724/wc3env).
+- **Who they play:** the game's own AI, each other (model against model), as a team, in a free-for-all, or in short
+  drills.
+- **Who can play:**
+  - any chat model, through MCP tools (`wc3-llm`);
+  - wc3env's own two-model agent, `wc3agent`, in which a macro model plans and a fast micro model controls each unit;
+  - a scripted opponent.
+- **How you set it up:** one task JSON says who plays, on which map, with which races and teams, how the game starts,
+  what is staged first and how it is graded, all without code.
+
+Every game is graded, saved as a native `.w3g` replay and recorded. You can watch it live in the game's own picture,
+with the agents' plans beside it, and send it to Twitch or X with two AI casters calling it.
+
+This repository is an environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com). Its
+RTS-generic half, `agentenv_rts`, is meant for the next real-time strategy game too.
 
 [![Watch 45 seconds of the broadcast, with sound: Claude Sonnet 5.5 and Haiku 4.5 against the Orc AI, the agent's plan beside the game, and two AI casters calling it](docs/media/broadcast-poster.jpg)](docs/media/broadcast-clip.mp4)
 
@@ -23,10 +30,23 @@ call it. Claude won on score at the 10-minute limit, 30.7k to 28.5k, after killi
 > Legacy (1.29.2) installation, offline only, never on Battle.net. The env image you build holds your game files:
 > keep it private. Whether this use fits your license agreement is your responsibility.
 
-**Status:** played on the real game (Warcraft III Legacy 1.29.2 under Wine, x86-64 Linux, Docker): `smoke` passes,
-`macro-micro-quick` builds a base, trains a hero and fights creeps, and `macro-micro-realtime` plays a full 10-minute
-game that streams and records with its casters. Everything above the game also runs on wc3env's **fake game**, on macOS
-(Apple Silicon) and Linux, without Warcraft III.
+**Status:** played on the real game (Warcraft III Legacy 1.29.2 under Wine, x86-64 Linux, Docker).
+- **Tasks that ran there:**
+  - `smoke`;
+  - a chat model through the MCP tools against the AI (`vs-ai-quick`);
+  - wc3agent against the AI, stepped and in realtime, streamed with its casters;
+  - two agents in a lockstep duel;
+  - drills.
+
+  The [Tasks](#tasks) table has times, costs and grades.
+- **Multiplayer rules, checked there with no model:**
+  - a team wins together;
+  - a free-for-all plays to the last seat;
+  - a fixed seed replays a game step for step;
+  - no game starts until every player has made its first move.
+
+Everything above the game also runs on wc3env's **fake game**, on macOS (Apple Silicon) and Linux, without
+Warcraft III.
 
 ## Before you start
 
@@ -55,7 +75,7 @@ wc3env's fake game is a stand-in world (a town hall, five peasants and a distant
 nothing else), so every task runs end to end without the game:
 
 ```bash
-agent-env wc3 setup --fake --agent          # the env on the fake game, and the agents (wc3-macro-micro, wc3-scripted)
+agent-env wc3 setup --fake --agent          # the env on the fake game, and the agents (wc3-llm, wc3-macro-micro, wc3-scripted)
 agent-env run wc3 --task smoke               # no model: the game runs, is graded and recorded (~1 min, $0)
 agent-env run wc3 --task macro-micro-quick   # wc3agent, Haiku for macro and micro: 5 game minutes (~8 min, ~$1.20)
 agent-env wc3 watch --open                   # while a game runs: its live view
@@ -108,6 +128,7 @@ The activation files never enter an image: the `wc3_match` step sends them to th
 agent-env wc3 check                          # the host, your worker image, your activation files
 agent-env wc3 setup --agent                  # the env on top of wc3-worker:local, as "wc3", and the agents
 agent-env run wc3 --task smoke               # ~1 min: the game starts, runs two minutes, is graded and recorded
+agent-env run wc3 --task vs-ai-quick         # Haiku 4.5 plays through the MCP tools against the easy Orc AI
 agent-env run wc3 --task macro-micro-realtime   # Sonnet 5.5 + Haiku 4.5 against the normal Orc AI, 10 min, ~$11
 agent-env wc3 recordings --out match         # its video, highlights, HTML replay and .w3g, in ./match
 ```
@@ -133,8 +154,8 @@ To go out live, drop `--offline` and give it a stream key: `--to twitch`, `--to 
 | Task | Who plays | Game | Measured on the real game |
 |---|---|---|---|
 | `smoke` | nobody: the harness lets the game run | 2 minutes | 40 s, $0 |
-| `vs-ai-quick` | your default agent over MCP tools, Human | 5 minutes against the easy Orc AI | depends on the agent |
-| `vs-ai` | your default agent over MCP tools, Human | 20 minutes against the normal Orc AI | depends on the agent |
+| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k |
+| `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
 | `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime, with the game's picture | 11 min, ~$11 |
@@ -144,21 +165,183 @@ To go out live, drop `--offline` and give it a stream key: `--to twitch`, `--to 
 `agent-env run wc3 --task <task>` runs one; the costs are model spend at list prices. On the fake game,
 `macro-micro-quick` costs about $1.20 (there is nothing to fight, so the micro model is never asked).
 
-- **Map and side:** every game is on Echo Isles, with the agent playing Human (Orc too in `duel-quick`).
-- **Seats, drills and grading:** `wc3_match`'s `seats` put any mix of agents and the game's AI in a game, with races
-  and teams; each agent plays at its own address and, stepped, in lockstep with the others. A drill stages its start
-  (`urn:wc3:stage/v1`) and is graded by its checks. [docs/task-design.md](docs/task-design.md) is the design; the
-  bundle's [README](src/agentenv_wc3/bundles/wc3/README.md) lists the 25 drills.
+- **Map and side:** the bundled tasks are all on Echo Isles, seed 1, with the agent playing Human (Orc too in
+  `duel-quick`). Any stock map, race, seed and mix of players is a few lines of JSON away:
+  [Write your own task](#write-your-own-task).
+- **Drills:** each stages its start (`urn:wc3:stage/v1`) and is graded by its checks. The bundle's
+  [README](src/agentenv_wc3/bundles/wc3/README.md) lists the 25 drills; [docs/task-design.md](docs/task-design.md) is
+  the design.
 - **What every task saves:** the game's native replay, and the spectator recording (an MP4 of the map and a
   self-contained HTML replay), as file artifacts. `macro-micro-realtime` also saves the game's own video, with a
   chapter at each major moment, and a highlight reel of at most two minutes cut from it; its HTML replay plays the
   video beside the map when both files are in one folder.
-- **Grading:** `rts_grade`'s `melee` rubric grades the game (`smoke` has its own rubric).
-  - A win counts three times as much as not being defeated or as outscoring the AI.
-  - An undecided game at the time limit is a draw: outscoring the AI earns its part, a win needs every enemy building
-    destroyed.
-  - The grade is 0 if the game stopped working, if the agent gave no orders, or if the harness played part of the
+- **Grading:** `rts_grade` grades each agent seat. The full games use the `melee` rubric:
+  - a win counts three times as much as not being defeated or as outscoring the opponent;
+  - an undecided game at the time limit is a draw, so outscoring the opponent earns its part, but a win needs every
+    enemy building destroyed;
+  - the grade is 0 if the game stopped working, if the agent gave no orders, or if the harness played part of the
     game.
+
+  `duel-quick` adds army, kills, buildings, tier, expansions and hero level (`dense`); drills use their own checks.
+
+## Write your own task
+
+A task is a JSON list of steps, run as a DAG (a step without `depends_on` waits for every step before it). A WC3 task
+is built from a few steps:
+
+| Step | What it does |
+|---|---|
+| `deploy_env` | Starts the env registered as `wc3` |
+| `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. Seated agents deploy with `"env_ids": []`: the match gives them their seat's address |
+| `wc3_match` | Creates the game: map, seed, time limit, clock, and the seats (who plays) |
+| `apply_server_config` with `urn:wc3:stage/v1` | Optional: stages the board before play (units, levels, items, resources, a paused AI) |
+| `prompt_agent` | One per agent: the prompt, and the model it plays on. It lasts the whole game |
+| `rts_grade` | Grades each agent seat with a rubric, weights, targets and checks |
+| `save_wc3_replay`, `save_rts_recording` | The `.w3g`, and the recording (map MP4, HTML replay, the game's video, highlights) |
+
+**When the game starts:** `wc3_match` only creates the game, with its clock stopped. Each agent's first move is its
+"ready", and the game starts once every agent has made one, carrying out all their opening orders. Until then
+`get_state` says so and the live page shows "Waiting for …". An agent that never moves stops holding the start after
+`lockstep.stall_seconds`. In `stepping` mode time then passes only as the agents step, and several agents move in
+lockstep. In `realtime` mode the game runs on its own clock. Holding a realtime game at its start needs the hook patch
+from step 2 of [Play the real game](#play-the-real-game-x86-64-linux).
+
+### Model against model, with different kinds of agent
+
+Claude Sonnet plays through the tools, against wc3agent on Haiku, in one game. This is an example; the bundled
+agent-against-agent task is `duel-quick`:
+
+```json
+[
+  {"id": "deploy", "type": "deploy_env", "env_id": "wc3"},
+  {"id": "agent-a", "type": "deploy_agent", "agent_name": "sonnet", "a2a_agent_id": "wc3-llm", "env_ids": [],
+   "depends_on": ["deploy"]},
+  {"id": "agent-b", "type": "deploy_agent", "agent_name": "bot", "a2a_agent_id": "wc3-macro-micro", "env_ids": [],
+   "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}, "depends_on": ["deploy"]},
+  {"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)EchoIsles.w3x", "seed": 7,
+   "time_limit_seconds": 900, "seats": [{"agent": "sonnet", "race": "human"}, {"agent": "bot", "race": "orc"}],
+   "depends_on": ["agent-a", "agent-b"]},
+  {"id": "play-a", "type": "prompt_agent", "agent_name": "sonnet", "model": "anthropic/claude-sonnet-5-5",
+   "prompt_id": "duel-a", "prompt": "Win this game of Warcraft III.", "depends_on": ["match"]},
+  {"id": "play-b", "type": "prompt_agent", "agent_name": "bot", "model": "anthropic/claude-haiku-4-5",
+   "prompt_id": "duel-b", "prompt": "Play the game the env has started to its end.", "depends_on": ["match"]},
+  {"id": "grade", "type": "rts_grade", "env_id": "wc3", "rubric": "dense", "depends_on": ["play-a", "play-b"]},
+  {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}
+]
+```
+
+### Teams, allies and free-for-all
+
+Only `seats` changes (and `map`: one with as many start locations as seats). Seats on one team are allies (passive
+to each other, sharing vision) and win together. A seat without a `team` is its own team, so a list of bare seats is a
+free-for-all:
+
+```jsonc
+// two agents against two AIs, on (4)TurtleRock.w3x
+"seats": [{"agent": "p1", "race": "human", "team": 1}, {"agent": "p2", "race": "night_elf", "team": 1},
+          {"computer": "normal", "race": "orc", "team": 2}, {"computer": "normal", "race": "undead", "team": 2}]
+// an agent with an AI ally, against an AI (a 4-player map)
+"seats": [{"agent": "p1", "race": "orc", "team": 1}, {"computer": "easy", "race": "human", "team": 1},
+          {"computer": "easy", "race": "undead", "team": 2}]
+// three agents, free for all: the game plays on until one is left
+"seats": [{"agent": "a", "race": "human"}, {"agent": "b", "race": "orc"}, {"agent": "c", "race": "undead"}]
+```
+
+### A drill: stage the board, grade on checks
+
+A stage step puts units at named places, relative to the first agent's start, and names them for the grade:
+
+```json
+{"id": "stage", "type": "apply_server_config", "env_id": "wc3", "depends_on": ["match"],
+ "directives": [{"service": "wc3", "uri": "urn:wc3:stage/v1", "args": {"ops": [
+   {"op": "spawn", "player": "wc3", "type": "Hamg", "at": "home", "dx": -1300, "as": "hero"},
+   {"op": "level", "unit": "hero", "level": 3},
+   {"op": "give", "unit": "hero", "type": "phea"},
+   {"op": "spawn", "player": "wc3", "type": "hfoo", "n": 5, "at": "home", "dx": -1150, "as": "army"},
+   {"op": "spawn", "player": "opponent", "type": "ogru", "n": 4, "at": "home", "dx": -2500, "as": "enemy"},
+   {"op": "ai", "player": "opponent", "paused": true}]}}]},
+{"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks", "checks": [
+   {"metric": "enemy_army_destroyed_percent", "op": ">=", "value": 100},
+   {"metric": "army_kept_percent", "op": ">=", "value": 40},
+   {"metric": "hero_alive", "op": "==", "value": true}], "depends_on": ["play"]}
+```
+
+Grades mix freely. For example, a full game that rewards an early Keep twice as much as a win does, ignores
+expansions, and settles a game at the time limit on score:
+
+```json
+{"id": "grade", "type": "rts_grade", "env_id": "wc3", "rubric": "dense", "at_time_limit": "score",
+ "weights": {"win": 3, "expansions": 0}, "targets": {"hero_level": 3},
+ "checks": [{"metric": "first_time:hkee", "op": "<=", "value": 300, "weight": 6}], "depends_on": ["play"]}
+```
+
+### Reference
+
+**`wc3_match`**
+
+| Field | What | Default |
+|---|---|---|
+| `map` | A stock map, e.g. `(2)EchoIsles.w3x` or `(4)TurtleRock.w3x` (both played on the real game) | `(2)EchoIsles.w3x` |
+| `seats` | Who plays (below). Without it, one agent at the env's own address plays `race` against the game's AI (`opponent_race`, `ai_difficulty`) | |
+| `seed`, `randomize_starts` | The match's seed: in stepping mode the same seed and the same orders replay a game exactly | a new seed each game |
+| `time_limit_seconds` | Game seconds until an undecided game ends | `1200` |
+| `mode` | `stepping` (time passes as the agents step) or `realtime` (the game's own clock) | `stepping` |
+| `lockstep` | `{"stall_seconds": n}`: how long a silent agent holds up the start or a lockstep step, once | `600` |
+| `step_ms` | Game milliseconds a program's step plays | `1000` |
+| `client_view` | Draws the game: its picture live and in the recording (stepping runs about 3× slower) | `false` |
+| `allow_debug` | Lets an agent's `urn:rts:debug/v1` stage the game (keep it off for evaluations) | `false` |
+| `labels` | Names for spectators, by slot | |
+
+**A seat** is `{"agent": name}` (a `deploy_agent` step's `agent_name`) or `{"computer": "easy" | "normal" |
+"insane"}`, plus:
+- `race`: `human`, `orc`, `undead`, `night_elf` or `random`;
+- `team`;
+- `slot`;
+- `ai_assist`: the game's AI also plays the agent's side;
+- `omniscient`: the seat sees every player's units, for harness opponents.
+
+Every computer seat in a game shares one difficulty.
+
+**Stage ops** (`urn:wc3:stage/v1`):
+- **The ops:** `spawn`, `level`, `give`, `item`, `hp`, `mana`, `kill`, `remove`, `resources`, `ai` (`paused`),
+  `research`, `invulnerable`, `alliance` and `destructable`.
+- **`player`:** an agent's name, `opponent`, or a slot.
+- **Places**, measured from the first agent's start: `home`, `enemy_home`, `nearest_camp`, `camp:<n>`,
+  `building:<name>` and `toward:<place>:<distance>`, each with optional `dx` and `dy`.
+- **Handles** (`as`): `army` and `hero` (a seat's own) and `enemy` (its opponents'). They feed `army_kept_percent` and
+  `enemy_army_destroyed_percent`.
+- **`warmup_seconds`:** lets the game run before the ops.
+
+**`rts_grade`**
+- **`rubric`:** `melee`, `dense`, `checks` or `smoke`.
+- **`weights`:** reweigh any criterion; 0 drops it. The criteria are `reached_end`, `win`, `survive`, `outscore`,
+  `army_ratio`, `kills_ratio`, `buildings_destroyed`, `tier`, `expansions` and `hero_level`.
+- **`targets`:** full credit for `army_ratio`, `buildings_destroyed`, `tier`, `expansions` and `hero_level`.
+- **`checks`:** each is `{metric, op, value, weight}` on wc3agent's metric names. For example: `units_lost`,
+  `army_kept_percent`, `camp_cleared_time`, `supply_blocked_seconds`, `idle_worker_seconds` and `hero_level`, or per
+  type, `count:<type>`, `first_time:<type>` and `present_seconds:<type>`.
+- **`at_time_limit`:** how an undecided game counts: `draw`, `score` or `loss`.
+- **`gates`:** `game_ran` and `agent_played`.
+- **`seats`:** which agents to grade; every agent seat by default.
+
+**Per run:** `agent-env run wc3 --task <task> --model <model>` plays any task on another model, without editing it.
+
+## The wc3-llm agent
+
+`agents/wc3-llm` lets any chat model play through the env's MCP tools (`get_state`, `act`, `advance`, …). The model
+is any one agent-env's model endpoint serves that calls tools. The `vs-ai` tasks use it, and it plays any seat.
+- **The loop:** a plain tool loop. The model calls tools until it answers without one; if the game isn't over yet, it
+  is told to keep playing.
+- **Long games fit:**
+  - once the tool results pass about 120k characters, all but the last six are trimmed at once;
+  - the system prompt and the newest message are marked for prompt caching (Anthropic models through LiteLLM), so
+    each turn pays for its history once.
+- **Spectators** see its model as its name, what it writes between tool calls as its plan, and its running cost.
+- **The result** reports the turns, tool calls, tokens and cost. Its trajectory is the conversation.
+
+| Setting | Where | Default |
+|---|---|---|
+| Model | the `prompt_agent` step's `model` (or `agent-env run --model`) | `anthropic/claude-haiku-4-5` |
 
 ## The wc3-macro-micro agent
 
@@ -230,6 +413,8 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
   shops, with every unit and building any player sees, in its owner's colour.
 - **The timeline:** scrub through every step played so far. The HTML recording plays the game's video beside the map
   when the client video sits in the same folder.
+- **Before the start:** until every player has made its first move, the page shows who the game is waiting for, and
+  its badge reads WAITING.
 - **`/live?stream`:** lays the page out at 1920×1080 for a broadcast, with a score bug, chyrons for the big moments and
   the casters' captions, which `agent-env wc3 stream` sends out. `/live/state.json` and `/live/casting.json` serve the
   streamer and its casters.
@@ -278,9 +463,17 @@ flowchart LR
     viewer["spectators"] -- "/live" --> server
 ```
 
-**Who holds the clock:** wc3env holds the game's clock. In `stepping` mode, time passes only when the agent steps:
-`advance` for the tools, `urn:rts:step/v1` for a program. An agent may think as long as it likes between steps. In
-`realtime` mode, the game runs on its own clock, and a step only sends orders and observes.
+**Who holds the clock:** wc3env does.
+- **The start:** a game starts once every agent seat has made its first move.
+- **Stepping:** time passes only when the agents step, with `advance` for the tools and `urn:rts:step/v1` for a
+  program. An agent may think as long as it likes between steps.
+  - **Several agents** move in lockstep: the game moves once every one of them has stepped.
+  - **A seat that stops stepping** (a crash, or an agent that replied early) holds the others up once, for
+    `stall_seconds`, and the game then goes on without it.
+- **Realtime:** the game runs on its own clock, and a step only sends orders and observes.
+
+**Seats:** each agent plays at its own address, `<env>/seats/<agent>/mcp`, which `wc3_match` registers with it. It
+sees and orders only its own side, unless its seat is `omniscient`.
 
 **How orders are checked:**
 - Orders given with `act` are checked against wc3env's own rules: the unit is yours, the target is in view, and the
@@ -299,11 +492,11 @@ flowchart LR
 
 | AgentEnv piece | Here |
 |---|---|
-| Environment | `src/agentenv_wc3/server.py`: six MCP tools; `data/get` (result, both sides' score counters, the harness's counters); the extensions `urn:wc3:new-game/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1` and `urn:rts:debug/v1`; `urn:rts:recording/v1`; and `/live` |
+| Environment | `src/agentenv_wc3/server.py`: six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:wc3:new-game/v1`, `urn:wc3:stage/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
 | Task steps | `wc3_match` (starts the game: its seats, stepping or realtime, and sends any activation files) and `save_wc3_replay`, in `steps.py`; `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
-| Agents | `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
+| Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
-| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch`, `stream`, `recordings` |
+| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch`, `stream`, `recordings`, `drills import` |
 
 [docs/protocol.md](docs/protocol.md) is the worker's protocol.
 
@@ -314,13 +507,14 @@ flowchart LR
 | Module | What it gives a game |
 |---|---|
 | `session.py` | The `urn:rts:*` session contract: observe, step and debug extensions an env serves. `RemoteSession`, a stdlib-only gym-style client, lets an existing RTS agent play an AgentEnv env unchanged |
+| `seats.py` | Several players in one env: each agent's own address (`SeatPaths`), and `Lockstep`, one game clock that moves when every seat has stepped |
 | `timeline.py` | The spectator schema: the map once (bounds, terrain grid, trees, points of interest, players) and a compact frame per step (units, resources, events) |
 | `live.py`, `viewer/` | The live view at `/live` and `/live/data.json?since=T`, with its `?stream` layout and a self-contained HTML replay |
-| `recording.py` | The MP4 of the map from the timeline (Pillow and ffmpeg) and `urn:rts:recording/v1` |
+| `recording.py` | The MP4 of the map from the timeline (Pillow and ffmpeg), written with the rest of the recording to a folder the env serves |
 | `display.py` | The game's own picture from an X display: one ffmpeg writes the match's video and the live JPEG stream |
 | `highlights.py` | A match's major moments on its video's clock: chapters embedded in the video and a highlight reel (ffmpeg) |
 | `streamer/` | The streamer image: any env's `/live?stream` to RTMP servers and a recording, encoded once, with the casters |
-| `steps.py` | `save_rts_recording`: the recording as file artifacts |
+| `steps.py` | `save_rts_recording`: streams each recording file into a file artifact |
 | `grade.py` | `rts_grade`: grades each agent seat from the env's `data/get` summary with a rubric set in the task (`melee`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets, time-limit rule and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 
@@ -331,7 +525,11 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
 
 - **A task-set generator** (phase 4 of [docs/task-design.md](docs/task-design.md)): maps, races, opponents, seeds and
   drills crossed into named tasks and an eval.
-- **No auth on harness extensions:** an agent can reach the env's stage and idle extensions over HTTP.
+- **The harness's endpoints are open to agents.** An agent whose own tools can make HTTP requests (a shell, say)
+  could reach the env's base address. There it could stage the game, start a new one, or see the whole map through
+  `data/get`, the root session and `/live`. The agents here don't: they reach only their seat's tools or session. A
+  separate harness port, or a per-match token, would close it.
+- **Realtime and the MCP tools:** in realtime, `get_state` shows the game as of the agent's last `advance`.
 - **Container options.** wc3env runs its worker with `--shm-size 256m` and `--init`; agent-env's `server`
   provider sets neither, and the real game has run without them so far.
 - **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
