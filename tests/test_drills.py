@@ -13,8 +13,8 @@ from agentenv_wc3.cli import wc3
 
 TASKS = Path(__file__).resolve().parents[1] / "src/agentenv_wc3/bundles/wc3/tasks"
 DRILLS = sorted(p.stem for p in TASKS.glob("drill-*.json"))
-STEP_TYPES = {"deploy_env", "deploy_agent", "rts_seat_agents", "wc3_match", "apply_server_config", "prompt_agent",
-              "rts_finish", "rts_grade", "save_wc3_replay", "save_rts_recording"}
+STEP_TYPES = {"deploy_env", "deploy_agent", "wc3_match", "add_player_slot", "start_match", "apply_server_config",
+              "prompt_agent", "rts_finish", "rts_grade", "save_wc3_replay", "save_rts_recording"}
 
 
 def definition(name: str) -> dict:
@@ -39,12 +39,14 @@ def test_fight_even_is_the_design_docs_drill():
         {"id": "opponent", "type": "deploy_agent", "agent_name": "opponent", "a2a_agent_id": "wc3-scripted",
          "env_ids": [], "env_vars": {"SCRIPT": "attack", "SCRIPT_AFTER_SECONDS": "0", "SCRIPT_EVERY_SECONDS": "5"},
          "depends_on": ["deploy"]},
-        {"id": "seat", "type": "rts_seat_agents", "env_id": "wc3", "agents": ["wc3", "opponent"],
-         "depends_on": ["agent", "opponent"]},
         {"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)EchoIsles.w3x", "seed": 1,
-         "time_limit_seconds": 150, "mode": "stepping",
-         "seats": [{"agent": "wc3", "race": "human"}, {"agent": "opponent", "race": "orc", "omniscient": True}],
-         "depends_on": ["deploy"]},
+         "time_limit_seconds": 150, "mode": "stepping", "depends_on": ["deploy"]},
+        {"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "wc3"},
+         "slot": 0, "additional_settings": {"faction": "human"}, "depends_on": ["match", "agent"]},
+        {"id": "slot-opponent", "type": "add_player_slot", "env_id": "wc3",
+         "occupant": {"kind": "agent", "name": "opponent"}, "slot": 1,
+         "additional_settings": {"faction": "orc", "omniscient": True}, "depends_on": ["match", "opponent"]},
+        {"id": "start", "type": "start_match", "env_id": "wc3", "depends_on": ["slot-wc3", "slot-opponent"]},
         {"id": "stage", "type": "apply_server_config", "env_id": "wc3", "timeout_seconds": 600, "directives": [
             {"service": "wc3", "uri": "urn:wc3:stage/v1", "args": {"warmup_seconds": 0, "ops": [
                 {"op": "spawn", "player": "wc3", "type": "Hamg", "at": "home", "dx": -1300, "as": "hero"},
@@ -57,12 +59,12 @@ def test_fight_even_is_the_design_docs_drill():
                  "as": "enemy"},
                 {"op": "spawn", "player": "opponent", "type": "ohun", "n": 3, "at": "home", "dx": -2700, "dy": -150,
                  "as": "enemy"}]}}],
-         "depends_on": ["match"]},
+         "depends_on": ["start"]},
         {"id": "play", "type": "prompt_agent", "agent_name": "wc3", "model": "anthropic/claude-haiku-4-5",
-         "prompt_id": "drill-fight-even", "prompt": goal, "timeout_seconds": 1800, "depends_on": ["stage", "seat"]},
+         "prompt_id": "drill-fight-even", "prompt": goal, "timeout_seconds": 1800, "depends_on": ["stage"]},
         {"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
          "prompt_id": "drill-fight-even-opponent", "prompt": "Play your seat with the script.", "timeout_seconds": 1800,
-         "depends_on": ["stage", "seat"]},
+         "depends_on": ["stage"]},
         {"id": "finish", "type": "rts_finish", "env_id": "wc3", "depends_on": ["play", "play-opponent"]},
         {"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks", "checks": [
             {"metric": "enemy_army_destroyed_percent", "op": ">=", "value": 100},
@@ -76,11 +78,12 @@ def test_fight_even_is_the_design_docs_drill():
 
 def test_a_computer_opponent_is_a_computer_seat_with_its_ai_paused_by_the_stage():
     steps = steps_of("expansion")
-    assert list(steps) == ["deploy", "agent", "seat", "match", "stage", "play", "finish", "grade", "replay",
-                           "recording"]
-    match = steps["match"]
-    assert match["seats"] == [{"agent": "wc3", "race": "human"}, {"computer": "easy", "race": "orc"}]
-    assert match["depends_on"] == ["deploy"] and match["time_limit_seconds"] == 300
+    assert list(steps) == ["deploy", "agent", "match", "slot-wc3", "slot-ai", "start", "stage", "play", "finish",
+                           "grade", "replay", "recording"]
+    assert steps["slot-wc3"]["additional_settings"] == {"faction": "human"}
+    assert (steps["slot-ai"]["occupant"], steps["slot-ai"]["additional_settings"]) == (
+        {"kind": "ai"}, {"faction": "orc", "ai_level": "easy"})
+    assert steps["match"]["depends_on"] == ["deploy"] and steps["match"]["time_limit_seconds"] == 300
     assert ops(steps)[:5] == [
         {"op": "ai", "player": "opponent", "paused": True},
         {"op": "resources", "player": "wc3", "gold": 1500, "lumber": 800},
@@ -94,10 +97,10 @@ def test_a_raid_is_a_scripted_agent_seat_with_its_own_prompt():
     assert steps["opponent"]["a2a_agent_id"] == "wc3-scripted"
     assert steps["opponent"]["env_vars"] == {"SCRIPT": "raid", "SCRIPT_AFTER_SECONDS": "150",
                                              "SCRIPT_EVERY_SECONDS": "5"}
-    assert steps["match"]["seats"][1] == {"agent": "opponent", "race": "orc", "omniscient": True}
+    assert steps["slot-opponent"]["additional_settings"] == {"faction": "orc", "omniscient": True}
     assert steps["match"]["time_limit_seconds"] == 270
     assert steps["play-opponent"]["agent_name"] == "opponent" and "model" not in steps["play-opponent"]
-    assert steps["play-opponent"]["depends_on"] == steps["play"]["depends_on"] == ["stage", "seat"]
+    assert steps["play-opponent"]["depends_on"] == steps["play"]["depends_on"] == ["stage"]
     assert not any(o["op"] == "ai" for o in ops(steps))
     assert ops(steps)[-1] == {"op": "spawn", "player": "opponent", "type": "ogru", "n": 3,
                               "at": "toward:enemy_home:7500", "dx": 0, "dy": 0, "as": "enemy"}
@@ -142,7 +145,8 @@ def test_an_idle_opponent_is_a_paused_computer_seat_and_unknown_definitions_are_
     idle = {"title": "t", "goal": "g", "minutes": 1, "checks": [], "opponent": "idle", "race": "nightelf",
             "setup": [{"op": "resources", "gold": 100}]}
     steps = steps_of("x", idle)
-    assert steps["match"]["seats"] == [{"agent": "wc3", "race": "night_elf"}, {"computer": "easy", "race": "orc"}]
+    assert steps["slot-wc3"]["additional_settings"] == {"faction": "night_elf"}
+    assert steps["slot-ai"]["additional_settings"] == {"faction": "orc", "ai_level": "easy"}
     assert ops(steps) == [{"op": "ai", "player": "opponent", "paused": True},
                           {"op": "resources", "player": "wc3", "gold": 100, "lumber": 0}]
     paused = ops(steps_of("x", {**idle, "setup": [{"op": "ai"}]}))
@@ -181,12 +185,15 @@ def test_every_drill_is_a_consistent_task(task):
     match = next(s for s in steps if s["type"] == "wc3_match")
     deployed = {s["agent_name"]: s["id"] for s in steps if s["type"] == "deploy_agent"}
     prompted = {s["agent_name"] for s in steps if s["type"] == "prompt_agent"}
-    seats = {seat["agent"] for seat in match["seats"] if "agent" in seat}
-    seated = next(s for s in steps if s["type"] == "rts_seat_agents")
-    assert set(deployed) == seats == prompted == set(seated["agents"]) and match["depends_on"] == ["deploy"]
-    assert sorted(seated["depends_on"]) == sorted(deployed.values())
+    slots = [s for s in steps if s["type"] == "add_player_slot"]
+    seated = {s["occupant"]["name"]: s for s in slots if s["occupant"]["kind"] == "agent"}
+    assert set(deployed) == set(seated) == prompted and match["depends_on"] == ["deploy"]
+    assert all(seated[name]["depends_on"] == ["match", deployed[name]] for name in seated)
+    start = next(s for s in steps if s["type"] == "start_match")
+    assert start["depends_on"] == [s["id"] for s in slots]
     plays = [s for s in steps if s["type"] == "prompt_agent"]
-    assert all(seated["id"] in s["depends_on"] for s in plays)
+    assert all(s["depends_on"] in (["start"], ["stage"]) for s in plays)
+    assert all(s["env_ids"] == [] for s in steps if s["type"] == "deploy_agent")
     finish = next(s for s in steps if s["type"] == "rts_finish")
     assert sorted(finish["depends_on"]) == sorted(s["id"] for s in plays)
     assert next(s for s in steps if s["type"] == "rts_grade")["depends_on"] == [finish["id"]]

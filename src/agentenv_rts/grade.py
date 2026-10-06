@@ -304,8 +304,8 @@ class RTSGradeTaskStep(TaskStep):
         return {k: w for k, w in {**RUBRICS[self.rubric], **self.weights}.items() if w}
 
     def grade(self, summary: dict) -> dict[str, list[dict]]:
-        """The rows of each graded seat's verification, by its key: `<verifier_id>:<agent>`, or `verifier_id`
-        alone for a seat no agent name identifies (a summary without seats)."""
+        """The rows of each graded seat's verification, by its key: `verifier_id` alone when the game's one agent
+        seat is graded (or no agent name identifies the seat), else `<verifier_id>:<agent>`."""
         everyone, agents = seats(summary)
         if self.seats is None:
             graded = [(s.get("agent"), s) for s in agents]
@@ -313,9 +313,9 @@ class RTSGradeTaskStep(TaskStep):
             graded = [(name, next((s for s in everyone if s.get("agent") == name), None)) for name in self.seats]
         targets = {**TARGETS, **self.targets}
         gates = [k for k in self.gates if not (self.rubric == "smoke" and k == "agent_played")]
-        out = {}
+        out, alone = {}, self.seats is None and len(graded) == 1
         for name, seat in graded:
-            key = self.verifier_id if name is None else f"{self.verifier_id}:{name}"
+            key = self.verifier_id if name is None or alone else f"{self.verifier_id}:{name}"
             if seat is None:
                 out[key] = [{"name": "seat", "criterion": f"the game has a seat for {name}", "result": False,
                              "weight": GATE_WEIGHT, "evidence": f"seats {[s.get('agent') for s in everyone]}"}]

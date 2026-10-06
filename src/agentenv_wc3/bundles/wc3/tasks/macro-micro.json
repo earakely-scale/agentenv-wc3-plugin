@@ -9,24 +9,69 @@
     "type": "wc3_match",
     "env_id": "wc3",
     "map": "(2)EchoIsles.w3x",
-    "race": "human",
-    "opponent_race": "orc",
-    "ai_difficulty": "normal",
     "seed": 1,
     "time_limit_seconds": 1200,
-    "mode": "stepping"
+    "mode": "stepping",
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "slot-wc3",
+    "type": "add_player_slot",
+    "env_id": "wc3",
+    "occupant": {
+      "kind": "agent",
+      "name": "wc3"
+    },
+    "slot": 0,
+    "additional_settings": {
+      "faction": "human",
+      "team": 1
+    },
+    "depends_on": [
+      "match",
+      "agent"
+    ]
+  },
+  {
+    "id": "slot-ai",
+    "type": "add_player_slot",
+    "env_id": "wc3",
+    "occupant": {
+      "kind": "ai"
+    },
+    "slot": 1,
+    "additional_settings": {
+      "faction": "orc",
+      "team": 2,
+      "ai_level": "normal"
+    },
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "start",
+    "type": "start_match",
+    "env_id": "wc3",
+    "depends_on": [
+      "slot-wc3",
+      "slot-ai"
+    ]
   },
   {
     "id": "agent",
     "type": "deploy_agent",
     "agent_name": "wc3",
     "a2a_agent_id": "wc3-macro-micro",
-    "env_ids": [
-      "wc3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
-    }
+    },
+    "depends_on": [
+      "deploy"
+    ]
   },
   {
     "id": "play",
@@ -37,7 +82,7 @@
     "prompt": "Play the game the env has started to its end.",
     "timeout_seconds": 14400,
     "depends_on": [
-      "match",
+      "start",
       "agent"
     ]
   },

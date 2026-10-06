@@ -229,9 +229,10 @@ is built from a few steps:
 | Step | What it does |
 |---|---|
 | `deploy_env` | Starts the env registered as `wc3` |
-| `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. An agent that plays a seat deploys with `"env_ids": []` |
-| `rts_seat_agents` | Gives each named agent its seat's address, `<env>/seats/<agent>/mcp`. It needs only the env and the agents, not the game |
-| `wc3_match` | Creates the game: map, seed, time limit, clock, and the seats (who plays) |
+| `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. An agent that plays deploys with `"env_ids": []`: its slot gives it its address |
+| `wc3_match` | Opens the match's lobby: map, seed, time limit, clock. It sends your activation files first |
+| `add_player_slot` | One per player, from [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env): an agent, which then plays at `<env>/players/<name>/mcp`, or the game's AI, with its race, team, AI level and label |
+| `start_match` | From agentenv-game-env: closes the lobby, which creates the game |
 | `apply_server_config` with `urn:wc3:stage/v1` | Optional: stages the board before play (units, levels, items, resources, a paused AI) |
 | `prompt_agent` | One per agent: the prompt, and the model it plays on. It lasts the whole game |
 | `rts_broadcast` | Optional, from the env's deploy on: holds the game's start until it is live, then streams or records the game, with casters |
@@ -239,15 +240,21 @@ is built from a few steps:
 | `rts_grade` | Grades each agent seat with a rubric, weights, targets and checks |
 | `save_wc3_replay`, `save_rts_recording` | The `.w3g`, and the recording (map MP4, HTML replay, timeline JSON, the game's video, highlights) |
 
-A game with seats runs as this DAG:
+A game runs as this DAG:
 
 ```
-deploy ─┬─► agents ─► rts_seat_agents ──────┐
-        ├─► wc3_match ─► stage ─────────────┴─► play (one per agent) ─► rts_finish ─► rts_grade ─► replay, recording
+deploy ─┬─► wc3_match ─┬─► add_player_slot (the AI) ─────────────────┐
+        │              └─► add_player_slot (an agent) ◄─ deploy_agent ┴─► start_match ─► stage ─► play (one per agent)
+        │                                                                                       ─► rts_finish ─► rts_grade ─► replay, recording
         └─► rts_broadcast (optional: holds the start until it is live, ends after GAME OVER)
 ```
 
-**When the game starts:** `wc3_match` only creates the game, with its clock stopped. Each agent's first move is its
+**Who plays** is the env's lobby (`urn:game:lobby/v1`, from
+[agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)). `wc3_match` opens it with the match's
+settings. Each `add_player_slot` fills one slot, either with an agent or with the game's AI. `start_match` closes the
+lobby, which creates the game from its slots.
+
+**When the game starts:** `start_match` creates the game with its clock stopped. Each agent's first move is its
 "ready", and the game starts once every agent has made one, carrying out all their opening orders. Until then
 `get_state` says so and the live page shows "Waiting for …". An agent that never moves stops holding the start after
 `lockstep.stall_seconds`. In `stepping` mode time then passes only as the agents step, and several agents move in
@@ -266,16 +273,18 @@ an example; the bundled agent-against-agent task is `duel-quick`:
    "depends_on": ["deploy"]},
   {"id": "agent-b", "type": "deploy_agent", "agent_name": "bot", "a2a_agent_id": "wc3-macro-micro", "env_ids": [],
    "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}, "depends_on": ["deploy"]},
-  {"id": "seat", "type": "rts_seat_agents", "env_id": "wc3", "agents": ["sonnet", "bot"],
-   "depends_on": ["agent-a", "agent-b"]},
   {"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)EchoIsles.w3x", "seed": 7,
-   "time_limit_seconds": 900, "seats": [{"agent": "sonnet", "race": "human"}, {"agent": "bot", "race": "orc"}],
-   "depends_on": ["deploy"]},
+   "time_limit_seconds": 900, "depends_on": ["deploy"]},
+  {"id": "slot-a", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "sonnet"},
+   "additional_settings": {"faction": "human", "label": "Claude Sonnet 5.5"}, "depends_on": ["match", "agent-a"]},
+  {"id": "slot-b", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "bot"},
+   "additional_settings": {"faction": "orc"}, "depends_on": ["match", "agent-b"]},
+  {"id": "start", "type": "start_match", "env_id": "wc3", "depends_on": ["slot-a", "slot-b"]},
   {"id": "broadcast", "type": "rts_broadcast", "env_id": "wc3", "title": "Sonnet vs wc3agent", "depends_on": ["deploy"]},
   {"id": "play-a", "type": "prompt_agent", "agent_name": "sonnet", "model": "anthropic/claude-sonnet-5-5",
-   "prompt_id": "duel-a", "prompt": "Win this game of Warcraft III.", "depends_on": ["match", "seat"]},
+   "prompt_id": "duel-a", "prompt": "Win this game of Warcraft III.", "depends_on": ["start"]},
   {"id": "play-b", "type": "prompt_agent", "agent_name": "bot", "model": "anthropic/claude-haiku-4-5",
-   "prompt_id": "duel-b", "prompt": "Play the game the env has started to its end.", "depends_on": ["match", "seat"]},
+   "prompt_id": "duel-b", "prompt": "Play the game the env has started to its end.", "depends_on": ["start"]},
   {"id": "finish", "type": "rts_finish", "env_id": "wc3", "rule": "forfeit", "depends_on": ["play-a", "play-b"]},
   {"id": "grade", "type": "rts_grade", "env_id": "wc3", "rubric": "dense", "depends_on": ["finish"]},
   {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}
@@ -287,19 +296,24 @@ team rule gives its opponents the win.
 
 ### Teams, allies and free-for-all
 
-Only `seats` changes (and `map`: one with as many start locations as seats). Seats on one team are allies (passive
-to each other, sharing vision) and win together. A seat without a `team` is its own team, so a list of bare seats is a
-free-for-all:
+Only the slots change (and `map`: one with as many start locations as players). Slots on one team are allies
+(passive to each other, sharing vision) and win together. A slot without a `team` is its own team, so slots with no
+teams make a free-for-all. Each line below is one `add_player_slot` step's `occupant` and `additional_settings`:
 
 ```jsonc
 // two agents against two AIs, on (4)TurtleRock.w3x
-"seats": [{"agent": "p1", "race": "human", "team": 1}, {"agent": "p2", "race": "night_elf", "team": 1},
-          {"computer": "normal", "race": "orc", "team": 2}, {"computer": "normal", "race": "undead", "team": 2}]
+{"kind": "agent", "name": "p1"}  {"faction": "human", "team": 1}
+{"kind": "agent", "name": "p2"}  {"faction": "night_elf", "team": 1}
+{"kind": "ai"}                   {"faction": "orc", "team": 2, "ai_level": "normal"}
+{"kind": "ai"}                   {"faction": "undead", "team": 2, "ai_level": "normal"}
 // an agent with an AI ally, against an AI (a 4-player map)
-"seats": [{"agent": "p1", "race": "orc", "team": 1}, {"computer": "easy", "race": "human", "team": 1},
-          {"computer": "easy", "race": "undead", "team": 2}]
+{"kind": "agent", "name": "p1"}  {"faction": "orc", "team": 1}
+{"kind": "ai"}                   {"faction": "human", "team": 1, "ai_level": "easy"}
+{"kind": "ai"}                   {"faction": "undead", "team": 2, "ai_level": "easy"}
 // three agents, free for all: the game plays on until one is left
-"seats": [{"agent": "a", "race": "human"}, {"agent": "b", "race": "orc"}, {"agent": "c", "race": "undead"}]
+{"kind": "agent", "name": "a"}   {"faction": "human"}
+{"kind": "agent", "name": "b"}   {"faction": "orc"}
+{"kind": "agent", "name": "c"}   {"faction": "undead"}
 ```
 
 ### A drill: stage the board, grade on checks
@@ -307,7 +321,7 @@ free-for-all:
 A stage step puts units at named places, relative to the first agent's start, and names them for the grade:
 
 ```json
-{"id": "stage", "type": "apply_server_config", "env_id": "wc3", "depends_on": ["match"],
+{"id": "stage", "type": "apply_server_config", "env_id": "wc3", "depends_on": ["start"],
  "directives": [{"service": "wc3", "uri": "urn:wc3:stage/v1", "args": {"ops": [
    {"op": "spawn", "player": "wc3", "type": "Hamg", "at": "home", "dx": -1300, "as": "hero"},
    {"op": "level", "unit": "hero", "level": 3},
@@ -337,7 +351,6 @@ expansions, and settles a game at the time limit on score:
 | Field | What | Default |
 |---|---|---|
 | `map` | A stock map, e.g. `(2)EchoIsles.w3x` or `(4)TurtleRock.w3x` (both played on the real game) | `(2)EchoIsles.w3x` |
-| `seats` | Who plays (below). Without it, one agent at the env's own address plays `race` against the game's AI (`opponent_race`, `ai_difficulty`) | |
 | `seed`, `randomize_starts` | The match's seed: in stepping mode the same seed and the same orders replay a game exactly | a new seed each game |
 | `time_limit_seconds` | Game seconds until an undecided game ends | `1200` |
 | `mode` | `stepping` (time passes as the agents step) or `realtime` (the game's own clock) | `stepping` |
@@ -345,18 +358,19 @@ expansions, and settles a game at the time limit on score:
 | `step_ms` | Game milliseconds a program's step plays | `1000` |
 | `client_view` | Draws the game: its picture live and in the recording (stepping runs about 3× slower) | `false` |
 | `allow_debug` | Lets an agent's `urn:rts:debug/v1` stage the game (keep it off for evaluations) | `false` |
-| `labels` | Names for spectators, by slot | |
 | `license_secrets` | The secret-store names of the activation files | `{"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}` |
 
-**A seat** is `{"agent": name}` (a `deploy_agent` step's `agent_name`) or `{"computer": "easy" | "normal" |
-"insane"}`, plus:
-- `race`: `human`, `orc`, `undead`, `night_elf` or `random`;
-- `team`;
-- `slot`;
-- `ai_assist`: the game's AI also plays the agent's side;
-- `omniscient`: the seat sees every player's units, for harness opponents.
+**A slot** (`add_player_slot`): `occupant` is `{"kind": "agent", "name": <a deploy_agent step's agent_name>}` or
+`{"kind": "ai"}`. `slot` is optional (the next free one). Its `additional_settings` are:
+- `faction`: `human`, `orc`, `undead`, `night_elf` or `random` (default `random`);
+- `team`: 1 to 12 (default: its own);
+- `label`: its name for spectators;
+- agents only: `ai_assist`, so the game's AI also plays the agent's side; and `omniscient`, so the slot sees every
+  player's units (for harness opponents);
+- the AI only: `ai_level`, `easy`, `normal` or `insane` (default `normal`).
 
-Every computer seat in a game shares one difficulty.
+A match takes no more players than its map's start locations, and at least one agent. Every AI slot shares one level,
+because the game has one AI level. agentenv-game-env's README documents the lobby and both steps in full.
 
 **Stage ops** (`urn:wc3:stage/v1`):
 - **The ops:** `spawn`, `level`, `give`, `item`, `hp`, `mana`, `kill`, `remove`, `resources`, `ai` (`paused`),
@@ -379,11 +393,6 @@ Every computer seat in a game shares one difficulty.
 - **`at_time_limit`:** how an undecided game counts: `draw`, `score` or `loss`.
 - **`gates`:** `game_ran` and `agent_played`.
 - **`seats`:** which agents to grade; every agent seat by default.
-
-**`rts_seat_agents`:**
-- **`agents`:** the `deploy_agent` steps' `agent_name`s; every agent of the run by default.
-- **What it does:** registers each one's seat address through its MCP-configuration extension. It runs once per agent,
-  and a rerun changes nothing.
 
 **`rts_finish`:** `rule` decides what happens to a game still going once every play step has ended.
 - **`play_out` (default):** runs it with no orders to its end. That time is counted apart from the harness's `idle`,
@@ -547,7 +556,7 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
   one per blow, and the moments that matter in bold: heroes, levels, tiers, expansions, heroes and buildings lost.
   Creeping is minor news.
 - **The sidebar:** each player's card with its army's value, and, for an agent, its spend and decisions per minute; a
-  momentum graph of score and army over the game, and who is ahead. `labels` in `wc3_match` names players by slot.
+  momentum graph of score and army over the game, and who is ahead. A slot's `label` names its player.
 - **The map:** Echo Isles' terrain from wc3env's pathing grid, trees, gold mines, start locations, creep camps and
   shops, with every unit and building any player sees, in its owner's colour.
 - **The timeline:** scrub through every step played so far. The HTML recording plays the game's video beside the map
@@ -598,7 +607,7 @@ flowchart LR
         server["agentenv_wc3.server<br/>(Linux Python)"] -- "JSON lines" --> worker["worker.py<br/>(Windows Python, Wine)"]
         worker -- "wc3env GameSession" --> game["Warcraft III + wc3hook.dll"]
     end
-    runner["agent-env"] -- "new-game, replay, recording, data/get" --> server
+    runner["agent-env"] -- "lobby, license, replay, recording, data/get" --> server
     viewer["spectators"] -- "/live" --> server
 ```
 
@@ -611,9 +620,8 @@ flowchart LR
     `stall_seconds`, and the game then goes on without it.
 - **Realtime:** the game runs on its own clock, and a step only sends orders and observes.
 
-**Seats:** each agent plays at its own address, `<env>/seats/<agent>/mcp`, which `rts_seat_agents` registers with
-it. It
-sees and orders only its own side, unless its seat is `omniscient`.
+**Players:** each agent plays at its own slot's address, `<env>/players/<agent>/mcp`, which `add_player_slot`
+registers with it. It sees and orders only its own side, unless its slot is `omniscient`.
 
 **How orders are checked:**
 - Orders given with `act` are checked against wc3env's own rules: the unit is yours, the target is in view, and the
@@ -636,8 +644,8 @@ sees and orders only its own side, unless its seat is `omniscient`.
 
 | AgentEnv piece | Here |
 |---|---|
-| Environment | `src/agentenv_wc3/server.py`: six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:wc3:new-game/v1`, `urn:wc3:stage/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:finish/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
-| Task steps | `wc3_match` (creates the game and sends the activation files) and `save_wc3_replay`, in `steps.py`; `rts_seat_agents`, `rts_finish`, `rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
+| Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level); six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:wc3:license/v1`, `urn:wc3:stage/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:finish/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
+| Task steps | `wc3_match` (opens the match's lobby and sends the activation files) and `save_wc3_replay`, in `steps.py`; `add_player_slot` and `start_match`, from agentenv-game-env; `rts_finish`, `rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
 | Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
 | CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `license` (`import`, `show`), `serve`, `watch`, `stream`, `recordings`, `drills import` |
@@ -651,7 +659,7 @@ sees and orders only its own side, unless its seat is `omniscient`.
 | Module | What it gives a game |
 |---|---|
 | `session.py` | The `urn:rts:*` session contract: observe, step and debug extensions an env serves. `RemoteSession`, a stdlib-only gym-style client, lets an existing RTS agent play an AgentEnv env unchanged |
-| `seats.py` | Several players in one env: each agent's own address (`SeatPaths`), and `Lockstep`, one game clock that moves when every seat has stepped |
+| `seats.py` | `Lockstep`, one game clock for several players that moves when every one has stepped (each plays at its own address, through agentenv-game-env's routing) |
 | `timeline.py` | The spectator schema: the map once (bounds, terrain grid, trees, points of interest, players) and a compact frame per step (units, resources, events) |
 | `live.py`, `viewer/` | The live view at `/live` and `/live/data.json?since=T`, with its `?stream` layout and a self-contained HTML replay |
 | `recording.py` | The MP4 of the map from the timeline (Pillow and ffmpeg), written with the rest of the recording to a folder the env serves |
@@ -659,7 +667,7 @@ sees and orders only its own side, unless its seat is `omniscient`.
 | `highlights.py` | A match's major moments on its video's clock: chapters embedded in the video and a highlight reel (ffmpeg) |
 | `streamer/` | The streamer image: any env's `/live?stream` to RTMP servers and a recording, encoded once, with the casters |
 | `broadcast.py` | Running that image for one broadcast: its targets from the secret store, its casters' endpoint, its `docker run` (the `stream` command and `rts_broadcast` share it) |
-| `steps.py` | The game-agnostic steps: `rts_seat_agents`, `rts_finish` (an env's `urn:rts:finish/v1`), `rts_broadcast`, and `save_rts_recording`, which streams each recording file into a file artifact |
+| `steps.py` | The game-agnostic steps: `rts_finish` (an env's `urn:rts:finish/v1`), `rts_broadcast`, and `save_rts_recording`, which streams each recording file into a file artifact |
 | `grade.py` | `rts_grade`: grades each agent seat from the env's `data/get` summary with a rubric set in the task (`melee`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets, time-limit rule and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 

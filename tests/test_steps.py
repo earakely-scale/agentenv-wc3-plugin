@@ -15,9 +15,11 @@ from agent_env.config import reset_config
 from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.registry import get_task_step_registry
+from agentenv_game.steps import AddPlayerSlotTaskStep, StartMatchTaskStep
 from agentenv_protocol import AgentEnvEnvironment, client, environment_card, extension
 from agentenv_protocol.types import WELL_KNOWN_PATH
 from click.testing import CliRunner
+from conftest import ONE_AGENT, slot_settings
 
 from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_wc3.server import IDLE_EXTENSION, WC3Env
@@ -61,12 +63,28 @@ def run_context(record: DeployedEnv) -> TaskStepContext:
     return TaskStepContext(deployed_envs=[record], metadata={"task_id": "smoke"}, instance_id="i1")
 
 
+def slot_of(index: int, seat: dict) -> AddPlayerSlotTaskStep:
+    """A seat as a task's add_player_slot step (the agent connects on its own here)."""
+    occupant, given = slot_settings(seat)
+    return AddPlayerSlotTaskStep(id=f"slot-{index}", version=None, env_id="wc3", occupant=occupant, slot=index,
+                                 additional_settings=given, register=False)
+
+
+async def seat_and_start(context: TaskStepContext, seats: list[dict] | None = None) -> TaskStepContext:
+    """The players seated and the game created, as a task's add_player_slot and start_match steps do."""
+    for index, seat in enumerate(seats or ONE_AGENT):
+        await slot_of(index, seat).execute(context)
+    return await StartMatchTaskStep(id="start", version=None, env_id="wc3").execute(context)
+
+
 def test_the_steps_are_registered():
     registry = get_task_step_registry()
     assert registry["wc3_match"] is WC3MatchTaskStep and registry["save_wc3_replay"] is SaveWC3ReplayTaskStep
-    step = WC3MatchTaskStep.from_dict({"id": "match", "type": "wc3_match", "env_id": "wc3", "ai_difficulty": "easy",
-                                       "time_limit_seconds": 300})
-    assert step.to_dict()["ai_difficulty"] == "easy" and step.to_dict()["map"] == "(2)EchoIsles.w3x"
+    step = WC3MatchTaskStep.from_dict({"id": "match", "type": "wc3_match", "env_id": "wc3", "time_limit_seconds": 300})
+    assert step.to_dict()["time_limit_seconds"] == 300 and step.to_dict()["map"] == "(2)EchoIsles.w3x"
+    with pytest.raises(ValueError, match="takes no seats, ai_difficulty: seat each player with an add_player_slot"):
+        WC3MatchTaskStep.from_dict({"id": "match", "type": "wc3_match", "env_id": "wc3", "seats": [],
+                                    "ai_difficulty": "easy"})
 
 
 async def test_match_then_idle_passes_the_smoke_rubric(env_vars, license_dir):
@@ -74,8 +92,10 @@ async def test_match_then_idle_passes_the_smoke_rubric(env_vars, license_dir):
     step = WC3MatchTaskStep(id="match", version=None, env_id="wc3", seed=4, time_limit_seconds=90)
     async with deployed(env) as record:
         context = await step.execute(run_context(record))
-        assert context.metadata["wc3_match"]["scenario"]["seed"] == 4
-        assert context.metadata["wc3_match"]["scenario"]["time_limit_seconds"] == 90
+        assert context.metadata["wc3_match"]["settings"]["seed"] == 4
+        assert context.metadata["wc3_match"]["settings"]["time_limit_seconds"] == 90
+        await seat_and_start(context, [{"agent": "player", "race": "human"}, {"computer": "normal", "race": "orc"}])
+        assert context.metadata["game_lobby"]["state"] == "closed" and context.metadata["game_lobby"]["game"]["setup"]
         result = await client.invoke_extension(record.environment_url, record.environment_card, IDLE_EXTENSION,
                                                {"seconds": 300})
         assert result["played_seconds"] == 90 and result["result"] == "time_limit"
@@ -95,16 +115,17 @@ async def test_a_match_without_activation_files_plays_the_fake_game_and_the_real
     monkeypatch.setenv("WC3_LICENSE_DIR", str(tmp_path / "nowhere"))
     step = WC3MatchTaskStep(id="match", version=None, env_id="wc3", time_limit_seconds=120)
     async with deployed(WC3Env()) as record:
-        context = await step.execute(run_context(record))
-    assert context.metadata["wc3_match"]["scenario"]["time_limit_seconds"] == 120
+        context = await seat_and_start(await step.execute(run_context(record)))
+    assert context.metadata["wc3_match"]["settings"]["time_limit_seconds"] == 120
     assert context.metadata["wc3_match"]["live_url"].endswith("/live")
     assert "no Warcraft III activation files" in caplog.text
     real = WC3Env()
     real.fake, real.game_dir, real.license_mount = False, tmp_path / "game", tmp_path / "no-mount"
     (tmp_path / "game").mkdir()
     async with deployed(real) as record:
-        with pytest.raises(Exception, match="activation files"):
-            await step.execute(run_context(record))
+        context = await step.execute(run_context(record))   # the lobby opens; the game needs the files
+        with pytest.raises(RuntimeError, match="lobby close: lobby_failed: RuntimeError: no_license: .*activation"):
+            await seat_and_start(context)
 
 
 def test_read_license(license_dir):
@@ -164,8 +185,8 @@ async def test_the_replay_becomes_a_file_artifact(local_stores):
 async def test_a_game_without_a_replay_saves_nothing_and_says_why(env_vars, license_dir, local_stores, caplog):
     env = WC3Env()
     async with deployed(env) as record:
-        await WC3MatchTaskStep(id="match", version=None, env_id="wc3", time_limit_seconds=60).execute(
-            run_context(record))
+        await seat_and_start(await WC3MatchTaskStep(id="match", version=None, env_id="wc3",
+                                                    time_limit_seconds=60).execute(run_context(record)))
         await client.invoke_extension(record.environment_url, record.environment_card, IDLE_EXTENSION,
                                       {"seconds": 60})
         context = await SaveWC3ReplayTaskStep(id="replay", version=None, env_id="wc3").execute(run_context(record))
@@ -183,6 +204,12 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
     by_type = {s["type"]: s for s in steps}
     assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
+    slots = [s for s in steps if s["type"] == "add_player_slot"]   # who plays: the lobby's slots, then the game
+    assert by_type["start_match"]["depends_on"] == [s["id"] for s in slots] and len(slots) >= 2
+    seated = {s["occupant"]["name"] for s in slots if s["occupant"]["kind"] == "agent"}
+    assert {s["agent_name"] for s in steps if s["type"] == "prompt_agent"} <= seated
+    assert all(s["env_ids"] == [] for s in steps if s["type"] == "deploy_agent")
+    assert all(not ({"match", "seat"} & set(s["depends_on"])) for s in steps if s["type"] == "prompt_agent")
     grade = by_type["rts_grade"]
     expected = (("smoke", "smoke") if task == "smoke" else ("checks", "drill") if task.startswith("drill-")
                 else ("dense", "duel") if task.startswith("duel") else ("dense", task) if task.startswith("broadcast")

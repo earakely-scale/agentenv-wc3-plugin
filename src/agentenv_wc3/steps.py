@@ -1,6 +1,7 @@
-"""The plugin's task steps: `wc3_match` starts a game in a deployed Warcraft III env, sending your activation
-files with it (from agent-env's secret store, else a folder on this machine), and `save_wc3_replay` stores the
-finished game's replay as a file artifact."""
+"""The plugin's task steps: `wc3_match` opens a deployed Warcraft III env's lobby for a match, sending your
+activation files first (from agent-env's secret store, else a folder on this machine), and `save_wc3_replay` stores
+the finished game's replay as a file artifact. The match's players are the lobby's slots (agentenv_game's
+add_player_slot), and start_match creates the game."""
 
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from agent_env.entity_refs import EntityRef
 from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.task_step import TaskStep
+from agentenv_game import LOBBY
 from agentenv_protocol import client
 from httpx import HTTPStatusError
 
@@ -27,13 +29,15 @@ from agentenv_rts.session import error_message
 log = logging.getLogger(__name__)
 
 PLUGIN = "agentenv-wc3"
-NEW_GAME_EXTENSION = "urn:wc3:new-game/v1"
+LICENSE_EXTENSION = "urn:wc3:license/v1"
 REPLAY_EXTENSION = "urn:wc3:replay/v1"
 LICENSE_FILES = ("roc.w3k", "tft.w3k")
 LICENSE_SECRETS = {"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}
 DEFAULT_LICENSE_DIR = "~/.wc3-license"
-MATCH_OPTIONS = ("map", "race", "opponent_race", "ai_difficulty", "seed", "randomize_starts", "time_limit_seconds",
-                 "mode", "allow_debug", "client_view", "labels", "seats", "step_ms", "lockstep")
+MATCH_OPTIONS = ("map", "seed", "randomize_starts", "time_limit_seconds", "mode", "allow_debug", "client_view",
+                 "step_ms", "lockstep")
+SEATED = ("seats", "race", "opponent_race", "ai_difficulty", "labels")
+"""What wc3_match took before the lobby: who plays is the lobby's slots now."""
 
 
 def _deployed_env(context: TaskStepContext, env_id: str) -> DeployedEnv:
@@ -85,7 +89,7 @@ def license_from_secrets(names: dict[str, str]) -> dict[str, str] | None:
 
 
 def read_license(directory: Path) -> dict[str, str] | None:
-    """The activation files as the new-game extension takes them: {name: base64}; None when they are not there,
+    """The activation files as the license extension takes them: {name: base64}; None when they are not there,
     which the fake game doesn't mind and the real one refuses with a clear error."""
     missing = [n for n in LICENSE_FILES if not (directory / n).is_file() or not (directory / n).stat().st_size]
     if missing:
@@ -97,37 +101,29 @@ def read_license(directory: Path) -> dict[str, str] | None:
 
 
 class WC3MatchTaskStep(TaskStep):
-    """Start a game in a deployed env, on a map, with a time limit. `seats` says who plays: agents (by their
-    deploy_agent agent_name; an rts_seat_agents step gives each its address, `<env>/seats/<agent>/mcp`) and the
-    game's AI, with races and teams; without it, the agent at the env's root plays `race` against the game's
-    `ai_difficulty` `opponent_race` AI. `mode` is `stepping` (time passes when the agents step: with several, in
-    lockstep) or `realtime` (the game runs on its own clock);
-    `allow_debug` lets the session's debug extension stage the game (scenarios); `client_view` draws the game for
-    spectators: its picture at the live page and, with save_rts_recording's `client` format, its video; `labels`
-    names the players for spectators by slot ({"1": "Orc AI"}), where the agent doesn't name itself."""
+    """Open a deployed env's lobby for a match: a map, a seed, a time limit, `mode` (`stepping`: time passes as the
+    agents step, in lockstep when there are several; `realtime`: the game runs on its own clock), `allow_debug` (the
+    session's debug extension may stage the game), `client_view` (the game draws itself for spectators, live and
+    in the recording). Your activation files go to the env first. The players are add_player_slot steps after it
+    (an agent, or the game's AI, with its faction, team, ai_level and label), and start_match creates the game."""
 
     type: ClassVar[str] = "wc3_match"
     entity_refs = (EntityRef.env("env_id"),)
 
     def __init__(self, id: str, version: int | None, env_id: str, map: str = "(2)EchoIsles.w3x",
-                 race: str = "human", opponent_race: str = "orc", ai_difficulty: str = "normal",
                  seed: int | None = None, randomize_starts: bool = False, time_limit_seconds: int = 1200,
                  mode: str = "stepping", allow_debug: bool = False, client_view: bool = False,
-                 labels: dict | None = None, seats: list | None = None, step_ms: int | None = None,
-                 lockstep: dict | None = None, license_dir: str | None = None, license_secrets: dict | None = None,
-                 timeout_seconds: int = 900, depends_on: list | None = None, fail_task_on_error: bool = True):
+                 step_ms: int | None = None, lockstep: dict | None = None, license_dir: str | None = None,
+                 license_secrets: dict | None = None, timeout_seconds: int = 120, depends_on: list | None = None,
+                 fail_task_on_error: bool = True):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
-        self.env_id, self.map, self.race, self.opponent_race = env_id, map, race, opponent_race
-        self.ai_difficulty, self.seed, self.randomize_starts = ai_difficulty, seed, randomize_starts
+        self.env_id, self.map, self.seed, self.randomize_starts = env_id, map, seed, randomize_starts
         self.time_limit_seconds, self.license_dir = time_limit_seconds, license_dir
         self.license_secrets = dict(license_secrets) if license_secrets is not None else None
         if license_secrets is not None and set(license_secrets) != set(LICENSE_FILES):
             raise ValueError(f"wc3_match license_secrets names the secrets of {', '.join(LICENSE_FILES)}")
-        self.mode, self.allow_debug, self.client_view, self.labels = mode, allow_debug, client_view, labels
-        self.seats, self.step_ms, self.lockstep = seats, step_ms, lockstep
-        self.timeout_seconds = timeout_seconds
-        if seats is not None and not (isinstance(seats, list) and all(isinstance(x, dict) for x in seats)):
-            raise ValueError("wc3_match seats must be a list of seats")
+        self.mode, self.allow_debug, self.client_view = mode, allow_debug, client_view
+        self.step_ms, self.lockstep, self.timeout_seconds = step_ms, lockstep, timeout_seconds
         if mode not in ("stepping", "realtime"):
             raise ValueError(f"wc3_match mode must be stepping or realtime, got {mode!r}")
 
@@ -138,33 +134,34 @@ class WC3MatchTaskStep(TaskStep):
 
     @classmethod
     def from_dict(cls, data: dict) -> WC3MatchTaskStep:
+        if seated := [k for k in SEATED if k in data]:
+            raise ValueError(f"wc3_match takes no {', '.join(seated)}: seat each player with an add_player_slot step "
+                             "(faction, team, ai_level, label) and create the game with start_match")
         options = {k: data[k] for k in (*MATCH_OPTIONS, "license_dir", "license_secrets", "timeout_seconds")
                    if k in data}
         return cls(**cls._base_from_dict(data), env_id=data["env_id"], **options)
 
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
         deployed = _deployed_env(context, self.env_id)
-        card = _extension_card(deployed, NEW_GAME_EXTENSION)
         files = (await asyncio.to_thread(license_from_secrets, self.license_secrets or LICENSE_SECRETS)
                  or await asyncio.to_thread(read_license, license_dir(self.license_dir)))
         overrides = {k: v for k, v in self.step_param_overrides(context).items() if k in MATCH_OPTIONS}
-        args = {**{k: getattr(self, k) for k in MATCH_OPTIONS if getattr(self, k) is not None}, **overrides}
-        if files is not None:
-            args["license"] = files
+        settings = {**{k: getattr(self, k) for k in MATCH_OPTIONS if getattr(self, k) is not None}, **overrides}
         try:
-            result = await client.invoke_extension(deployed.environment_url, card, NEW_GAME_EXTENSION, args,
-                                                   timeout=self.timeout_seconds)
+            if files is not None:
+                await client.invoke_extension(deployed.environment_url, _extension_card(deployed, LICENSE_EXTENSION),
+                                              LICENSE_EXTENSION, {"files": files}, timeout=self.timeout_seconds)
+            lobby = await client.invoke_extension(deployed.environment_url, _extension_card(deployed, LOBBY), LOBBY,
+                                                  {"additional_settings": settings}, timeout=self.timeout_seconds,
+                                                  method="open")
         except HTTPStatusError as e:
-            raise RuntimeError(f"env {self.env_id!r} did not start the game: {error_message(e.response.text)}") from e
-        scenario = (result or {}).get("scenario") or {k: v for k, v in args.items() if k != "license"}
-        context.metadata["wc3_match"] = {"scenario": scenario, "setup": (result or {}).get("setup")}
+            raise RuntimeError(f"env {self.env_id!r} did not open the match: {error_message(e.response.text)}") from e
         base_url = deployed.mcp_url.removesuffix("/mcp")
-        context.metadata["wc3_match"]["live_url"] = f"{base_url}/live"
-        log.info("wc3_match: %s, %d game seconds, %s; watch it live at %s/live",
-                 "; ".join(f"{x.get('agent') or x.get('computer') + ' AI'} as {x.get('race', 'random')}"
-                           for x in scenario.get("seats") or ()) or
-                 f"{scenario.get('race')} against the {scenario.get('ai_difficulty')} {scenario.get('opponent_race')}"
-                 " AI", scenario.get("time_limit_seconds", 0), scenario.get("mode", "stepping"), base_url)
+        context.metadata["wc3_match"] = {"settings": lobby["additional_settings"], "live_url": f"{base_url}/live"}
+        log.info("wc3_match: %s, %d game seconds, %s; up to %d players; watch it live at %s/live",
+                 lobby["additional_settings"]["map"], lobby["additional_settings"]["time_limit_seconds"],
+                 lobby["additional_settings"]["mode"], (lobby.get("player_slot_settings") or {}).get("max", 0),
+                 base_url)
         return context
 
 

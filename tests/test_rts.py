@@ -15,19 +15,17 @@ import urllib.request
 
 import pytest
 from agent_env.artifact import FileArtifact
-from agent_env.env.env import DeployedEnv
-from agent_env.task_step.context import DeployedAgent, TaskStepContext
 from agentenv_protocol import client
-from agentenv_protocol.types import WELL_KNOWN_PATH
+from conftest import new_game
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from test_steps import deployed, run_context
+from test_steps import deployed, run_context, seat_and_start
 
 from agentenv_rts import choices, display, highlights, recording
 from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_rts.seats import Lockstep
 from agentenv_rts.session import RemoteSession, SessionError
-from agentenv_rts.steps import RTSFinishTaskStep, RTSSeatAgentsTaskStep, SaveRTSRecordingTaskStep, seat_agents
+from agentenv_rts.steps import RTSFinishTaskStep, SaveRTSRecordingTaskStep
 from agentenv_rts.timeline import Timeline, model_name
 from agentenv_wc3 import frames, metrics, render
 from agentenv_wc3.bridge import WorkerError
@@ -37,9 +35,11 @@ from agentenv_wc3.steps import WC3MatchTaskStep
 pytestmark = pytest.mark.anyio
 
 
-async def match(record, **options):
-    step = WC3MatchTaskStep(id="match", version=None, env_id="wc3", seed=2, time_limit_seconds=60, **options)
-    return await step.execute(run_context(record))
+async def match(record, seats=None, **options):
+    """A game as a task makes one: wc3_match opens the lobby, a slot per seat (one agent against the normal AI by
+    default), start_match creates the game."""
+    step = WC3MatchTaskStep(id="match", version=None, env_id="wc3", **{"seed": 2, "time_limit_seconds": 60, **options})
+    return await seat_and_start(await step.execute(run_context(record)), seats)
 
 
 def base(record) -> str:
@@ -159,7 +159,8 @@ async def test_client_view_on_the_fake_game_leaves_the_map_alone(env_vars, local
 
 async def test_players_tell_spectators_their_names_plans_and_costs(env_vars):
     async with deployed(WC3Env()) as record:
-        await match(record, labels={"1": "Orc AI (normal)"})
+        await match(record, [{"agent": "wc3", "race": "human", "team": 1},
+                             {"computer": "normal", "race": "orc", "team": 2, "label": "Orc AI (normal)"}])
         session = RemoteSession(base(record))
         await asyncio.to_thread(session.note, "player", "Claude Sonnet 5.5 + Haiku 4.5")
         await asyncio.to_thread(session.note, "plan", "Mine gold, then a Barracks.")
@@ -420,9 +421,8 @@ SEATS = [{"agent": "a", "race": "human"}, {"agent": "b", "race": "orc"}]
 
 async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
     async with deployed(WC3Env()) as record:
-        await client.invoke_extension(record.environment_url, record.environment_card, "urn:wc3:new-game/v1",
-                                      {"seats": SEATS, "time_limit_seconds": 60, "lockstep": {"stall_seconds": 2}})
-        a, b = RemoteSession(base(record) + "/seats/a"), RemoteSession(base(record) + "/seats/b")
+        await match(record, SEATS, lockstep={"stall_seconds": 2})
+        a, b = RemoteSession(base(record) + "/players/a"), RemoteSession(base(record) + "/players/b")
         seen = await asyncio.to_thread(b.observe)
         assert set(seen["observations"]) == {1} and seen["you"] == 1 and [x["agent"] for x in seen["seats"]] == [
             "a", "b"]
@@ -438,7 +438,7 @@ async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
         assert again["observations"][0]["game_time_seconds"] == 3.0 and time.monotonic() - began < 1.5
         with pytest.raises(SessionError, match="only its own units"):
             await asyncio.to_thread(a.step, {1: []}, 1000)
-        async with streamable_http_client(base(record) + "/seats/b/mcp") as (read, write, _), \
+        async with streamable_http_client(base(record) + "/players/b/mcp") as (read, write, _), \
                 ClientSession(read, write) as mcp:
             await mcp.initialize()
             state = (await mcp.call_tool("get_state", {})).content[0].text
@@ -450,10 +450,9 @@ async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
 
 async def test_a_realtime_game_starts_once_every_seat_has_moved(env_vars):
     async with deployed(WC3Env()) as record:
-        await client.invoke_extension(record.environment_url, record.environment_card, "urn:wc3:new-game/v1",
-                                      {"seats": SEATS, "mode": "realtime", "time_limit_seconds": 60})
-        a, b = RemoteSession(base(record) + "/seats/a"), RemoteSession(base(record) + "/seats/b")
-        async with streamable_http_client(base(record) + "/seats/b/mcp") as (read, write, _), \
+        await match(record, SEATS, mode="realtime")
+        a, b = RemoteSession(base(record) + "/players/a"), RemoteSession(base(record) + "/players/b")
+        async with streamable_http_client(base(record) + "/players/b/mcp") as (read, write, _), \
                 ClientSession(read, write) as mcp:
             await mcp.initialize()
             state = (await mcp.call_tool("get_state", {})).content[0].text
@@ -493,8 +492,7 @@ async def test_a_hold_keeps_the_game_from_starting_until_it_is_let_go(env_vars):
 async def test_when_the_game_fails_every_seat_hears_why(env_vars):
     env = WC3Env()
     async with deployed(env) as record:
-        await client.invoke_extension(record.environment_url, record.environment_card, "urn:wc3:new-game/v1",
-                                      {"seats": SEATS, "time_limit_seconds": 60})
+        await match(record, SEATS)
         real, failures = env.bridge.call, iter([("game_failed", "ConnectionError: pipe closed")])
 
         async def call(cmd, **args):   # as the worker does: the game fails, then it has no game
@@ -503,7 +501,7 @@ async def test_when_the_game_fails_every_seat_hears_why(env_vars):
             return await real(cmd, **args)
 
         env.bridge.call = call
-        a, b = RemoteSession(base(record) + "/seats/a"), RemoteSession(base(record) + "/seats/b")
+        a, b = RemoteSession(base(record) + "/players/a"), RemoteSession(base(record) + "/players/b")
         results = await asyncio.gather(asyncio.to_thread(a.step, {0: []}, 1000),
                                        asyncio.to_thread(b.step, {1: []}, 1000), return_exceptions=True)
     assert all(isinstance(r, SessionError) and "game_failed" in str(r) and "no_game" not in str(r) for r in results)
@@ -604,56 +602,11 @@ def test_a_free_for_all_plays_on_after_one_seat_is_out(env_vars):
     assert env.game_over
 
 
-async def test_each_agent_gets_its_seat():
-    posted, servers = [], {"a": {}, "b": {"x": {"url": "http://env:1/mcp"}}}
-
-    class Agent(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self._reply({"mcp_servers": servers[self.path.split("/")[1]]})
-
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            posted.append((self.path.split("/")[1], body))
-            servers[self.path.split("/")[1]][body["name"]] = {"url": body["url"]}
-            self._reply({"status": "added"})
-
-        def _reply(self, doc):
-            data = json.dumps(doc).encode()
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def log_message(self, *args):
-            pass
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Agent)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    card = {"capabilities": {"extensions": [{"uri": "urn:agentenv:mcp-config/v1",
-                                             "params": {"endpoint": "/ext/mcp-config"}}]}}
-    agents = [DeployedAgent(agent_name=n, api_url="", a2a_url=f"http://127.0.0.1:{server.server_port}/{n}",
-                            a2a_card=card) for n in ("a", "b")]
-    env = DeployedEnv(env_id="wc3", env_version=1, environment_card_url="http://env:1" + WELL_KNOWN_PATH,
-                      environment_card={"name": "wc3"})
-    context = TaskStepContext(deployed_envs=[env], deployed_agents=agents)
-    step = RTSSeatAgentsTaskStep.from_dict({"id": "seat", "type": "rts_seat_agents", "env_id": "wc3", "agents": ["a"]})
-    try:
-        assert (await step.execute(context)).metadata["rts_seats"] == {"a": "http://env:1/seats/a/mcp"}
-        assert await seat_agents(context, env, ["a"]) == {"a": "http://env:1/seats/a/mcp"}   # once
-        with pytest.raises(RuntimeError, match="env_ids"):   # by default every deployed agent: a and b
-            await RTSSeatAgentsTaskStep(id="seat", version=None, env_id="wc3").execute(context)
-        with pytest.raises(RuntimeError, match="no deploy_agent"):
-            await seat_agents(context, env, ["c"])
-    finally:
-        server.shutdown()
-    assert posted == [("a", {"url": "http://env:1/seats/a/mcp", "headers": None, "name": "wc3"})]
-
-
 async def test_staging_places_units_by_name_and_names_them(env_vars):
     env = WC3Env()
     try:
-        await env.new_game(seats=[{"agent": "wc3", "race": "human"}, {"computer": "normal", "race": "orc"}],
-                           time_limit_seconds=120)
+        await new_game(env, [{"agent": "wc3", "race": "human"}, {"computer": "normal", "race": "orc"}],
+                       time_limit_seconds=120)
         real, calls = env.bridge.call, []
 
         async def call(cmd, **args):
@@ -792,7 +745,7 @@ async def test_a_game_its_agents_left_is_played_out_to_its_end(env_vars):
     assert summary["game_over"] and summary["result"] == "time_limit" and summary["game_time_seconds"] == 60
     assert summary["harness"]["finish_seconds"] == 55 and summary["harness"]["idle_seconds"] == 0
     assert summary["finish"] == metadata["rts_finish"]["finish"] == {
-        "rule": "play_out", "from_seconds": 5.0, "to_seconds": 60.0, "open_seats": [{"slot": 0, "agent": None}],
+        "rule": "play_out", "from_seconds": 5.0, "to_seconds": 60.0, "open_seats": [{"slot": 0, "agent": "wc3"}],
         "game_over": True}
     rows = {r["name"]: r for r in metadata["verifications"]["grade"]["results"]}
     assert rows["agent_played"]["result"] is False   # it sent no orders: finishing the game is not playing it

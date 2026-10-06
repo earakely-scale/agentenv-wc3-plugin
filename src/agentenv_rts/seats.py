@@ -1,49 +1,11 @@
-"""Several players in one RTS env: each agent plays its seat at its own address, `/seats/<agent>/...` (the MCP tools
-at `/seats/<agent>/mcp`, the urn:rts session under `/seats/<agent>`), which `SeatPaths` serves from the env's routes
-with the seat attached to the request; `current_seat()` reads it back in a tool or an extension. In stepping mode
-`Lockstep` holds one game clock for them all."""
+"""Several players in one RTS env, stepped: `Lockstep` holds one game clock for them all. Each plays its own slot at
+its own address (agentenv_game's player routing)."""
 
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
-
-from mcp.server.lowlevel.server import request_ctx
-
-SEAT_PATH = re.compile(r"^/seats/(?P<seat>[A-Za-z0-9_.-]{1,64})(?P<rest>/.*)?$")
-SEAT: ContextVar[str | None] = ContextVar("rts_seat", default=None)
-
-
-class SeatPaths:
-    """ASGI middleware: `/seats/<name>/<rest>` is `/<rest>` with `scope["rts_seat"] = name`."""
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] in ("http", "websocket") and (m := SEAT_PATH.match(scope.get("path") or "")):
-            rest = m["rest"] or "/"
-            scope = {**scope, "path": rest, "raw_path": rest.encode(), "rts_seat": m["seat"]}
-            token = SEAT.set(m["seat"])
-            try:
-                return await self.app(scope, receive, send)
-            finally:
-                SEAT.reset(token)
-        return await self.app(scope, receive, send)
-
-
-def current_seat() -> str | None:
-    """The seat the current request came in on: from the MCP request's scope in a tool (tools run in the MCP
-    session's own task), else from the request's context (an extension); None at the env's root."""
-    try:
-        request = request_ctx.get().request
-    except LookupError:
-        request = None
-    scope = getattr(request, "scope", None) or {}
-    return scope.get("rts_seat") or SEAT.get()
 
 
 class Lockstep:

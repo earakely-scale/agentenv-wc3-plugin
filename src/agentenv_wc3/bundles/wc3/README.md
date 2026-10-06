@@ -30,7 +30,8 @@ by the `smoke` rubric.
   TypeSafe's Jev); the `prompt_agent` model is the macro model. `agent-env wc3 setup --agent` registers the agent.
 
 Every task with agents settles its game before grading it (`rts_finish`, `play_out`: the game runs to its end once
-its agents have stopped), and seated agents get their seats from `rts_seat_agents`. `broadcast-smoke` plays two
+its agents have stopped). Each player is a slot of the env's lobby: `wc3_match` opens it, an `add_player_slot` step
+fills a slot per player (an agent, or the game's AI), and `start_match` creates the game. `broadcast-smoke` plays two
 `wc3-scripted` seats against each other for two minutes with a recorded broadcast (`rts_broadcast`), at no model
 cost.
 
@@ -42,7 +43,7 @@ Warcraft III (units move and stop, nothing else).
 
 ## Drills
 
-The `drill-*` tasks are wc3agent's 25 scenarios as ordinary tasks, with no scenario concept: seats in a short stepped
+The `drill-*` tasks are wc3agent's 25 scenarios as ordinary tasks, with no scenario concept: player slots in a short stepped
 match on Echo Isles (seed 1), a stage step (`apply_server_config` with `urn:wc3:stage/v1`) that spawns the drill's
 units at named places (`home`, `toward:nearest_camp:900`, `camp:9`, ...) under handles (`army`, `hero`, `enemy`, which
 the summary's `army_kept_percent` and `enemy_army_destroyed_percent` read), the drill's goal as the prompt, and

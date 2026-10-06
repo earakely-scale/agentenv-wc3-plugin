@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
     "agentenv-framework>=0.9.1260",
     "agentenv-framework-protocol>=0.1.275,<0.2",
+    "agentenv-game-env @ https://github.com/earakely-scale/agentenv-game-env/archive/bc73423399eacd8c1a9f3ce9e178c71c61cd92b4.tar.gz",
     "httpx>=0.27,<1",
     "mcp>=1.25,<2",
     "pydantic>=2,<3",
@@ -44,10 +45,12 @@ wc3 = "agentenv_wc3.cli:wc3"
 wc3_match = "agentenv_wc3.steps:WC3MatchTaskStep"
 save_wc3_replay = "agentenv_wc3.steps:SaveWC3ReplayTaskStep"
 save_rts_recording = "agentenv_rts.steps:SaveRTSRecordingTaskStep"
-rts_seat_agents = "agentenv_rts.steps:RTSSeatAgentsTaskStep"
 rts_finish = "agentenv_rts.steps:RTSFinishTaskStep"
 rts_broadcast = "agentenv_rts.steps:RTSBroadcastTaskStep"
 rts_grade = "agentenv_rts.grade:RTSGradeTaskStep"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentenv_wc3", "src/agentenv_rts"]

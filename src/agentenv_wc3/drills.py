@@ -1,4 +1,4 @@
-"""wc3agent's scenarios as drill tasks: each definition becomes an ordinary task of seats, a stage step
+"""wc3agent's scenarios as drill tasks: each definition becomes an ordinary task of player slots, a stage step
 (`urn:wc3:stage/v1`), an opponent seat and a `checks` rubric. `agent-env wc3 drills import` writes them into the bundle
 once; the bundle owns them from then on."""
 
@@ -99,27 +99,35 @@ def convert(name: str, definition: dict) -> list[dict]:
                       "env_vars": {"SCRIPT": opponent,
                                    "SCRIPT_AFTER_SECONDS": str(definition.get("opponent_after_seconds", 0)),
                                    "SCRIPT_EVERY_SECONDS": "5"}, "depends_on": ["deploy"]})
-    agents = ["wc3", "opponent"] if scripted else ["wc3"]
-    steps.append({"id": "seat", "type": "rts_seat_agents", "env_id": "wc3", "agents": agents,
-                  "depends_on": ["agent", "opponent"] if scripted else ["agent"]})
-    seat = ({"agent": "opponent", "race": "orc", "omniscient": True} if scripted
-            else {"computer": AI_DIFFICULTY, "race": "orc"})
     steps.append({"id": "match", "type": "wc3_match", "env_id": "wc3", "map": MAP, "seed": 1,
-                  "time_limit_seconds": seconds + warmup, "mode": "stepping",
-                  "seats": [{"agent": "wc3", "race": RACES[race]}, seat], "depends_on": ["deploy"]})
-    start = "match"
+                  "time_limit_seconds": seconds + warmup, "mode": "stepping", "depends_on": ["deploy"]})
+    steps.append({"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3",
+                  "occupant": {"kind": "agent", "name": "wc3"}, "slot": 0,
+                  "additional_settings": {"faction": RACES[race]}, "depends_on": ["match", "agent"]})
+    if scripted:
+        steps.append({"id": "slot-opponent", "type": "add_player_slot", "env_id": "wc3",
+                      "occupant": {"kind": "agent", "name": "opponent"}, "slot": 1,
+                      "additional_settings": {"faction": "orc", "omniscient": True},
+                      "depends_on": ["match", "opponent"]})
+    else:
+        steps.append({"id": "slot-ai", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "ai"},
+                      "slot": 1, "additional_settings": {"faction": "orc", "ai_level": AI_DIFFICULTY},
+                      "depends_on": ["match"]})
+    steps.append({"id": "start", "type": "start_match", "env_id": "wc3",
+                  "depends_on": ["slot-wc3", "slot-opponent" if scripted else "slot-ai"]})
+    start = "start"
     if ops or warmup:
         start = "stage"
         steps.append({"id": "stage", "type": "apply_server_config", "env_id": "wc3", "timeout_seconds": 600,
                       "directives": [{"service": "wc3", "uri": "urn:wc3:stage/v1",
                                       "args": {"warmup_seconds": warmup, "ops": ops}}],
-                      "depends_on": ["match"]})
+                      "depends_on": ["start"]})
     steps.append({"id": "play", "type": "prompt_agent", "agent_name": "wc3", "model": MODEL, "prompt_id": task,
-                  "prompt": definition["goal"], "timeout_seconds": timeout, "depends_on": [start, "seat"]})
+                  "prompt": definition["goal"], "timeout_seconds": timeout, "depends_on": [start]})
     if scripted:
         steps.append({"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
                       "prompt_id": f"{task}-opponent", "prompt": "Play your seat with the script.",
-                      "timeout_seconds": timeout, "depends_on": [start, "seat"]})
+                      "timeout_seconds": timeout, "depends_on": [start]})
     return [*steps,
             {"id": "finish", "type": "rts_finish", "env_id": "wc3",
              "depends_on": ["play", "play-opponent"] if scripted else ["play"]},

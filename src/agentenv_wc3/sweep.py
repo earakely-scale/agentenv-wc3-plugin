@@ -124,24 +124,21 @@ def map_name(map_file: str) -> tuple[str, int]:
 
 
 def task_of(spec: Spec, template: list[dict], c: dict, name: str) -> list[dict]:
-    """The template with one combination's axes: the match's map, seed, sides and time limit; the player's model,
-    prompt and per-game cost cap."""
+    """The template with one combination's axes: the match's map, seed and time limit; the player's slot's race and
+    the AI slot's race and level; the player's model, prompt and per-game cost cap."""
     steps = copy.deepcopy(template)
     match = next(s for s in steps if s["type"] == "wc3_match")
     match.update({"map": c["map"], "seed": c["seed"]})
     if spec.time_limit_seconds:
         match["time_limit_seconds"] = spec.time_limit_seconds
-    opponent = c["opponent"]
-    if match.get("seats"):
-        agent = next(x for x in match["seats"] if "agent" in x)
-        computer = next((x for x in match["seats"] if "computer" in x), None)
-        agent["race"] = c["race"]
-        if computer is not None:
-            computer.update({"computer": opponent["computer"], "race": opponent["race"]})
-    else:
-        match.update({"race": c["race"], "opponent_race": opponent["race"], "ai_difficulty": opponent["computer"]})
     play = next(s for s in steps if s["id"] == spec.player_step)
     play.update({"model": c["model"], "prompt_id": name})
+    opponent, slots = c["opponent"], [s for s in steps if s["type"] == "add_player_slot"]
+    mine = next(s for s in slots if s["occupant"].get("name") == play.get("agent_name"))
+    mine["additional_settings"] = {**mine.get("additional_settings", {}), "faction": c["race"]}
+    if ai := next((s for s in slots if s["occupant"]["kind"] == "ai"), None):
+        ai["additional_settings"] = {**ai.get("additional_settings", {}), "faction": opponent["race"],
+                                     "ai_level": opponent["computer"]}
     if spec.prompt:
         pretty, players = map_name(c["map"])
         play["prompt"] = spec.prompt.format(

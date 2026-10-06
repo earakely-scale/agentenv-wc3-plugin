@@ -17,6 +17,10 @@ RUN python3 -m venv /opt/agentenv \
  && /opt/agentenv/bin/pip install --no-cache-dir "agentenv-framework-protocol>=0.1.275,<0.2" "mcp>=1.25,<2" \
     "pydantic>=2,<3" "pillow>=10.1" \
  && echo /opt/host > "$(/opt/agentenv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/wc3env-host.pth"
+# agentenv-game-env (the lobby): `agent-env wc3 setup` passes the archive the plugin's pyproject pins.
+ARG GAME_ENV
+RUN test -n "$GAME_ENV" || { echo "build with --build-arg GAME_ENV=<agentenv-game-env archive URL>" >&2; exit 1; } \
+ && /opt/agentenv/bin/pip install --no-cache-dir --no-deps "$GAME_ENV"
 COPY pyproject.toml README.md LICENSE /tmp/plugin/
 COPY src/ /tmp/plugin/src/
 COPY docker/with-display.sh /opt/agentenv/with-display.sh

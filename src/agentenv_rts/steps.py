@@ -1,6 +1,5 @@
-"""The RTS task steps any game's env can use:
-- `rts_seat_agents` gives each agent its seat's address (`<env>/seats/<agent>/mcp`, agentenv_rts.seats), so it
-  plays that seat in the game a later step starts.
+"""The RTS task steps any game's env can use (who plays is the env's lobby: agentenv_game's add_player_slot and
+start_match):
 - `rts_finish` settles the game once its agents have stopped playing (`urn:rts:finish/v1`): played out, forfeited
   or left as it is, before it is graded.
 - `rts_broadcast` broadcasts the game while it is played (agentenv_rts.broadcast), to Twitch or X or only recorded,
@@ -21,16 +20,13 @@ import os
 import tempfile
 import time
 import uuid
-from functools import partial
 from pathlib import Path
 from typing import ClassVar
 
 import httpx
-from agent_env.a2a_agent.a2a_agent import A2AAgent
 from agent_env.artifact import FileArtifact
 from agent_env.entity_refs import EntityRef
-from agent_env.env.env import DeployedEnv, DeployedSandboxEnv
-from agent_env.providers.sandbox_providers.sandbox_provider import reachable_url, sandbox_request_headers_for_url
+from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.task_step import TaskStep
 from agentenv_protocol import client
@@ -121,72 +117,6 @@ def _card(deployed: DeployedEnv, uri: str) -> dict:
     if card is None:
         raise RuntimeError(f"env {deployed.env_id!r} does not advertise {uri}")
     return card
-
-
-async def seat_agents(context: TaskStepContext, env: DeployedEnv, names: list[str]) -> dict[str, str]:
-    """Registers each named agent's seat address with it (its MCP config, as deploy_agent registers an env), so it
-    plays that seat; a seat already registered is left alone, so a rerun works. With several seats, an agent that
-    also has the env's own address would play the first seat there: refuse it."""
-    base, seated = env.mcp_url.removesuffix("/mcp"), {}
-    for name in names:
-        agent = next((a for a in context.deployed_agents if a.agent_name == name), None)
-        if agent is None:
-            raise RuntimeError(f"seat {name!r}: no deploy_agent step deployed an agent named {name!r}")
-        reach = (partial(reachable_url, from_sandbox_type=env.sandbox_type, to_sandbox_type=agent.sandbox_type)
-                 if isinstance(env, DeployedSandboxEnv) else str)
-        url, own = reach(f"{base}/seats/{name}/mcp"), reach(env.mcp_url)
-        ext = A2AAgent.find_extension(agent.a2a_card or {}, A2AAgent.EXT_MCP_CONFIG)
-        if ext is None or not agent.a2a_url:
-            raise RuntimeError(f"agent {name!r} takes no MCP servers ({A2AAgent.EXT_MCP_CONFIG})")
-        endpoint = agent.a2a_url + ext["params"]["endpoint"]
-        async with httpx.AsyncClient() as http:
-            listed = ((await http.get(endpoint, timeout=60)).json().get("mcp_servers") or {}).values()
-            if any(v.get("url") == url for v in listed):
-                seated[name] = url
-                continue
-            if len(names) > 1 and any(v.get("url") == own for v in listed):
-                raise RuntimeError(f"agent {name!r} also has the env's own address, where the first seat plays: "
-                                   "deploy seated agents with \"env_ids\": [] (rts_seat_agents gives each its seat)")
-            card_name = (env.environment_card or {}).get("name") or env.env_id
-            body = {"url": url, "headers": sandbox_request_headers_for_url(url) or None,
-                    "name": card_name if not listed else f"{card_name}-{name}"}
-            response = await http.post(endpoint, json=body, timeout=180)
-            response.raise_for_status()
-        seated[name] = url
-        log.info("rts_seat_agents: %s plays its seat at %s", name, url)
-    return seated
-
-
-class RTSSeatAgentsTaskStep(TaskStep):
-    """Give each agent its seat in a deployed RTS env: `agents` (deploy_agent agent_names; by default every agent
-    this run deployed) each get `<env>/seats/<agent>/mcp` as an MCP server, the address of the seat the match names
-    after them. Seated agents deploy with `"env_ids": []`; the seat steps of any game work before or after its match
-    starts, since an address doesn't depend on the game."""
-
-    type: ClassVar[str] = "rts_seat_agents"
-    entity_refs = (EntityRef.env("env_id"),)
-
-    def __init__(self, id: str, version: int | None, env_id: str, agents: list[str] | None = None,
-                 depends_on: list | None = None, fail_task_on_error: bool = True):
-        super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
-        self.env_id = env_id
-        self.agents = list(agents) if agents is not None else None
-        if agents is not None and not all(isinstance(a, str) and a for a in agents):
-            raise ValueError(f"rts_seat_agents agents are agent names, got {agents!r}")
-
-    def to_dict(self) -> dict:
-        return {**super().to_dict(), "env_id": self.env_id, "agents": self.agents}
-
-    @classmethod
-    def from_dict(cls, data: dict) -> RTSSeatAgentsTaskStep:
-        return cls(**{**cls._base_from_dict(data), "fail_task_on_error": data.get("fail_task_on_error", True)},
-                   env_id=data["env_id"], agents=data.get("agents"))
-
-    async def execute(self, context: TaskStepContext) -> TaskStepContext:
-        names = self.agents if self.agents is not None else [a.agent_name for a in context.deployed_agents]
-        seated = await seat_agents(context, _deployed(context, self.env_id), names)
-        context.metadata.setdefault("rts_seats", {}).update(seated)
-        return context
 
 
 class RTSFinishTaskStep(TaskStep):

@@ -9,11 +9,36 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from agentenv_game import Occupant, SlotRequest  # noqa: E402
+
 from agentenv_wc3.server import WORKER, WC3Env  # noqa: E402
 
 FAKE_CMD = f"{shlex.quote(sys.executable)} {shlex.quote(str(WORKER))} --fake"
 STEPS = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())["project"][
     "entry-points"]["agent_env.task_steps"]
+
+
+ONE_AGENT = [{"agent": "wc3", "race": "human", "team": 1}, {"computer": "normal", "race": "orc", "team": 2}]
+
+
+def slot_settings(seat: dict) -> tuple[dict, dict]:
+    """A seat, {agent | computer, race, team, label, ai_assist, omniscient}, as a lobby slot's occupant and
+    settings."""
+    given = {"faction": seat.get("race", "random"),
+             **{k: seat[k] for k in ("team", "label", "ai_assist", "omniscient") if k in seat}}
+    if "computer" in seat:
+        return {"kind": "ai"}, {**given, "ai_level": seat["computer"]}
+    return {"kind": "agent", "name": seat["agent"]}, given
+
+
+async def new_game(env, seats: list[dict] | None = None, **settings) -> dict:
+    """A game through the env's lobby, in process: opened with `settings`, a slot per seat (one agent against the
+    normal AI by default), closed."""
+    env.new_lobby(settings)
+    for index, seat in enumerate(seats or ONE_AGENT):
+        occupant, given = slot_settings(seat)
+        env.fill_slot(SlotRequest(occupant=Occupant(**occupant), slot=index, additional_settings=given))
+    return await env.close_lobby()
 
 
 @pytest.fixture

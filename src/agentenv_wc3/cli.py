@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import tomllib
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -107,6 +108,15 @@ def _register_agent(root: Path, build_platform: str, agent_id: str) -> None:
                                        build_context_path=str(root), dockerfile_path=str(dockerfile))
     agent = A2AAgent.put(id=agent_id, docker_image_artifact=artifact, metadata=metadata)
     click.echo(f"Registered A2A agent {agent.id!r} version {agent.version} ({description})")
+
+
+def _game_env(root: Path) -> str:
+    """The agentenv-game-env archive the plugin's pyproject pins, for the env image."""
+    pinned = next((d for d in tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
+                   if d.startswith("agentenv-game-env @ ")), None)
+    if pinned is None:
+        raise click.ClickException(f"{root}/pyproject.toml pins no agentenv-game-env archive")
+    return pinned.removeprefix("agentenv-game-env @ ").strip()
 
 
 def _image_exists(image: str) -> bool:
@@ -261,8 +271,8 @@ def setup(env_id: str, base: str, source: Path | None, image: str | None, fake: 
                                            "fake game with --fake")
         image = f"mcp-server-{env_id}"
         click.echo(f"Building {image} on {base} for {build_platform} from {root}")
-        build = ["docker", "build", "--platform", build_platform, "--build-arg", f"BASE={base}", "-t", image,
-                 str(root)]
+        build = ["docker", "build", "--platform", build_platform, "--build-arg", f"BASE={base}", "--build-arg",
+                 f"GAME_ENV={_game_env(root)}", "-t", image, str(root)]
         if subprocess.run(build).returncode:
             raise click.ClickException("docker build failed")
     click.echo("Storing the image (docker save, can take a few minutes" + ("" if fake else ": it holds the game") + ")")

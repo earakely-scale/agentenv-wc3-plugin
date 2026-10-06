@@ -9,19 +9,64 @@
     "type": "wc3_match",
     "env_id": "wc3",
     "map": "(2)EchoIsles.w3x",
-    "race": "human",
-    "opponent_race": "orc",
-    "ai_difficulty": "easy",
     "seed": 1,
-    "time_limit_seconds": 300
+    "time_limit_seconds": 300,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "slot-wc3",
+    "type": "add_player_slot",
+    "env_id": "wc3",
+    "occupant": {
+      "kind": "agent",
+      "name": "wc3"
+    },
+    "slot": 0,
+    "additional_settings": {
+      "faction": "human",
+      "team": 1
+    },
+    "depends_on": [
+      "match",
+      "agent"
+    ]
+  },
+  {
+    "id": "slot-ai",
+    "type": "add_player_slot",
+    "env_id": "wc3",
+    "occupant": {
+      "kind": "ai"
+    },
+    "slot": 1,
+    "additional_settings": {
+      "faction": "orc",
+      "team": 2,
+      "ai_level": "easy"
+    },
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "start",
+    "type": "start_match",
+    "env_id": "wc3",
+    "depends_on": [
+      "slot-wc3",
+      "slot-ai"
+    ]
   },
   {
     "id": "agent",
     "type": "deploy_agent",
     "agent_name": "wc3",
     "a2a_agent_id": "wc3-llm",
-    "env_ids": [
-      "wc3"
+    "env_ids": [],
+    "depends_on": [
+      "deploy"
     ]
   },
   {
@@ -31,7 +76,7 @@
     "timeout_seconds": 3600,
     "prompt": "You play Warcraft III: The Frozen Throne as Human on Echo Isles, a two-player map, against the game's own easy AI (Orc). You win by destroying every enemy building; the game ends undecided after 5 minutes of game time, and is then judged on the game's score. You act only through the wc3 tools; nobody will answer questions, so never ask or wait for confirmation.\n\nGame time is frozen until you call advance, so think as long as you like. The loop: get_state shows your resources, units, structures, idle workers and what happened; act queues orders for your units by id; advance sends them and lets 1-60 game seconds pass (a few seconds in fights, longer while the economy runs). list_units shows ids, positions and orders; list_units with details=true shows what a unit can train, build, research and cast; resources lists gold mines and trees; lookup gives any type's cost, requirements and stats. Coordinates are the game's world units: copy them from the tools' output. Types can be given by name: train {\"type_id\": \"Peasant\"}, build {\"type_id\": \"Farm\", \"x\": ..., \"y\": ..., \"auto_place\": true}. When the game refuses an order, advance says why; don't repeat it unchanged.\n\nStart by putting idle workers to work (harvest the gold mine, and trees for lumber), keep training workers, build supply before you are food-capped, then an army with a hero, and attack the enemy base (its start location is in get_state). Keep playing until advance reports GAME OVER, then reply with the result.",
     "depends_on": [
-      "match",
+      "start",
       "agent"
     ],
     "agent_name": "wc3",

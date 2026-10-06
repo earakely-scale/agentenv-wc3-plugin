@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from agentenv_protocol import client
 from agentenv_protocol.a2a_agent import TaskOutcome, TaskRequest, TextPart
-from test_steps import deployed, run_context
+from test_steps import deployed, run_context, seat_and_start
 
 from agentenv_rts import choices
 from agentenv_rts.session import DEBUG, NOTE, OBSERVE, STEP
@@ -80,8 +80,8 @@ async def test_wc3agent_plays_the_game_through_the_rts_session(env_vars, tmp_pat
                **({"WC3_MAX_GAME_SECONDS": "4"} if mode == "realtime" else {})}
     monkeypatch.setattr(agent.os, "environ", dict(agent.os.environ))
     async with deployed(WC3Env()) as record:
-        await WC3MatchTaskStep(id="match", version=None, env_id="wc3", time_limit_seconds=60,
-                               mode=mode).execute(run_context(record))
+        await seat_and_start(await WC3MatchTaskStep(id="match", version=None, env_id="wc3", time_limit_seconds=60,
+                                                    mode=mode).execute(run_context(record)))
         config = agent.WC3Config(model="anthropic/claude-sonnet-5-5")
         servers = {"wc3": {"url": record.mcp_url}}
         summary = await asyncio.to_thread(agent.play_game, config, servers, environ, tmp_path / "session")
@@ -100,7 +100,7 @@ async def test_wc3agent_plays_the_game_through_the_rts_session(env_vars, tmp_pat
 
 
 class Seat:
-    """A stand-in env serving one seat as the seat contract has it: every request comes in under /seats/wc3, the seat
+    """A stand-in env serving one seat as the seat contract has it: every request comes in under /players/wc3, the seat
     is slot 1 (wc3env's fake world, with a peon beside the orc hall) and sees only its own observation, and three
     seconds in one of the other side's peasants dies."""
 
@@ -136,7 +136,7 @@ class Seat:
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.url = f"http://127.0.0.1:{self.server.server_port}/seats/wc3/mcp"
+        self.url = f"http://127.0.0.1:{self.server.server_port}/players/wc3/mcp"
 
     def answer(self, name: str, body: dict) -> dict:
         if name == "note":
@@ -177,7 +177,7 @@ async def test_wc3agent_plays_its_seat_with_the_prompt_as_its_goal(monkeypatch):
                           mcp_servers={"wc3": {"url": seat.url}})
     result = await agent.WC3Player().run(request)
     assert result.outcome is TaskOutcome.SUCCEEDED, result.error
-    assert seat.paths and all(p.startswith("/seats/wc3/") for p in seat.paths)
+    assert seat.paths and all(p.startswith("/players/wc3/") for p in seat.paths)
     assert seat.steps and all(set(actions) == {"1"} for actions in seat.steps)
     moved = [a for actions in seat.steps for a in actions["1"] if a["command"] == "move"]
     assert moved and moved[0]["unit_id"] == 2001 and moved[0]["arguments"]["x"] == 0
