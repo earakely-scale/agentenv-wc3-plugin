@@ -48,8 +48,41 @@ Grade by map, one per seed:
   for Gemini. On score it is wider: Gemini's games ran from 7.0k to 11.2k. The AI's own score moves with how much it
   fought: 8.1k to 8.3k against a model that left it alone, up to 11.9k.
 
+## What held the models back
+
+From the 24 stored conversations, summaries and timelines (no model calls):
+
+| Model | Orders a game | Refused by the game | Refused Barracks a game | Advances a game (median s) | Workers at 2 / 5 min | First army unit | Gold left unspent (mean) |
+|---|---|---|---|---|---|---|---|
+| Gemini 3.8 Flash | 60 | 1% | 0.7 | 24 (7 s) | 8 / 8 | 90–126 s | 440 |
+| DeepSeek V4.1 Flash | 47 | 10% | 3.8 | 16 (20 s) | 8 / 14 | 189–293 s | 740 |
+| Haiku 4.5 | 36 | 28% | 7.3 | 24 (10 s) | 8 / 9 | 184–300 s, none in 1 game | 950 |
+| GPT-5.4 mini | 42 | 20% | 7.5 | 10 (25 s) | 8 / 13 | none in any game | 880 |
+
+- **A harness bug held back the army.** Of the refused orders, 108 were "Peasant build Barracks" refused as
+  `bad_arguments`. The name "Barracks" is both the Human and the Orc building, and the env passed a name that
+  matched more than one type to the game unresolved. Seventy-nine unit names are shared that way, among them every
+  melee hero and its campaign versions, so "train Archmage" failed too. Gemini mostly avoided it, and it was the one
+  model with an army before two minutes. Fixed in 887d7f8: a name resolves to the type the ordering unit makes, and
+  an order it can't give is refused at `act`, naming the units that can.
+- **Wrong builder:** "Town Hall build Farm", refused as `no_build_site`, came 16 times. It is now refused at `act`
+  with "your Peasant can".
+- **Smaller tool errors:**
+  - `queued` put beside `arguments` instead of inside it (5);
+  - `queued` on an order that doesn't take it (8);
+  - orders to a unit that isn't the model's (10).
+
+  Each comes back with a clear error the model can read.
+- **Play:**
+  - Haiku and Gemini stopped at 8–9 workers.
+  - GPT-5.4 mini advanced 25–60 s at a time: 10 decisions in a 5-minute game.
+  - Gold piled up unspent wherever the Barracks failed.
+
+These grades predate the fix. Rerun before comparing models on them.
+
 ## Next
 
+- Rerun the sweep with the fix (887d7f8, env v18).
 - A longer game, or the `normal` AI, so that games end in wins and losses rather than in score ratios.
 - Gemini with a higher cap, or with prompt caching, to see its uncapped result.
 - More seeds for the top two, where the gap (0.48 against 0.45) is about one sd of Gemini's grades.

@@ -455,6 +455,9 @@ for $4.24. The ranking, by mean grade:
 
 Every game reached the 5-minute limit, so the grades are score ratios. The sd across seeds was 0.01 to 0.03.
 
+These grades predate a fix to shared type names (887d7f8). Before it, the game refused most "build Barracks" orders
+and every hero ordered by name, which held back every model's army; the write-up has the post-mortem.
+
 ## The wc3-llm agent
 
 `agents/wc3-llm` lets any chat model play through the env's MCP tools (`get_state`, `act`, `advance`, …). The model
