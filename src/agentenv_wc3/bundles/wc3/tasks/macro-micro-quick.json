@@ -5,6 +5,19 @@
     "env_id": "wc3"
   },
   {
+    "id": "agent",
+    "type": "deploy_agent",
+    "agent_name": "wc3",
+    "a2a_agent_id": "wc3-macro-micro",
+    "env_ids": [],
+    "env_vars": {
+      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
+    },
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
     "id": "match",
     "type": "wc3_match",
     "env_id": "wc3",
@@ -58,19 +71,6 @@
     "depends_on": [
       "slot-wc3",
       "slot-ai"
-    ]
-  },
-  {
-    "id": "agent",
-    "type": "deploy_agent",
-    "agent_name": "wc3",
-    "a2a_agent_id": "wc3-macro-micro",
-    "env_ids": [],
-    "env_vars": {
-      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"
-    },
-    "depends_on": [
-      "deploy"
     ]
   },
   {

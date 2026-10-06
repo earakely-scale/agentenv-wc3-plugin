@@ -13,6 +13,7 @@ import yaml
 from agent_env.artifact import FileArtifact
 from agent_env.config import reset_config
 from agent_env.env.env import DeployedEnv
+from agent_env.task.task import Task
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.registry import get_task_step_registry
 from agentenv_game.steps import AddPlayerSlotTaskStep, StartMatchTaskStep
@@ -202,6 +203,7 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
     registry = get_task_step_registry()
     for s in steps:
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    Task(id=task, version=None, steps=[registry[s["type"]].from_dict(s) for s in steps])   # a DAG, in order
     by_type = {s["type"]: s for s in steps}
     assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
     slots = [s for s in steps if s["type"] == "add_player_slot"]   # who plays: the lobby's slots, then the game
