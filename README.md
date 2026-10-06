@@ -37,7 +37,7 @@ call it. Claude won on score at the 10-minute limit, 30.7k to 28.5k, after killi
   - wc3agent against the AI, stepped and in realtime, streamed with its casters;
   - two agents in a lockstep duel;
   - drills;
-  - a sweep of four models × two maps × three seeds ([first-eval](docs/evals/first-eval.md), $4.24).
+  - a sweep of four models × two maps × three seeds, run twice ([first-eval](docs/evals/first-eval.md), about $4 each).
 
   The [Tasks](#tasks) table has times, costs and grades.
 - **Multiplayer rules, checked there with no model:**
@@ -190,7 +190,7 @@ To go out live, give a stream key: `to` in the step, or `--to twitch`, `--to x` 
 |---|---|---|---|
 | `smoke` | nobody: the harness lets the game run | 2 minutes | 40 s, $0 |
 | `broadcast-smoke` | two `wc3-scripted` seats (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per seat | 2 min, $0; red 0.25, blue 0.43, the same both times it ran; a 1080p broadcast of 105 s |
-| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k. In `first-eval`, 6 games: 0.44 ± 0.01, $0.14 a game |
+| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k. In `first-eval`, 6 games: 0.44 ± 0.01, $0.11 a game |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
@@ -446,17 +446,19 @@ agent-env wc3 sweep report runs/first-eval --out docs/evals/first-eval.md
   cost and turns a game and how many games hit the cap, then each map's grades seed by seed.
 
 **The first sweep** ([docs/evals/first-eval.md](docs/evals/first-eval.md)): `first-eval` on the real game, 24 games
-for $4.24. The ranking, by mean grade:
+for $4.12. The ranking, by mean grade, the same in both runs:
 
-1. Gemini 3.8 Flash, 0.48 (it hit the $0.50 cap in every game);
-2. DeepSeek V4.1 Flash, 0.45, for $0.02 a game;
+1. Gemini 3.8 Flash, 0.49 (it hit the $0.50 cap in every game, and is the only one that attacks);
+2. DeepSeek V4.1 Flash, 0.45, for $0.01 a game;
 3. Haiku 4.5, 0.44;
 4. GPT-5.4 mini, 0.43.
 
-Every game reached the 5-minute limit, so the grades are score ratios. The sd across seeds was 0.01 to 0.03.
+Every game reached the 5-minute limit, so the grades are score ratios. The sd across seeds was 0.01 to 0.02.
 
-These grades predate a fix to shared type names (887d7f8). Before it, the game refused most "build Barracks" orders
-and every hero ordered by name, which held back every model's army; the write-up has the post-mortem.
+The first run's post-mortem found a harness bug: a type name shared by several types, such as "Barracks" or a hero's
+name, went to the game unresolved, and the game refused it. Since the fix (887d7f8), refused orders are under one a
+game. Armies come 50 to 100 s sooner, but the grades held: in 5 minutes against the easy AI, only fighting moves
+the score.
 
 ## The wc3-llm agent
 

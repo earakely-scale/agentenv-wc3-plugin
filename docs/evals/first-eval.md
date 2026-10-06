@@ -78,11 +78,30 @@ From the 24 stored conversations, summaries and timelines (no model calls):
   - GPT-5.4 mini advanced 25–60 s at a time: 10 decisions in a 5-minute game.
   - Gold piled up unspent wherever the Barracks failed.
 
-These grades predate the fix. Rerun before comparing models on them.
+## Rerun with the fix
+
+The same 24 games on env v18 (887d7f8), 2026-10-06: $4.12. The budget guard held this time. Once a second game at
+once could have taken the spend past $5, it played the last five games one at a time.
+
+| Model | Grade (mean ± sd) | Score vs AI | Cost a game | Refused orders a game | First army unit | Attack orders a game |
+|---|---|---|---|---|---|---|
+| Gemini 3.8 Flash | 0.49 ± 0.02 (was 0.48) | 9.6k vs 9.5k | $0.50, at the cap in all 6 | 0 (was 0.7) | 90–128 s | 24 |
+| DeepSeek V4.1 Flash | 0.45 ± 0.02 (was 0.45) | 6.5k vs 9.6k | $0.01 | 0.5 (was 4.5) | 131–206 s (was 189–293) | 1.7 |
+| Haiku 4.5 | 0.44 ± 0.01 (was 0.44) | 5.5k vs 8.7k | $0.11 | 0.2 (was 9.8) | 131–196 s (was 184–300, none in 1) | 0.8 |
+| GPT-5.4 mini | 0.43 ± 0.01 (was 0.43) | 4.9k vs 8.3k | $0.06 | 0.2 (was 8.2) | 106–240 s in 3 games (was none) | 0.2 |
+
+- **The fix worked.** Refusals fell to under one a game for every model, and armies came 50 to 100 seconds sooner.
+  GPT-5.4 mini fielded one in half its games.
+- **The grades did not move.** Only Gemini attacks: 24 attack orders a game, where the others give under two. An
+  army that stands at home adds little to the score in 5 minutes against the easy AI. So this task now measures
+  whether a model fights, more than how well it builds.
+- **The ranking repeats.** Both runs put the models in the same order, with each mean within 0.01 of the first run.
+  The first run's grades were not distorted by the bug as much as its refusals suggested, because the army was never
+  the deciding factor.
 
 ## Next
 
-- Rerun the sweep with the fix (887d7f8, env v18).
-- A longer game, or the `normal` AI, so that games end in wins and losses rather than in score ratios.
+- A longer game, or the `normal` AI, so that games end in wins and losses rather than in score ratios, and an army
+  has time to matter.
 - Gemini with a higher cap, or with prompt caching, to see its uncapped result.
 - More seeds for the top two, where the gap (0.48 against 0.45) is about one sd of Gemini's grades.
