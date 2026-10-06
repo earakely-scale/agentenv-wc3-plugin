@@ -52,15 +52,16 @@
     "seed": 3,
     "time_limit_seconds": 120,
     "mode": "stepping",
-    "allow_debug": false,
     "seats": [
       {
         "agent": "red",
-        "race": "human"
+        "race": "human",
+        "omniscient": true
       },
       {
         "agent": "blue",
-        "race": "orc"
+        "race": "orc",
+        "omniscient": true
       }
     ],
     "labels": {
@@ -113,7 +114,7 @@
     "cast": false,
     "title": "Broadcast smoke",
     "depends_on": [
-      "match"
+      "deploy"
     ]
   },
   {

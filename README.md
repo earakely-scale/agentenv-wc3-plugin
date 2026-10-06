@@ -117,10 +117,16 @@ activation files (see wc3env's [docker/README.md](https://github.com/pwang724/wc
 chmod -R a+rX docker-context                 # the image's build runs as a non-root user, which must read it
 docker build --platform linux/amd64 --target environment -t wc3-worker:local docker-context
 mkdir -p ~/.wc3-license && cp roc.w3k tft.w3k ~/.wc3-license/ && chmod 600 ~/.wc3-license/*
+agent-env wc3 license import ~/.wc3-license  # into agent-env's secret store, so a run on any machine finds them
 ```
 
-The activation files never enter an image: the `wc3_match` step sends them to the env when a game starts
-(`license_dir` in `[plugins.agentenv-wc3]` of `.agentenv/config.toml`, or `$WC3_LICENSE_DIR`, names another folder).
+**How the activation files reach the game:**
+- **Never in an image.** The `wc3_match` step sends them to the env when a game starts.
+- **From agent-env's secret store first.** They're the secrets `WC3_ROC_W3K` and `WC3_TFT_W3K`, each file in base64.
+  `license import` writes them into a local secrets file. For a cloud store (AWS or GCP), store them there yourself.
+- **Then from a folder on the machine running the task:** `license_dir` in `[plugins.agentenv-wc3]`,
+  `$WC3_LICENSE_DIR` or `~/.wc3-license`.
+- **To check:** `agent-env wc3 license show` says where they come from, never what they contain.
 
 **4. Play.**
 
@@ -138,15 +144,31 @@ address; forward it with `ssh -L 8080:127.0.0.1:<port> <host>` and open `http://
 
 ## Record a broadcast, or stream it
 
-`agent-env wc3 stream` turns any game into a broadcast: the game's picture with a score bug, the agent's plans, the
-feed and two AI casters, voiced and captioned. Start it beside a run; it waits for the game and stops after GAME OVER:
+A broadcast shows the game's picture with a score bug, the agents' plans, the feed and two AI casters, voiced and
+captioned. There are two ways to make one.
+
+**In the task: the `rts_broadcast` step.** It starts with the env, beside the agents and the match. It holds the
+game's start until the stream is live, so the broadcast has the game from its first move. It records the game (and
+streams it, with `to`), and stores the video as an artifact of the run:
+
+```json
+{"id": "broadcast", "type": "rts_broadcast", "env_id": "wc3", "to": ["twitch"], "title": "Sonnet vs the Orc AI",
+ "depends_on": ["deploy"]}
+```
+
+- **When it ends:** after GAME OVER. It also ends if the game clock stands still for `stall_seconds` (a run whose play
+  failed) or if the run is cancelled, so it never holds a run open.
+- **If it fails,** the run goes on, unless the step sets `fail_task_on_error`.
+- **An example:** `broadcast-smoke` records two scripted players, at no model cost.
+
+**Beside any run: `agent-env wc3 stream`.** It waits for the game and stops after GAME OVER:
 
 ```bash
 agent-env wc3 stream --offline --record broadcasts &   # records broadcasts/stream-<time>.mp4: no stream key needed
 agent-env run wc3 --task macro-micro-realtime
 ```
 
-To go out live, drop `--offline` and give it a stream key: `--to twitch`, `--to x`, or both (details in
+To go out live, give a stream key: `to` in the step, or `--to twitch`, `--to x` or both on the command (details in
 [Stream it to Twitch or X](#stream-it-to-twitch-or-x)). The casters cost about $2 a game on Haiku 4.5.
 
 ## Tasks
@@ -154,6 +176,7 @@ To go out live, drop `--offline` and give it a stream key: `--to twitch`, `--to 
 | Task | Who plays | Game | Measured on the real game |
 |---|---|---|---|
 | `smoke` | nobody: the harness lets the game run | 2 minutes | 40 s, $0 |
+| `broadcast-smoke` | two `wc3-scripted` seats (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per seat | BROADCAST_SMOKE_RESULT |
 | `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
@@ -171,8 +194,9 @@ To go out live, drop `--offline` and give it a stream key: `--to twitch`, `--to 
 - **Drills:** each stages its start (`urn:wc3:stage/v1`) and is graded by its checks. The bundle's
   [README](src/agentenv_wc3/bundles/wc3/README.md) lists the 25 drills; [docs/task-design.md](docs/task-design.md) is
   the design.
-- **What every task saves:** the game's native replay, and the spectator recording (an MP4 of the map and a
-  self-contained HTML replay), as file artifacts. `macro-micro-realtime` also saves the game's own video, with a
+- **What every task saves:** the game's native replay and the spectator recording, as file artifacts. The recording
+  is an MP4 of the map, a self-contained HTML replay, and the timeline as JSON: every frame's units, events and notes,
+  to recut or analyse a game without playing it again. `macro-micro-realtime` also saves the game's own video, with a
   chapter at each major moment, and a highlight reel of at most two minutes cut from it; its HTML replay plays the
   video beside the map when both files are in one folder.
 - **Grading:** `rts_grade` grades each agent seat. The full games use the `melee` rubric:
@@ -192,12 +216,23 @@ is built from a few steps:
 | Step | What it does |
 |---|---|
 | `deploy_env` | Starts the env registered as `wc3` |
-| `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. Seated agents deploy with `"env_ids": []`: the match gives them their seat's address |
+| `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. An agent that plays a seat deploys with `"env_ids": []` |
+| `rts_seat_agents` | Gives each named agent its seat's address, `<env>/seats/<agent>/mcp`. It needs only the env and the agents, not the game |
 | `wc3_match` | Creates the game: map, seed, time limit, clock, and the seats (who plays) |
 | `apply_server_config` with `urn:wc3:stage/v1` | Optional: stages the board before play (units, levels, items, resources, a paused AI) |
 | `prompt_agent` | One per agent: the prompt, and the model it plays on. It lasts the whole game |
+| `rts_broadcast` | Optional, from the env's deploy on: holds the game's start until it is live, then streams or records the game, with casters |
+| `rts_finish` | After every play step: settles a game its agents stopped before its end (`play_out`, `forfeit` or `as_is`) |
 | `rts_grade` | Grades each agent seat with a rubric, weights, targets and checks |
-| `save_wc3_replay`, `save_rts_recording` | The `.w3g`, and the recording (map MP4, HTML replay, the game's video, highlights) |
+| `save_wc3_replay`, `save_rts_recording` | The `.w3g`, and the recording (map MP4, HTML replay, timeline JSON, the game's video, highlights) |
+
+A game with seats runs as this DAG:
+
+```
+deploy ─┬─► agents ─► rts_seat_agents ──────┐
+        ├─► wc3_match ─► stage ─────────────┴─► play (one per agent) ─► rts_finish ─► rts_grade ─► replay, recording
+        └─► rts_broadcast (optional: holds the start until it is live, ends after GAME OVER)
+```
 
 **When the game starts:** `wc3_match` only creates the game, with its clock stopped. Each agent's first move is its
 "ready", and the game starts once every agent has made one, carrying out all their opening orders. Until then
@@ -208,8 +243,8 @@ from step 2 of [Play the real game](#play-the-real-game-x86-64-linux).
 
 ### Model against model, with different kinds of agent
 
-Claude Sonnet plays through the tools, against wc3agent on Haiku, in one game. This is an example; the bundled
-agent-against-agent task is `duel-quick`:
+Claude Sonnet plays through the tools, against wc3agent on Haiku, in one game, broadcast with its casters. This is
+an example; the bundled agent-against-agent task is `duel-quick`:
 
 ```json
 [
@@ -218,17 +253,24 @@ agent-against-agent task is `duel-quick`:
    "depends_on": ["deploy"]},
   {"id": "agent-b", "type": "deploy_agent", "agent_name": "bot", "a2a_agent_id": "wc3-macro-micro", "env_ids": [],
    "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}, "depends_on": ["deploy"]},
+  {"id": "seat", "type": "rts_seat_agents", "env_id": "wc3", "agents": ["sonnet", "bot"],
+   "depends_on": ["agent-a", "agent-b"]},
   {"id": "match", "type": "wc3_match", "env_id": "wc3", "map": "(2)EchoIsles.w3x", "seed": 7,
    "time_limit_seconds": 900, "seats": [{"agent": "sonnet", "race": "human"}, {"agent": "bot", "race": "orc"}],
-   "depends_on": ["agent-a", "agent-b"]},
+   "depends_on": ["deploy"]},
+  {"id": "broadcast", "type": "rts_broadcast", "env_id": "wc3", "title": "Sonnet vs wc3agent", "depends_on": ["deploy"]},
   {"id": "play-a", "type": "prompt_agent", "agent_name": "sonnet", "model": "anthropic/claude-sonnet-5-5",
-   "prompt_id": "duel-a", "prompt": "Win this game of Warcraft III.", "depends_on": ["match"]},
+   "prompt_id": "duel-a", "prompt": "Win this game of Warcraft III.", "depends_on": ["match", "seat"]},
   {"id": "play-b", "type": "prompt_agent", "agent_name": "bot", "model": "anthropic/claude-haiku-4-5",
-   "prompt_id": "duel-b", "prompt": "Play the game the env has started to its end.", "depends_on": ["match"]},
-  {"id": "grade", "type": "rts_grade", "env_id": "wc3", "rubric": "dense", "depends_on": ["play-a", "play-b"]},
+   "prompt_id": "duel-b", "prompt": "Play the game the env has started to its end.", "depends_on": ["match", "seat"]},
+  {"id": "finish", "type": "rts_finish", "env_id": "wc3", "rule": "forfeit", "depends_on": ["play-a", "play-b"]},
+  {"id": "grade", "type": "rts_grade", "env_id": "wc3", "rubric": "dense", "depends_on": ["finish"]},
   {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}
 ]
 ```
+
+Here an agent that stops before the end forfeits: `rts_finish` with `rule: forfeit` gives it the defeat, and the
+team rule gives its opponents the win.
 
 ### Teams, allies and free-for-all
 
@@ -291,6 +333,7 @@ expansions, and settles a game at the time limit on score:
 | `client_view` | Draws the game: its picture live and in the recording (stepping runs about 3× slower) | `false` |
 | `allow_debug` | Lets an agent's `urn:rts:debug/v1` stage the game (keep it off for evaluations) | `false` |
 | `labels` | Names for spectators, by slot | |
+| `license_secrets` | The secret-store names of the activation files | `{"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}` |
 
 **A seat** is `{"agent": name}` (a `deploy_agent` step's `agent_name`) or `{"computer": "easy" | "normal" |
 "insane"}`, plus:
@@ -323,6 +366,33 @@ Every computer seat in a game shares one difficulty.
 - **`at_time_limit`:** how an undecided game counts: `draw`, `score` or `loss`.
 - **`gates`:** `game_ran` and `agent_played`.
 - **`seats`:** which agents to grade; every agent seat by default.
+
+**`rts_seat_agents`:**
+- **`agents`:** the `deploy_agent` steps' `agent_name`s; every agent of the run by default.
+- **What it does:** registers each one's seat address through its MCP-configuration extension. It runs once per agent,
+  and a rerun changes nothing.
+
+**`rts_finish`:** `rule` decides what happens to a game still going once every play step has ended.
+- **`play_out` (default):** runs it with no orders to its end. That time is counted apart from the harness's `idle`,
+  so it doesn't trip the `agent_played` gate.
+- **`forfeit`:** every agent seat without a result loses.
+- **`as_is`:** leaves the game where it stopped.
+
+The summary keeps each seat's last move, and `rts_grade` adds a row of information (no weight) saying how the game
+ended.
+
+**`rts_broadcast`**
+
+| Field | What | Default |
+|---|---|---|
+| `to` | `twitch` and/or `x`; empty only records | `[]` |
+| `record` | Keep the broadcast's video as an artifact | `true` |
+| `cast`, `caster_model` | The two AI casters, and the model that writes their lines | `true`, Haiku 4.5 |
+| `title`, `size`, `fps`, `bitrate` | How it looks | the stream command's |
+| `linger_seconds` | How long it shows the end after GAME OVER | `60` |
+| `stall_seconds` | Ends the broadcast when the game clock stands still this long | `900` |
+| `key_secret`, `x_server_secret`, `x_key_secret` | The secrets that hold the stream keys | `TWITCH_STREAM_KEY`, `X_STREAM_SERVER`, `X_STREAM_KEY` |
+| `test` | Sends to Twitch as a bandwidth test (not live) | `false` |
 
 **Per run:** `agent-env run wc3 --task <task> --model <model>` plays any task on another model, without editing it.
 
@@ -472,7 +542,8 @@ flowchart LR
     `stall_seconds`, and the game then goes on without it.
 - **Realtime:** the game runs on its own clock, and a step only sends orders and observes.
 
-**Seats:** each agent plays at its own address, `<env>/seats/<agent>/mcp`, which `wc3_match` registers with it. It
+**Seats:** each agent plays at its own address, `<env>/seats/<agent>/mcp`, which `rts_seat_agents` registers with
+it. It
 sees and orders only its own side, unless its seat is `omniscient`.
 
 **How orders are checked:**
@@ -492,11 +563,11 @@ sees and orders only its own side, unless its seat is `omniscient`.
 
 | AgentEnv piece | Here |
 |---|---|
-| Environment | `src/agentenv_wc3/server.py`: six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:wc3:new-game/v1`, `urn:wc3:stage/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
-| Task steps | `wc3_match` (starts the game: its seats, stepping or realtime, and sends any activation files) and `save_wc3_replay`, in `steps.py`; `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
+| Environment | `src/agentenv_wc3/server.py`: six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:wc3:new-game/v1`, `urn:wc3:stage/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:finish/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
+| Task steps | `wc3_match` (creates the game and sends the activation files) and `save_wc3_replay`, in `steps.py`; `rts_seat_agents`, `rts_finish`, `rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
 | Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
-| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `serve`, `watch`, `stream`, `recordings`, `drills import` |
+| CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `license` (`import`, `show`), `serve`, `watch`, `stream`, `recordings`, `drills import` |
 
 [docs/protocol.md](docs/protocol.md) is the worker's protocol.
 
@@ -514,7 +585,8 @@ sees and orders only its own side, unless its seat is `omniscient`.
 | `display.py` | The game's own picture from an X display: one ffmpeg writes the match's video and the live JPEG stream |
 | `highlights.py` | A match's major moments on its video's clock: chapters embedded in the video and a highlight reel (ffmpeg) |
 | `streamer/` | The streamer image: any env's `/live?stream` to RTMP servers and a recording, encoded once, with the casters |
-| `steps.py` | `save_rts_recording`: streams each recording file into a file artifact |
+| `broadcast.py` | Running that image for one broadcast: its targets from the secret store, its casters' endpoint, its `docker run` (the `stream` command and `rts_broadcast` share it) |
+| `steps.py` | The game-agnostic steps: `rts_seat_agents`, `rts_finish` (an env's `urn:rts:finish/v1`), `rts_broadcast`, and `save_rts_recording`, which streams each recording file into a file artifact |
 | `grade.py` | `rts_grade`: grades each agent seat from the env's `data/get` summary with a rubric set in the task (`melee`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets, time-limit rule and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 

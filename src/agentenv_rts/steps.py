@@ -37,7 +37,7 @@ from agentenv_protocol import client
 
 from . import broadcast
 from .recording import RECORDING
-from .session import FINISH, FINISH_RULES, error_message
+from .session import FINISH, FINISH_RULES, HOLD, error_message
 
 log = logging.getLogger(__name__)
 FORMATS = ("mp4", "html", "timeline", "client", "highlights")
@@ -229,9 +229,11 @@ class RTSFinishTaskStep(TaskStep):
 
 
 class RTSBroadcastTaskStep(TaskStep):
-    """Broadcast the game while it is played, and keep its video: put it beside the play steps, after the match.
-    The streamer shows the env's /live?stream, with its casters (`cast`), to `to` (twitch, x; empty, the default,
-    only records) and ends `linger_seconds` after GAME OVER. It also ends when the game clock has stood still for
+    """Broadcast the game while it is played, and keep its video: start it with the env (it depends on deploy_env),
+    beside the agents and the match. It holds the game's start (urn:rts:hold/v1, where the env takes it) until the
+    stream is live, so the broadcast has the game from its first move. The streamer shows the env's /live?stream,
+    with its casters (`cast`), to `to` (twitch, x; empty, the default, only records) and ends `linger_seconds`
+    after GAME OVER. It also ends when the game clock has stood still for
     `stall_seconds` (a run whose play failed, so its game never ends), or when the step is cancelled. The video
     becomes a file artifact; stream keys come from agent-env's secret store. A failed broadcast doesn't fail the
     task unless `fail_task_on_error` says so."""
@@ -241,6 +243,7 @@ class RTSBroadcastTaskStep(TaskStep):
     OPTIONS = ("to", "cast", "caster_model", "title", "size", "fps", "bitrate", "linger_seconds", "test", "record",
                "key_secret", "x_server_secret", "x_key_secret", "wait_seconds", "stall_seconds")
     POLL_SECONDS = 10.0
+    LIVE_SECONDS = 120.0   # the longest it holds the start for the stream to come up
 
     def __init__(self, id: str, version: int | None, env_id: str, to: list[str] | None = None, cast: bool = True,
                  caster_model: str = broadcast.CASTER_MODEL, title: str | None = None, size: str = "1920x1080",
@@ -272,10 +275,29 @@ class RTSBroadcastTaskStep(TaskStep):
                    env_id=data["env_id"], **{k: data[k] for k in cls.OPTIONS if k in data})
 
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
-        url = f"{_deployed(context, self.env_id).environment_url.rstrip('/')}/live"
+        deployed = _deployed(context, self.env_id)
+        url = f"{deployed.environment_url.rstrip('/')}/live"
+        own = deployed.environment_card or {}
+        card = next((c for c in [own, *(own.get("children_environments") or [])] if client.find_extension(c, HOLD)),
+                    None)
+
+        async def hold(on: bool) -> None:
+            if card is not None:
+                await client.invoke_extension(deployed.environment_url, card, HOLD,
+                                              {"name": self.id, "hold": on, "seconds": self.wait_seconds + 900})
+
+        await hold(True)
+        try:
+            return await self._broadcast(context, url, hold)
+        finally:
+            await hold(False)
+
+    async def _broadcast(self, context: TaskStepContext, url: str, hold) -> TaskStepContext:
         env = await asyncio.to_thread(self.show.environment)
         image = broadcast.image()
-        await asyncio.to_thread(broadcast.build, image)
+        if not broadcast.image_exists(image):
+            log.info("rts_broadcast: building %s (a few minutes the first time)", image)
+            await asyncio.to_thread(broadcast.build, image)
         began = time.monotonic()
         while (state := await asyncio.to_thread(broadcast.state, url)) is None or state.get("t") is None:
             if time.monotonic() - began > self.wait_seconds:
@@ -287,7 +309,7 @@ class RTSBroadcastTaskStep(TaskStep):
         else:
             stem = f"{context.metadata.get('task_id', self.env_id)}-broadcast-{context.instance_id or uuid.uuid4().hex}"
             with tempfile.TemporaryDirectory(prefix="rts-broadcast-") as tmp:
-                code = await self._stream(url, image, env, Path(tmp) if self.record else None)
+                code = await self._stream(url, image, env, Path(tmp) if self.record else None, hold)
                 for path in sorted(Path(tmp).glob("*.mp4")):
                     artifact = await asyncio.to_thread(FileArtifact.put, f"{stem}-{path.name}",
                                                        description=f"Broadcast of env {self.env_id!r}",
@@ -301,12 +323,13 @@ class RTSBroadcastTaskStep(TaskStep):
             raise RuntimeError("rts_broadcast: the broadcast recorded nothing")
         return context
 
-    async def _stream(self, url: str, image: str, env: dict[str, str], record_dir: Path | None) -> int:
+    async def _stream(self, url: str, image: str, env: dict[str, str], record_dir: Path | None, hold) -> int:
         """Runs the streamer to its end, ending it early if the game clock stands still for stall_seconds (or the
-        step is cancelled); the streamer's exit code."""
+        step is cancelled); lets the game start once the stream is live. The streamer's exit code."""
         name = f"rts-broadcast-{uuid.uuid4().hex[:12]}"
         proc = await asyncio.create_subprocess_exec(*self.show.command(url, image, record_dir, name),
                                                     env={**os.environ, **env})
+        live = asyncio.create_task(self._when_live(proc, record_dir, hold))
         log.info("rts_broadcast: %s %s%s", url, " and ".join(self.show.targets()[1]) or "recorded only",
                  ", with the casters" if self.cast else "")
         clock, moved, over = None, time.monotonic(), None
@@ -331,9 +354,23 @@ class RTSBroadcastTaskStep(TaskStep):
                     await _docker_stop(name)
                     return await proc.wait()
         finally:
+            live.cancel()
             if proc.returncode is None:   # cancelled: let the streamer finish its recording
                 await _docker_stop(name)
                 await proc.wait()
+
+    async def _when_live(self, proc, record_dir: Path | None, hold) -> None:
+        """Lets the game start once the streamer is live: its recording has begun (or, streaming only, 20 s on),
+        or LIVE_SECONDS have passed, or it has stopped."""
+        began = time.monotonic()
+        while proc.returncode is None and time.monotonic() - began < self.LIVE_SECONDS:
+            if record_dir is not None and any(p.stat().st_size for p in record_dir.glob("*.mkv")):
+                break
+            if record_dir is None and time.monotonic() - began > 20:
+                break
+            await asyncio.sleep(1)
+        log.info("rts_broadcast: live after %.0f s; the game may start", time.monotonic() - began)
+        await hold(False)
 
 
 async def _docker_stop(name: str) -> None:

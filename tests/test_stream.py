@@ -357,8 +357,11 @@ elif args[0] == "run":
     (here / (args[args.index("--name") + 1] + ".pid")).write_text(str(os.getpid()))
     rec = next(a.split(":")[0] for a in args if a.endswith(":/rec"))
 
+    pathlib.Path(rec, "stream-test.mkv").write_bytes(b"live")   # the streamer records as it goes
+
     def finish(*_):
         pathlib.Path(rec, "stream-test.mp4").write_bytes(b"\\0\\0\\0\\x18ftypisom" + b"x" * 100)
+        pathlib.Path(rec, "stream-test.mkv").unlink()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, finish)

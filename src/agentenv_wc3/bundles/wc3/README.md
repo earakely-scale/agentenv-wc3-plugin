@@ -29,8 +29,14 @@ by the `smoke` rubric.
   minutes stepped or 10 in realtime. `WC3_MICRO_MODEL` in the `deploy_agent` step picks the micro model (`jev` for
   TypeSafe's Jev); the `prompt_agent` model is the macro model. `agent-env wc3 setup --agent` registers the agent.
 
-Every task also saves the spectator recording (`save_rts_recording`): an MP4 of the map and a self-contained HTML
-replay; `macro-micro-realtime` adds the game's own video, with chapters, and a highlight reel cut from it.
+Every task with agents settles its game before grading it (`rts_finish`, `play_out`: the game runs to its end once
+its agents have stopped), and seated agents get their seats from `rts_seat_agents`. `broadcast-smoke` plays two
+`wc3-scripted` seats against each other for two minutes with a recorded broadcast (`rts_broadcast`), at no model
+cost.
+
+Every task also saves the spectator recording (`save_rts_recording`): an MP4 of the map, a self-contained HTML
+replay and the timeline as JSON; `macro-micro-realtime` adds the game's own video, with chapters, and a highlight reel
+cut from it.
 `agent-env wc3 setup --fake` builds the env on wc3env's fake game, so every task runs end to end without
 Warcraft III (units move and stop, nothing else).
 

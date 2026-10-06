@@ -471,6 +471,24 @@ async def test_a_realtime_game_starts_once_every_seat_has_moved(env_vars):
         assert await asyncio.to_thread(waiting) == []
 
 
+async def test_a_hold_keeps_the_game_from_starting_until_it_is_let_go(env_vars):
+    async with deployed(WC3Env()) as record:
+        await match(record)
+        url, card = record.environment_url, record.environment_card
+        await client.invoke_extension(url, card, "urn:rts:hold/v1", {"name": "broadcast", "seconds": 30})
+        session = RemoteSession(base(record))
+        first = asyncio.create_task(asyncio.to_thread(session.step, {0: []}, 1000))
+        await asyncio.sleep(1.5)
+        assert not first.done()   # the agent moved; the broadcast is not live yet
+        live = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/data.json")))
+        assert live["live"]["holds"] == ["broadcast"]
+        held = await client.invoke_extension(url, card, "urn:rts:hold/v1", {"name": "broadcast", "hold": False})
+        assert held == {"holds": [], "begun": False}
+        assert (await first)["observations"][0]["game_time_seconds"] == 1.0
+        await client.invoke_extension(url, card, "urn:rts:hold/v1", {"name": "late"})   # under way: no pause
+        assert (await asyncio.to_thread(session.step, {0: []}, 1000))["observations"][0]["game_time_seconds"] == 2.0
+
+
 async def test_lockstep_moves_to_the_nearest_deadline():
     clock, moves = {"t": 0.0}, []
 

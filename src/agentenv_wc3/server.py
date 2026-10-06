@@ -52,7 +52,7 @@ from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
 from agentenv_rts.seats import Lockstep, SeatPaths, current_seat
-from agentenv_rts.session import DEBUG, FINISH, FINISH_RULES, NOTE, NOTE_KINDS, OBSERVE, STEP
+from agentenv_rts.session import DEBUG, FINISH, FINISH_RULES, HOLD, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
 
 from . import frames, metrics, render
@@ -245,6 +245,7 @@ class WC3Env(AgentEnvEnvironment):
         self.ready: set[int] = set()
         self.created, self.begun = time.monotonic(), False
         self.forfeits: dict[int, str] = {}
+        self.holds: dict[str, float] = {}   # what holds the next game's start, and until when (monotonic)
         self.last_move: dict[int, float] = {}
         self.finished: dict | None = None
         self.metrics: metrics.Metrics | None = None
@@ -298,8 +299,6 @@ class WC3Env(AgentEnvEnvironment):
         self.scenario, self.setup, self.seats = scenario, result.get("setup"), seats
         self.started, self.ready, self.created, self.begun = asyncio.Event(), set(), time.monotonic(), False
         self.forfeits, self.last_move, self.finished = {}, {}, None
-        if not result.get("held"):
-            self.started.set()
         self.lead = next(x["slot"] for x in seats if x["computer"] is None)
         self.obs = {int(k): v for k, v in result["observations"].items()}
         agents = [x["slot"] for x in seats if x["computer"] is None]
@@ -407,18 +406,20 @@ class WC3Env(AgentEnvEnvironment):
         return self.step_info.pop(slot)
 
     async def _ready(self, slot: int) -> None:
-        """A seat's first move says it is ready. A realtime game stands at its start until every agent seat is
-        ready, then starts at once with all their opening orders; a seat silent for lockstep's stall_seconds since
-        the game began doesn't hold the start. (In stepping mode time passes only as the seats step anyway.)"""
+        """A seat's first move says it is ready. The game begins once every agent seat is ready and nothing holds
+        its start (urn:rts:hold/v1: a broadcast going live, say), with all their opening orders; until then a
+        realtime game stands at its start, and a stepped one doesn't step. A seat silent, or a hold kept, for
+        lockstep's stall_seconds since the game was created stops holding it."""
         self.ready.add(slot)
         stall = self.scenario["lockstep"]["stall_seconds"]
-        while not self.started.is_set() and not self._out(slot):
+        while not self.begun and not self._out(slot):
             waiting = [x["slot"] for x in self.seats if x["computer"] is None and x["slot"] not in self.ready
                        and not self._out(x["slot"])]
+            holds = self._holds()
             left = stall - (time.monotonic() - self.created)
-            if not waiting or left <= 0:
-                if waiting:
-                    log.warning("starting without slot(s) %s: no first move in %s s", waiting, stall)
+            if not (waiting or holds) or left <= 0:
+                if waiting or holds:
+                    log.warning("starting without %s: no first move or release in %s s", [*waiting, *holds], stall)
                 await self._start()
                 break
             try:
@@ -427,7 +428,7 @@ class WC3Env(AgentEnvEnvironment):
                 pass
 
     async def _start(self) -> None:
-        """Lets a realtime game held at its start run on its own clock."""
+        """The game begins: a realtime game held at its start runs on its own clock from now."""
         self.begun = True
         async with self.lock:
             if self.started.is_set():
@@ -436,8 +437,14 @@ class WC3Env(AgentEnvEnvironment):
             self.started.set()
             log.warning("GAME STARTED at %.1f s, ready: %s", self._seconds(), sorted(self.ready))
 
+    def _holds(self) -> list[str]:
+        now = time.monotonic()
+        self.holds = {name: until for name, until in self.holds.items() if until > now}
+        return sorted(self.holds)
+
     def _waiting(self) -> list[int]:
-        """The agent seats the game waits for before it begins: those yet to make their first move."""
+        """The agent seats the game waits for before it begins: those yet to make their first move (what else holds
+        its start, `holds`, the live page shows apart)."""
         if self.begun or self.game_over:
             return []
         return [x["slot"] for x in self.seats if x["computer"] is None and x["slot"] not in self.ready]
@@ -445,6 +452,7 @@ class WC3Env(AgentEnvEnvironment):
     async def _chunk(self, batches: dict[int, list], seconds: float) -> None:
         """One step of the game with every waiting seat's orders; its observations become the game's state."""
         self.begun = True
+        self.started.set()
         async with self.lock:
             ms = max(25, round(seconds * 1000) // 25 * 25)
             result = await self.bridge.call("step", actions={str(k): v for k, v in batches.items()}, ms=ms)
@@ -889,6 +897,20 @@ class WC3Env(AgentEnvEnvironment):
                 await asyncio.sleep(1)
         return self._seconds() - start
 
+    @extension(HOLD, description="Hold the start of the game (its next first moves wait) for something outside it, "
+                                 "such as a broadcast that must be live first: name, hold (true to hold, false to "
+                                 "let go), seconds (it lapses after this many; 600 by default). A game already "
+                                 "under way is not paused.")
+    async def hold(self, name: str, hold: bool = True, seconds: int = 600) -> dict:
+        self.stats["extension_calls"] += 1
+        if not isinstance(name, str) or not 1 <= len(name) <= 64 or not 1 <= int(seconds) <= 7200:
+            raise ValueError("name is 1 to 64 characters, and seconds 1 to 7200")
+        if hold:
+            self.holds[name] = time.monotonic() + int(seconds)
+        else:
+            self.holds.pop(name, None)
+        return {"holds": self._holds(), "begun": self.begun}
+
     @extension(FINISH, description="Settle the game once its agents have stopped playing, before it is graded: "
                                    "play_out lets it run with no orders to its end (the time limit at most); "
                                    "forfeit gives every agent seat without a result a defeat; as_is leaves it where "
@@ -1252,7 +1274,7 @@ class WC3Env(AgentEnvEnvironment):
 
     async def _live_data(self, request: Request) -> Response:
         return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since"), self.capture is not None,
-                                          self._waiting()),
+                                          self._waiting(), [] if self.begun else self._holds()),
                             headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
 
     async def _live_state(self, request: Request) -> Response:
@@ -1300,7 +1322,7 @@ class WC3Env(AgentEnvEnvironment):
                 + (f", with {', '.join(allies)}" if allies else "")
                 + f". Against: {', '.join(enemies) or 'nobody'}. The game ends when a side has no buildings left, or "
                 f"at the {self.scenario['time_limit_seconds'] // 60}-minute limit, where the higher score is ahead."
-                + ("" if self.started.is_set() or self._out(slot) else
+                + ("" if self.begun or self._out(slot) else
                    " The clock starts once every player has made its first move: plan as long as you like; your "
                    "first advance sends your opening orders."))
 

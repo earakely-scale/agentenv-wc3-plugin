@@ -261,7 +261,7 @@ go.
 ## Verified, and still open
 
 - **Seat addresses:** agent-env's MCP-configuration extension can only add a server, not replace one, so seated
-  agents deploy with `"env_ids": []` and `wc3_match` registers each one's seat address; a seated agent that also has
+  agents deploy with `"env_ids": []` and `rts_seat_agents` registers each one's seat address; a seated agent that also has
   the env's own address, in a game with several agent seats, is refused.
 - **Teams:** the `alliance` op makes teammates allies (passive, help, shared experience, spells and vision). They show
   as allies from the game's first step on: its very first observation still lists them as enemies, so the metrics read
