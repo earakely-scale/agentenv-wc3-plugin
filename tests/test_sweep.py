@@ -30,6 +30,8 @@ def generated(tmp_path):
 def test_a_spec_becomes_one_task_per_combination_and_an_eval_over_them(generated, local_stores):
     out, names = generated
     assert len(names) == 8 and "first-eval-claude-haiku-4-5-terenasstand-s2" in names
+    assert names[:3] == ["first-eval-claude-haiku-4-5-echoisles-s1", "first-eval-gpt-5.4-mini-echoisles-s1",
+                         "first-eval-claude-haiku-4-5-terenasstand-s1"]   # in rounds: each model before the next
     assert (out / "evals/first-eval.toml").read_text().count('"first-eval-') == 8
     steps = json.loads((out / "tasks/first-eval-gpt-5.4-mini-terenasstand-s2.json").read_text())
     registry = get_task_step_registry()

@@ -88,8 +88,9 @@ class Spec:
         return json.loads(path.read_text())
 
     def combinations(self) -> list[dict]:
+        """In rounds: every model plays a seed before any plays the next, so a budget that runs out cuts evenly."""
         return [{"model": m, "map": p, "race": r, "opponent": o, "seed": s}
-                for m, p, r, o, s in itertools.product(self.models, self.maps, self.races, self.opponents, self.seeds)]
+                for s, p, r, o, m in itertools.product(self.seeds, self.maps, self.races, self.opponents, self.models)]
 
 
 def short(text: str) -> str:

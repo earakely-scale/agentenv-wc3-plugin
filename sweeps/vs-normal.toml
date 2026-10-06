@@ -1,0 +1,16 @@
+# Three low-cost models against the game's normal Orc AI for 12 minutes, long enough for its attacks to arrive, on
+# two 1v1 maps with two seeds each: 12 games. Gemini 3.8 Flash is left out: it costs about ten times as much a turn.
+# agent-env wc3 sweep generate sweeps/vs-normal.toml runs/vs-normal
+# agent-env wc3 sweep run runs/vs-normal --budget 5
+name = "vs-normal"
+template = "vs-ai-quick"
+models = [
+  "fireworks_ai/deepseek-v4p1-flash",
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.4-mini",
+]
+maps = ["(2)EchoIsles.w3x", "(2)TerenasStand.w3x"]
+opponents = [{computer = "normal", race = "orc"}]
+seeds = [1, 2]
+time_limit_seconds = 720
+max_cost_usd = 1.0
