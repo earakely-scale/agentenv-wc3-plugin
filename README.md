@@ -36,7 +36,8 @@ call it. Claude won on score at the 10-minute limit, 30.7k to 28.5k, after killi
   - a chat model through the MCP tools against the AI (`vs-ai-quick`);
   - wc3agent against the AI, stepped and in realtime, streamed with its casters;
   - two agents in a lockstep duel;
-  - drills.
+  - drills;
+  - a sweep of four models × two maps × three seeds ([first-eval](docs/evals/first-eval.md), $4.24).
 
   The [Tasks](#tasks) table has times, costs and grades.
 - **Multiplayer rules, checked there with no model:**
@@ -189,7 +190,7 @@ To go out live, give a stream key: `to` in the step, or `--to twitch`, `--to x` 
 |---|---|---|---|
 | `smoke` | nobody: the harness lets the game run | 2 minutes | 40 s, $0 |
 | `broadcast-smoke` | two `wc3-scripted` seats (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per seat | 2 min, $0; red 0.25, blue 0.43, the same both times it ran; a 1080p broadcast of 105 s |
-| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k |
+| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k. In `first-eval`, 6 games: 0.44 ± 0.01, $0.14 a game |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
@@ -408,6 +409,52 @@ ended.
 
 **Per run:** `agent-env run wc3 --task <task> --model <model>` plays any task on another model, without editing it.
 
+## Sweeps: one task across models, maps and seeds
+
+A sweep crosses a template task over the axes you name, plays every combination under a spend budget and
+tabulates the grades. The spec is a TOML file, e.g. [sweeps/first-eval.toml](sweeps/first-eval.toml):
+
+```toml
+name = "first-eval"
+template = "vs-ai-quick"          # a bundled task, or a path to a task file
+models = ["anthropic/claude-haiku-4-5", "openai/gpt-5.4-mini", "gemini/gemini-3.8-flash", "fireworks_ai/deepseek-v4p1-flash"]
+maps = ["(2)EchoIsles.w3x", "(2)TerenasStand.w3x"]
+seeds = [1, 2, 3]
+max_cost_usd = 0.5                # a game's cap: wc3-llm stops playing there
+```
+
+```bash
+agent-env wc3 sweep generate sweeps/first-eval.toml runs/first-eval   # 24 tasks, an eval and sweep.json
+agent-env wc3 sweep run runs/first-eval --budget 5 --parallel 2
+agent-env wc3 sweep report runs/first-eval --out docs/evals/first-eval.md
+```
+
+- **Generate** writes a bundle folder:
+  - one task per combination (`first-eval-gpt-5.4-mini-terenasstand-s2`), with that map, seed, race and opponent on
+    the match, and that model and a prompt for that race and map on the player's step;
+  - an eval of all of them, which `agent-env run runs/first-eval` plays like any bundle's;
+  - `sweep.json`, each task's axes.
+- **Axes:** `models`, `maps`, `races` (`human`, `orc`, `undead`, `night_elf`), `opponents` (`{computer = "easy",
+  race = "orc"}`; `easy`, `normal` or `insane`) and `seeds`. Also `time_limit_seconds`, `player_step` (the
+  `prompt_agent` step that gets the model, `play` by default) and `prompt`, a template with `{race}`, `{map}`,
+  `{players}`, `{difficulty}`, `{opponent}`, `{minutes}`, `{worker}` and `{supply}`.
+- **Run** plays the games one `agent-env run` each, logged under `logs/`. It starts a game only while the spend so
+  far plus `max_cost_usd` for every game in play fits `--budget`, so the budget holds even if every game hits its
+  cap (a game can pass its cap by its last model call). Each finished game is a line of `results.jsonl`: grade, result, score against the opponent's, orders, model
+  turns and spend, read from the run's stored summary. Run it again to play the rest.
+- **Report** ranks the models by mean grade. For each it gives W / limit / L, the score against the opponent's, the
+  cost and turns a game and how many games hit the cap, then each map's grades seed by seed.
+
+**The first sweep** ([docs/evals/first-eval.md](docs/evals/first-eval.md)): `first-eval` on the real game, 24 games
+for $4.24. The ranking, by mean grade:
+
+1. Gemini 3.8 Flash, 0.48 (it hit the $0.50 cap in every game);
+2. DeepSeek V4.1 Flash, 0.45, for $0.02 a game;
+3. Haiku 4.5, 0.44;
+4. GPT-5.4 mini, 0.43.
+
+Every game reached the 5-minute limit, so the grades are score ratios. The sd across seeds was 0.01 to 0.03.
+
 ## The wc3-llm agent
 
 `agents/wc3-llm` lets any chat model play through the env's MCP tools (`get_state`, `act`, `advance`, …). The model
@@ -607,8 +654,8 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
 
 ## Not done yet
 
-- **A task-set generator** (phase 4 of [docs/task-design.md](docs/task-design.md)): maps, races, opponents, seeds and
-  drills crossed into named tasks and an eval.
+- **Drills in sweeps:** a sweep crosses a full-game template; drills, each with its own staged board, are not crossed
+  over races or seeds yet.
 - **The harness's endpoints are open to agents.** An agent whose own tools can make HTTP requests (a shell, say)
   could reach the env's base address. There it could stage the game, start a new one, or see the whole map through
   `data/get`, the root session and `/live`. The agents here don't: they reach only their seat's tools or session. A

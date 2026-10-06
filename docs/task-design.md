@@ -2,7 +2,7 @@
 
 How Warcraft III tasks are built. Phases 1 to 3 below are implemented and were run end to end on the real game
 (2026-10-05): `smoke` (1.0), `drill-fight-even` (0.6), `drill-creep-easy` (0.67) and `duel-quick` (0.41 and 0.35, one
-score per seat); phase 4, the task-set generator, is not built yet.
+score per seat). Phase 4, the task-set generator, is `agent-env wc3 sweep` (README, Sweeps).
 
 ## Principles
 
@@ -219,9 +219,9 @@ read `env_outcome_verifier`'s. Every criterion records its evidence (`army 2715 
 1. **In the task:** every field above.
 2. **Per run:** `wc3_match`, the stage extension and `rts_grade` honour agent-env's
    `user_overrides.step_params.<step id>`, so a runner changes the seed, map or opponent without new tasks.
-3. **Generated sets:** `agent-env wc3 tasks --maps ... --races ... --opponents easy,normal --seeds 1-10 --drills all
-   --agent wc3-macro-micro --out bundles/wc3-sweep` writes named tasks (`human-vs-orc-normal-turtlerock-s3`,
-   `drill-fight-even-orc`) and an eval of them.
+3. **Generated sets:** `agent-env wc3 sweep generate SPEC OUT` crosses a template task over the models, maps, races,
+   opponents and seeds a TOML spec names into named tasks (`first-eval-gpt-5.4-mini-terenasstand-s2`) and an eval of
+   them; `sweep run` plays them under a spend budget and `sweep report` tabulates them. Drills are not crossed yet.
 
 ## More examples
 
@@ -299,7 +299,7 @@ go.
 | 1 | Seats (and the shorthand), per-seat addresses, lockstep, the briefing, per-run overrides; `rts_grade` with `melee` and `smoke`; the six tasks moved to it | done; `duel-quick` ran on the real game |
 | 2 | The summary's per-seat metrics; `dense`, and `checks` on any rubric | done |
 | 3 | Drills: the stage extension, `wc3-scripted`, the goal from the prompt (`WC3_GOAL=prompt`), the gate's harness time, the 25 imported | done; `drill-fight-even` and `drill-creep-easy` ran on the real game |
-| 4 | The task-set generator and a sweep eval; optionally `rts_broadcast` | not built |
+| 4 | The task-set generator and a sweep eval; `rts_broadcast` | done; `first-eval` ran on the real game |
 
 ## Decisions taken
 
