@@ -457,8 +457,15 @@ class WC3Env(AgentEnvEnvironment):
         self.begun = True
         self.started.set()
         async with self.lock:
+            if self.failed:   # a seat that was waiting when the game failed hears why, not that there is no game
+                raise WorkerError("game_failed", f"the game stopped working: {self.failed}")
             ms = max(25, round(seconds * 1000) // 25 * 25)
-            result = await self.bridge.call("step", actions={str(k): v for k, v in batches.items()}, ms=ms)
+            try:
+                result = await self.bridge.call("step", actions={str(k): v for k, v in batches.items()}, ms=ms)
+            except WorkerError as e:
+                if e.code in DEAD or e.code == "game_failed":
+                    self.failed = self.failed or e.message
+                raise
             self._observed(result)
             for slot, batch in batches.items():
                 info = self.step_info.setdefault(slot, {"rejected": [], "placements": [], "sent": len(batch)})
