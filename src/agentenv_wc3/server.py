@@ -23,7 +23,6 @@ agent at the env's own address against the game's AI.
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import math
 import os
@@ -40,6 +39,8 @@ from typing import Annotated, Any, Literal
 
 from agentenv_game import (
     AgentEnvGameEnv,
+    LicenseItem,
+    LicenseParts,
     Lobby,
     LobbyState,
     OccupantKind,
@@ -48,6 +49,8 @@ from agentenv_game import (
     check_slot,
     create_game,
     current_player,
+    install_license,
+    license_needs,
     open_lobby,
 )
 from agentenv_protocol import (
@@ -109,7 +112,6 @@ PAN_SECONDS, PAN_STEPS, PAN_MAX = 0.6, 8, 4000.0   # the camera eases over this;
 NOTE_CHARS = 400
 OVERLAY = {"x": -1.0, "y": 1.0, "seconds": 9}   # a plan shows top left in the game's picture, under its resources
 
-LICENSE_EXTENSION = "urn:wc3:license/v1"
 REPLAY_EXTENSION = "urn:wc3:replay/v1"
 IDLE_EXTENSION = "urn:wc3:idle/v1"
 STAGE_EXTENSION = "urn:wc3:stage/v1"
@@ -241,19 +243,11 @@ def map_players(map_file: str) -> int:
     return min(int(named[1]), 12) if named else 12
 
 
-def attach_license(files: dict[str, str], store: Path, game_dir: Path) -> None:
-    """Writes the activation files the task sent (base64) to a private directory and links them into the game's
-    folder, as wc3env's docker/license.py does with a mounted directory: their contents never enter the image."""
-    if missing := [n for n in LICENSE_FILES if not files.get(n)]:
-        raise ValueError(f"license is missing {', '.join(missing)}: send both of {', '.join(LICENSE_FILES)}")
+def attach_license(files: dict[str, bytes], store: Path, game_dir: Path) -> None:
+    """Writes activation files to a private directory and links them into the game's folder, as wc3env's
+    docker/license.py does with a mounted directory: their contents never enter the image."""
     store.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for name in LICENSE_FILES:
-        try:
-            data = base64.b64decode(files[name], validate=True)
-        except ValueError as e:
-            raise ValueError(f"license {name} is not base64") from e
-        if not data:
-            raise ValueError(f"license {name} is empty")
+    for name, data in files.items():
         source = store / name
         source.write_bytes(data)
         source.chmod(0o600)
@@ -331,7 +325,7 @@ class WC3Env(AgentEnvGameEnv):
     async def _new_game(self, scenario: dict) -> None:
         if not self._license_ready():
             raise WorkerError("no_license", "the game needs your Warcraft III activation files (roc.w3k, tft.w3k): "
-                                            "the wc3_license task step sends them from your license directory "
+                                            "the add_license task step gives them from agent-env's secret store "
                                             "(agent-env wc3 setup --help)")
         await self._drop_capture()
         if self.bridge is None or not self.bridge.alive:
@@ -911,15 +905,22 @@ class WC3Env(AgentEnvGameEnv):
 
     # ---- extensions (the harness's; each counts in data/get's harness) ----
 
-    @extension(LICENSE_EXTENSION, description='Your activation files, {"roc.w3k": base64, "tft.w3k": base64}, which '
-                                              "the game needs once per env: wc3_license sends them from agent-env's "
-                                              "secret store or your license folder. Their contents never enter the "
-                                              "image or the env's replies.")
-    async def license(self, files: dict) -> dict:
-        self.stats["extension_calls"] += 1
-        if not self.fake:
-            attach_license(files, self.license_store, self.game_dir)
-        return {"licensed": self.fake or self._license_ready()}
+    # ---- the license (urn:game:license/v1, served by AgentEnvGameEnv) ----
+
+    @license_needs
+    def activation_files(self) -> list[LicenseItem]:
+        """The activation files the game still lacks: none on the fake game, nor once they are in the game's folder
+        (given by add_license, or mounted at WC3_LICENSE_DIR as wc3env's own image takes them)."""
+        if self._license_ready():
+            return []
+        return [LicenseItem(name=n, kind="file", group="warcraft3", max_bytes=4096,
+                            description=f"{n} from your Warcraft III Legacy folder; agent-env wc3 license import "
+                                        "stores it as " + ("WC3_ROC_W3K" if n == "roc.w3k" else "WC3_TFT_W3K"))
+                for n in LICENSE_FILES if not (self.game_dir / n).exists()]
+
+    @install_license
+    def link_activation_files(self, parts: LicenseParts) -> None:
+        attach_license(parts.files, self.license_store, self.game_dir)
 
     # ---- the lobby (urn:game:lobby/v1, served by AgentEnvGameEnv) ----
 

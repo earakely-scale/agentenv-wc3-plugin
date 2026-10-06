@@ -1,6 +1,5 @@
 """The env's tools against wc3env's fake game: a Town Hall, five Peasants, and an enemy hall far away."""
 
-import base64
 
 import pytest
 from agentenv_game import LobbyError
@@ -155,13 +154,12 @@ def test_license_files_are_linked_not_copied_into_the_game(tmp_path):
 
     game, store = tmp_path / "game", tmp_path / "store"
     game.mkdir()
-    files = {"roc.w3k": base64.b64encode(b"roc").decode(), "tft.w3k": base64.b64encode(b"tft").decode()}
-    attach_license(files, store, game)
+    files = {"roc.w3k": b"roc", "tft.w3k": b"tft"}
+    attach_license({"roc.w3k": files["roc.w3k"]}, store, game)   # a file at a time
+    attach_license({"tft.w3k": files["tft.w3k"]}, store, game)
     assert (game / "roc.w3k").is_symlink() and (game / "roc.w3k").read_bytes() == b"roc"
     assert oct((store / "tft.w3k").stat().st_mode & 0o777) == "0o600"
     attach_license(files, store, game)   # again: the same links
-    with pytest.raises(ValueError, match="missing tft.w3k"):
-        attach_license({"roc.w3k": files["roc.w3k"]}, store, game)
     (game / "roc.w3k").unlink()
     (game / "roc.w3k").write_bytes(b"baked")
     with pytest.raises(ValueError, match="baked in"):

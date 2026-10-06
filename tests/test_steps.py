@@ -16,22 +16,17 @@ from agent_env.env.env import DeployedEnv
 from agent_env.task.task import Task
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.registry import get_task_step_registry
-from agentenv_game.steps import AddPlayerSlotTaskStep, CreateMatchTaskStep, StartMatchTaskStep
+from agentenv_game import LICENSE
+from agentenv_game.steps import AddLicenseTaskStep, AddPlayerSlotTaskStep, CreateMatchTaskStep, StartMatchTaskStep
 from agentenv_protocol import AgentEnvEnvironment, client, environment_card, extension
 from agentenv_protocol.types import WELL_KNOWN_PATH
 from click.testing import CliRunner
 from conftest import ONE_AGENT, slot_settings
 
 from agentenv_rts.grade import RTSGradeTaskStep
+from agentenv_wc3.license import LICENSE_SECRETS, license_from_secrets, read_license
 from agentenv_wc3.server import IDLE_EXTENSION, WC3Env
-from agentenv_wc3.steps import (
-    LICENSE_SECRETS,
-    REPLAY_EXTENSION,
-    SaveWC3ReplayTaskStep,
-    WC3LicenseTaskStep,
-    license_from_secrets,
-    read_license,
-)
+from agentenv_wc3.steps import REPLAY_EXTENSION, SaveWC3ReplayTaskStep
 
 pytestmark = pytest.mark.anyio
 
@@ -72,9 +67,10 @@ def slot_of(index: int, seat: dict) -> AddPlayerSlotTaskStep:
 
 
 async def open_match(record: DeployedEnv, **settings) -> TaskStepContext:
-    """A match opened as a task opens one: the activation files, then create_match with the match's settings."""
+    """A match opened as a task opens one: the activation files (the fake game needs none), then create_match with
+    the match's settings."""
     context = run_context(record)
-    await WC3LicenseTaskStep(id="license", version=None, env_id="wc3").execute(context)
+    await AddLicenseTaskStep(id="license", version=None, env_id="wc3", files=LICENSE_SECRETS).execute(context)
     return await CreateMatchTaskStep(id="match", version=None, env_id="wc3", additional_settings=settings).execute(
         context)
 
@@ -88,13 +84,8 @@ async def seat_and_start(context: TaskStepContext, seats: list[dict] | None = No
 
 def test_the_steps_are_registered():
     registry = get_task_step_registry()
-    assert registry["wc3_license"] is WC3LicenseTaskStep and registry["save_wc3_replay"] is SaveWC3ReplayTaskStep
-    assert registry["create_match"] is CreateMatchTaskStep
-    step = WC3LicenseTaskStep.from_dict({"id": "license", "type": "wc3_license", "env_id": "wc3",
-                                         "license_dir": "~/w3k"})
-    assert step.to_dict()["license_dir"] == "~/w3k" and step.to_dict()["license_secrets"] is None
-    with pytest.raises(ValueError, match="names the secrets of roc.w3k, tft.w3k"):
-        WC3LicenseTaskStep(id="license", version=None, env_id="wc3", license_secrets={"roc.w3k": "A"})
+    assert registry["save_wc3_replay"] is SaveWC3ReplayTaskStep and "wc3_license" not in registry
+    assert registry["create_match"] is CreateMatchTaskStep and registry["add_license"] is AddLicenseTaskStep
 
 
 async def test_match_then_idle_passes_the_smoke_rubric(env_vars, license_dir):
@@ -119,20 +110,38 @@ async def test_match_then_idle_passes_the_smoke_rubric(env_vars, license_dir):
         assert gate["result"] is False and verification["score"] == 0
 
 
-async def test_a_match_without_activation_files_plays_the_fake_game_and_the_real_one_refuses(
-        env_vars, tmp_path, monkeypatch, caplog):
-    monkeypatch.setenv("WC3_LICENSE_DIR", str(tmp_path / "nowhere"))
+async def test_the_fake_game_needs_no_activation_files_and_reads_no_secrets(env_vars, local_stores):
     async with deployed(WC3Env()) as record:
+        status = await client.invoke_extension(record.environment_url, record.environment_card, LICENSE, method="get")
+        assert status == {"missing": [], "installed": []}
         context = await seat_and_start(await open_match(record, time_limit_seconds=120))
+    assert context.metadata["game_license"] == {"installed": []}
     assert context.metadata["game_lobby"]["additional_settings"]["time_limit_seconds"] == 120
-    assert "wc3_license: no Warcraft III activation files" in caplog.text
+
+
+async def test_the_real_game_lacks_its_activation_files_until_add_license_gives_them(
+        env_vars, tmp_path, monkeypatch, local_stores):
     real = WC3Env()
     real.fake, real.game_dir, real.license_mount = False, tmp_path / "game", tmp_path / "no-mount"
+    real.license_store = tmp_path / "store"
     (tmp_path / "game").mkdir()
+    step = AddLicenseTaskStep(id="license", version=None, env_id="wc3", files=LICENSE_SECRETS)
     async with deployed(real) as record:
-        context = await open_match(record, time_limit_seconds=120)   # the lobby opens; the game needs the files
-        with pytest.raises(RuntimeError, match="lobby close: lobby_failed: RuntimeError: no_license: .*activation"):
-            await seat_and_start(context)
+        url, card = record.environment_url, record.environment_card
+        missing = (await client.invoke_extension(url, card, LICENSE, method="get"))["missing"]
+        assert [(i["name"], i["kind"], i["group"]) for i in missing] == [("roc.w3k", "file", "warcraft3"),
+                                                                        ("tft.w3k", "file", "warcraft3")]
+        context = await CreateMatchTaskStep(id="match", version=None, env_id="wc3").execute(run_context(record))
+        with pytest.raises(RuntimeError, match="lobby close: not_licensed: the game lacks file roc.w3k .*import"):
+            await seat_and_start(context)   # without add_license, the lobby doesn't close
+        with pytest.raises(RuntimeError, match="secret store has no 'WC3_ROC_W3K' \\(file roc.w3k"):
+            await step.execute(context)
+        monkeypatch.setenv("WC3_ROC_W3K", base64.b64encode(b"roc key").decode())
+        monkeypatch.setenv("WC3_TFT_W3K", base64.b64encode(b"tft key").decode())
+        await step.execute(context)
+        assert (await client.invoke_extension(url, card, LICENSE, method="get"))["missing"] == []
+    assert context.metadata["game_license"] == {"installed": ["roc.w3k", "tft.w3k"]}
+    assert (tmp_path / "game" / "tft.w3k").is_symlink() and (tmp_path / "game" / "tft.w3k").read_bytes() == b"tft key"
 
 
 def test_read_license(license_dir):

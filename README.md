@@ -129,12 +129,19 @@ agent-env wc3 license import ~/.wc3-license  # into agent-env's secret store, so
 ```
 
 **How the activation files reach the game:**
-- **Never in an image.** The `wc3_license` step sends them to the env before a game starts.
-- **From agent-env's secret store first.** They're the secrets `WC3_ROC_W3K` and `WC3_TFT_W3K`, each file in base64.
-  `license import` writes them into a local secrets file. For a cloud store (AWS or GCP), store them there yourself.
-- **Then from a folder on the machine running the task:** `license_dir` in `[plugins.agentenv-wc3]`,
-  `$WC3_LICENSE_DIR` or `~/.wc3-license`.
-- **To check:** `agent-env wc3 license show` says where they come from, never what they contain.
+- **Never in an image.** The env declares them as its license: two `file` parts of one license, `warcraft3`. Each
+  task's `add_license` step (from [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env#licenses-urngamelicensev1))
+  gives them to the env before the game is created.
+- **From agent-env's secret store,** as the secrets `WC3_ROC_W3K` and `WC3_TFT_W3K`, each file in base64.
+  - `license import` copies them there from a folder (by default `license_dir` in `[plugins.agentenv-wc3]`, else
+    `$WC3_LICENSE_DIR`, else `~/.wc3-license`), into the store's local secrets file.
+  - For a cloud store (AWS or GCP), store them there yourself.
+  - With agent-env's default store, environment variables work too: `export WC3_ROC_W3K=$(base64 < roc.w3k)`.
+- **Never from a folder at run time.** A task can't name files on the machine that runs it, so it can't send them
+  anywhere.
+- **A game that lacks them doesn't start.** Its lobby refuses to close with `not_licensed`, naming each missing file
+  and how to store it. The fake game needs none.
+- **To check:** `agent-env wc3 license show` says whether they're in the secret store, never what they contain.
 
 **4. Play.**
 
@@ -230,7 +237,7 @@ is built from a few steps:
 |---|---|
 | `deploy_env` | Starts the env registered as `wc3` |
 | `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. An agent that plays deploys with `"env_ids": []`: its slot gives it its address |
-| `wc3_license` | Sends your activation files to the env, which the game needs when it is created |
+| `add_license` | From agentenv-game-env: gives the env your activation files from agent-env's secret store, which the game needs when it is created |
 | `create_match` | From [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env): opens the match's lobby with its settings (map, seed, time limit, clock) |
 | `add_player_slot` | From agentenv-game-env, one per player: an agent, which then plays at `<env>/players/<name>/mcp`, or the game's AI, with its race, team, AI level and label |
 | `start_match` | From agentenv-game-env: closes the lobby, which creates the game |
@@ -246,7 +253,7 @@ A game runs as this DAG:
 ```
 deploy ─┬─► create_match ─┬─► add_player_slot (the AI) ──────────────────┐
         │                 └─► add_player_slot (an agent) ◄─ deploy_agent ┤
-        ├─► wc3_license ─────────────────────────────────────────────────┴─► start_match ─► stage ─► play (per agent)
+        ├─► add_license ─────────────────────────────────────────────────┴─► start_match ─► stage ─► play (per agent)
         │                                                                     ─► rts_finish ─► rts_grade ─► replay, recording
         └─► rts_broadcast (optional: holds the start until it is live, ends after GAME OVER)
 ```
@@ -275,7 +282,8 @@ an example; the bundled agent-against-agent task is `duel-quick`:
    "depends_on": ["deploy"]},
   {"id": "agent-b", "type": "deploy_agent", "agent_name": "bot", "a2a_agent_id": "wc3-macro-micro", "env_ids": [],
    "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}, "depends_on": ["deploy"]},
-  {"id": "license", "type": "wc3_license", "env_id": "wc3", "depends_on": ["deploy"]},
+  {"id": "license", "type": "add_license", "env_id": "wc3", "depends_on": ["deploy"],
+   "files": {"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}},
   {"id": "match", "type": "create_match", "env_id": "wc3", "depends_on": ["deploy"],
    "additional_settings": {"map": "(2)EchoIsles.w3x", "seed": 7, "time_limit_seconds": 900}},
   {"id": "slot-a", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "sonnet"},
@@ -365,13 +373,10 @@ expansions, and settles a game at the time limit on score:
 A setting the env doesn't take is refused as the lobby opens. A run can override any of them through agent-env's
 per-run step overrides (`{"additional_settings": {"seed": 7}}`).
 
-**`wc3_license`:**
-- **`license_secrets`:** the secret-store names of the activation files. Default
-  `{"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}`.
-- **`license_dir`:** the folder to fall back on. Default: `license_dir` in `[plugins.agentenv-wc3]`, else
-  `$WC3_LICENSE_DIR`, else `~/.wc3-license`.
-
-Without the files, the fake game plays and the real one refuses to start.
+**`add_license`** (agentenv-game-env): `"files": {"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}` maps each
+activation file to the secret that holds it. It asks the env what it lacks, and reads no secret when it lacks nothing:
+on the fake game, or with the files mounted at `WC3_LICENSE_DIR`. Without the files, the real game's lobby doesn't
+close.
 
 **A slot** (`add_player_slot`): `occupant` is `{"kind": "agent", "name": <a deploy_agent step's agent_name>}` or
 `{"kind": "ai"}`. `slot` is optional (the next free one). Its `additional_settings` are:
@@ -658,7 +663,7 @@ registers with it. It sees and orders only its own side, unless its slot is `omn
 | AgentEnv piece | Here |
 |---|---|
 | Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level); six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:wc3:license/v1`, `urn:wc3:stage/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:finish/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
-| Task steps | `wc3_license` (sends the activation files) and `save_wc3_replay`, in `steps.py`; `create_match`, `add_player_slot` and `start_match`, from agentenv-game-env; `rts_finish`, `rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
+| Task steps | `save_wc3_replay`, in `steps.py`; `add_license`, `create_match`, `add_player_slot` and `start_match`, from agentenv-game-env; `rts_finish`, `rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
 | Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
 | CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `license` (`import`, `show`), `serve`, `watch`, `stream`, `recordings`, `drills import` |

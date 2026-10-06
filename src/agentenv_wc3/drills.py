@@ -8,6 +8,8 @@ import json
 import math
 from pathlib import Path
 
+from .license import LICENSE_SECRETS
+
 DEFINITIONS = Path("wc3agent/src/wc3agent/scenarios/definitions")   # in a wc3env checkout
 TASKS = Path(__file__).with_name("bundles") / "wc3" / "tasks"
 MAP = "(2)EchoIsles.w3x"   # wc3agent's MeleeConfig default, which its scenarios run on
@@ -99,7 +101,8 @@ def convert(name: str, definition: dict) -> list[dict]:
                       "env_vars": {"SCRIPT": opponent,
                                    "SCRIPT_AFTER_SECONDS": str(definition.get("opponent_after_seconds", 0)),
                                    "SCRIPT_EVERY_SECONDS": "5"}, "depends_on": ["deploy"]})
-    steps.append({"id": "license", "type": "wc3_license", "env_id": "wc3", "depends_on": ["deploy"]})
+    steps.append({"id": "license", "type": "add_license", "env_id": "wc3", "files": LICENSE_SECRETS,
+                  "depends_on": ["deploy"]})
     steps.append({"id": "match", "type": "create_match", "env_id": "wc3",
                   "additional_settings": {"map": MAP, "seed": 1, "time_limit_seconds": seconds + warmup,
                                           "mode": "stepping"}, "depends_on": ["deploy"]})

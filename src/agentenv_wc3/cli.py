@@ -27,7 +27,7 @@ from agent_env.config import get_config
 
 from agentenv_rts import broadcast
 
-from . import drills, steps, sweep
+from . import drills, license, sweep
 
 ENVIRONMENT_NAME = "wc3"
 BASE_IMAGE = "wc3-worker:local"
@@ -160,18 +160,20 @@ def check(base: str, license_dir: Path | None):
 
 
 def _license_source(license_dir: Path | None = None) -> tuple[str, str | None]:
-    """Where wc3_license would get the activation files here, and what is wrong if it can't (no contents shown)."""
+    """Whether the tasks' add_license steps find the activation files in agent-env's secret store here, and what to
+    do if not (no contents shown)."""
+    where = "agent-env's secret store (" + ", ".join(license.LICENSE_SECRETS.values()) + ")"
     try:
-        if steps.license_from_secrets(steps.LICENSE_SECRETS):
-            return "agent-env's secret store (" + ", ".join(steps.LICENSE_SECRETS.values()) + ")", None
+        if license.license_from_secrets(license.LICENSE_SECRETS):
+            return where, None
     except RuntimeError as e:
-        return "agent-env's secret store", str(e)
-    directory = steps.license_dir(str(license_dir) if license_dir else None)
-    missing = [n for n in steps.LICENSE_FILES if not (directory / n).is_file()]
-    if missing:
-        return str(directory), (f"no {', '.join(missing)} in agent-env's secret store or {directory}: copy them from "
-                                "your Warcraft III Legacy installation, then agent-env wc3 license import DIR")
-    return str(directory), None
+        return where, str(e)
+    directory = license.license_dir(str(license_dir) if license_dir else None)
+    found = license.read_license(directory) is not None
+    return where, (f"no activation files in {where}: "
+                   + (f"agent-env wc3 license import {directory} stores the ones there" if found else
+                      "copy roc.w3k and tft.w3k from your Warcraft III Legacy installation into a folder, then "
+                      "agent-env wc3 license import DIR"))
 
 
 def _local_secrets_file() -> Path | None:
@@ -185,9 +187,10 @@ def _local_secrets_file() -> Path | None:
 
 @wc3.group("license")
 def license_group():
-    """Your activation files (roc.w3k, tft.w3k). wc3_license sends them to the env before a game starts: from
-    agent-env's secret store (WC3_ROC_W3K and WC3_TFT_W3K, each file in base64), so a run on any machine finds
-    them, else from a folder on this machine ([plugins.agentenv-wc3] license_dir, $WC3_LICENSE_DIR, ~/.wc3-license)."""
+    """Your activation files (roc.w3k, tft.w3k). A task's add_license step gives them to the env from agent-env's
+    secret store, where they are WC3_ROC_W3K and WC3_TFT_W3K (each file in base64), so a run on any machine finds
+    them. `import` puts them there from a folder ([plugins.agentenv-wc3] license_dir, $WC3_LICENSE_DIR,
+    ~/.wc3-license)."""
 
 
 @license_group.command("import")
@@ -198,8 +201,8 @@ def license_group():
 def import_license(directory: Path | None, secrets_file: Path | None):
     """Store the activation files in DIRECTORY (default: the license folder) in agent-env's local secret store, as
     WC3_ROC_W3K and WC3_TFT_W3K. For a cloud secret store, store the base64 of each file under those names."""
-    directory = directory or steps.license_dir()
-    files = steps.read_license(directory)
+    directory = directory or license.license_dir()
+    files = license.read_license(directory)
     if files is None:
         raise click.ClickException(f"no roc.w3k and tft.w3k in {directory}")
     configured = _local_secrets_file()
@@ -212,7 +215,7 @@ def import_license(directory: Path | None, secrets_file: Path | None):
     doc = (yaml.safe_load(target.read_text()) if target.is_file() else None) or {}
     if not isinstance(doc, dict):
         raise click.ClickException(f"{target} is not a flat mapping of secret names to values")
-    doc.update({steps.LICENSE_SECRETS[name]: value for name, value in files.items()})
+    doc.update({license.LICENSE_SECRETS[name]: value for name, value in files.items()})
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(yaml.safe_dump(doc, sort_keys=False, width=float("inf")))
     target.chmod(0o600)
@@ -222,7 +225,8 @@ def import_license(directory: Path | None, secrets_file: Path | None):
 
 @license_group.command("show")
 def show_license():
-    """Where wc3_license gets the activation files here (their contents are never shown)."""
+    """Whether add_license finds the activation files in agent-env's secret store here (their contents are never
+    shown)."""
     where, problem = _license_source()
     click.echo(f"The activation files come from {where}" if problem is None else problem)
     if problem is not None:

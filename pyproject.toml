@@ -21,7 +21,7 @@ classifiers = [
 dependencies = [
     "agentenv-framework>=0.9.1260",
     "agentenv-framework-protocol>=0.1.275,<0.2",
-    "agentenv-game-env @ https://github.com/earakely-scale/agentenv-game-env/archive/47f2e3e3730f3daff43a765922bd82ea70288bc8.tar.gz",
+    "agentenv-game-env @ https://github.com/earakely-scale/agentenv-game-env/archive/420ac47115abdf31057cb50f81854f611bd0f1c3.tar.gz",
     "httpx>=0.27,<1",
     "mcp>=1.25,<2",
     "pydantic>=2,<3",
@@ -42,7 +42,6 @@ wc3 = "agentenv_wc3.bundles"
 wc3 = "agentenv_wc3.cli:wc3"
 
 [project.entry-points."agent_env.task_steps"]
-wc3_license = "agentenv_wc3.steps:WC3LicenseTaskStep"
 save_wc3_replay = "agentenv_wc3.steps:SaveWC3ReplayTaskStep"
 save_rts_recording = "agentenv_rts.steps:SaveRTSRecordingTaskStep"
 rts_finish = "agentenv_rts.steps:RTSFinishTaskStep"

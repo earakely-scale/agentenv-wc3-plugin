@@ -35,8 +35,12 @@
   },
   {
     "id": "license",
-    "type": "wc3_license",
+    "type": "add_license",
     "env_id": "wc3",
+    "files": {
+      "roc.w3k": "WC3_ROC_W3K",
+      "tft.w3k": "WC3_TFT_W3K"
+    },
     "depends_on": [
       "deploy"
     ]

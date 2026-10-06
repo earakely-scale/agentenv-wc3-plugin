@@ -13,7 +13,7 @@ from agentenv_wc3.cli import wc3
 
 TASKS = Path(__file__).resolve().parents[1] / "src/agentenv_wc3/bundles/wc3/tasks"
 DRILLS = sorted(p.stem for p in TASKS.glob("drill-*.json"))
-STEP_TYPES = {"deploy_env", "deploy_agent", "wc3_license", "create_match", "add_player_slot", "start_match",
+STEP_TYPES = {"deploy_env", "deploy_agent", "add_license", "create_match", "add_player_slot", "start_match",
               "apply_server_config", "prompt_agent", "rts_finish", "rts_grade", "save_wc3_replay", "save_rts_recording"}
 
 
@@ -39,7 +39,8 @@ def test_fight_even_is_the_design_docs_drill():
         {"id": "opponent", "type": "deploy_agent", "agent_name": "opponent", "a2a_agent_id": "wc3-scripted",
          "env_ids": [], "env_vars": {"SCRIPT": "attack", "SCRIPT_AFTER_SECONDS": "0", "SCRIPT_EVERY_SECONDS": "5"},
          "depends_on": ["deploy"]},
-        {"id": "license", "type": "wc3_license", "env_id": "wc3", "depends_on": ["deploy"]},
+        {"id": "license", "type": "add_license", "env_id": "wc3",
+         "files": {"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}, "depends_on": ["deploy"]},
         {"id": "match", "type": "create_match", "env_id": "wc3", "additional_settings": {
             "map": "(2)EchoIsles.w3x", "seed": 1, "time_limit_seconds": 150, "mode": "stepping"},
          "depends_on": ["deploy"]},

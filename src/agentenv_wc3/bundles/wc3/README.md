@@ -2,10 +2,9 @@ Warcraft III (wc3env): agents play melee games on Echo Isles against the game's 
 drills, through the env's MCP tools or raw wc3env orders. Each game is graded per seat, and its replay and recording
 are saved.
 
-Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once), sends your activation files
-(`roc.w3k`, `tft.w3k`) with the plugin's `wc3_license` step, and opens its match with agentenv-game-env's
-`create_match`. The files come from agent-env's secret store, else from your license directory: `license_dir` in `[plugins.agentenv-wc3]` of `.agentenv/config.toml`, `$WC3_LICENSE_DIR`, or
-`~/.wc3-license`.
+Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once), gives it your activation files
+(`roc.w3k`, `tft.w3k`) with agentenv-game-env's `add_license` step from agent-env's secret store (where
+`agent-env wc3 license import` puts them), and opens its match with `create_match`.
 
 - `smoke` needs no model and no agent: the harness lets a 2-minute game run with no orders (`urn:wc3:idle/v1`)
   and checks that it launched, ran to its time limit and kept running, then saves the replay. It checks the image,
