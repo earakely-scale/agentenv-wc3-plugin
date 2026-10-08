@@ -1,6 +1,6 @@
 """An A2A agent that plays Warcraft III with wc3env's own agent, `wc3agent`: a macro model (System 2) plans the
 economy, workers and army objectives every few game seconds, and a micro model (System 1) controls the army unit by
-unit, at most once a second per group. It plays the game the task's start_match created in the env, through the
+unit, at most once a second per group. It plays the game the task's close_lobby created in the env, through the
 env's urn:rts session (remote.py), stepped or in realtime as the match says; at its slot's address
 (`<env>/players/<agent>/mcp`, which add_player_slot gives it), it plays that slot.
 

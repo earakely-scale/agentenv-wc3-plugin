@@ -9,7 +9,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agentenv_game import Occupant, SlotRequest  # noqa: E402
+from agentenv_game import SlotRequest  # noqa: E402
 
 from agentenv_wc3.server import WORKER, WC3Env  # noqa: E402
 
@@ -21,23 +21,22 @@ STEPS = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").r
 ONE_AGENT = [{"agent": "wc3", "race": "human", "team": 1}, {"computer": "normal", "race": "orc", "team": 2}]
 
 
-def slot_settings(seat: dict) -> tuple[dict, dict]:
-    """A seat, {agent | computer, race, team, label, ai_assist, omniscient}, as a lobby slot's occupant and
-    settings."""
+def slot_request(index: int, seat: dict) -> SlotRequest:
+    """A seat, {agent | computer, race, team, label, ai_assist, omniscient}, as the fill of player slot `index`."""
     given = {"faction": seat.get("race", "random"),
              **{k: seat[k] for k in ("team", "label", "ai_assist", "omniscient") if k in seat}}
     if "computer" in seat:
-        return {"kind": "ai"}, {**given, "ai_level": seat["computer"]}
-    return {"kind": "agent", "name": seat["agent"]}, given
+        return SlotRequest(player_id=str(index), player_kind="ai",
+                           game_settings={**given, "ai_level": seat["computer"]})
+    return SlotRequest(player_id=str(index), player_kind="agent", player_name=seat["agent"], game_settings=given)
 
 
-async def new_game(env, seats: list[dict] | None = None, **settings) -> dict:
-    """A game through the env's lobby, in process: opened with `settings`, a slot per seat (one agent against the
-    normal AI by default), closed."""
-    env.new_lobby(settings)
+async def new_game(env, seats: list[dict] | None = None, **settings):
+    """A game through the env's lobby, in process: opened with `settings` (a 2-minute game unless they say), a player
+    slot per seat (one agent against the normal AI by default), closed."""
+    env.new_lobby({"time_limit_seconds": 120, **settings})
     for index, seat in enumerate(seats or ONE_AGENT):
-        occupant, given = slot_settings(seat)
-        env.fill_slot(SlotRequest(occupant=Occupant(**occupant), slot=index, additional_settings=given))
+        env.fill_slot(slot_request(index, seat))
     return await env.close_lobby()
 
 
@@ -104,7 +103,7 @@ def local_stores(monkeypatch, tmp_path):
 
 @pytest.fixture
 def license_dir(tmp_path, monkeypatch):
-    """Stand-in activation files, where the wc3_match step looks for them."""
+    """Stand-in activation files, where the env looks for them (WC3_LICENSE_DIR)."""
     directory = tmp_path / "wc3-license"
     directory.mkdir()
     (directory / "roc.w3k").write_bytes(b"roc key")

@@ -96,14 +96,16 @@ class Broadcast:
                 env["CAST_BASE_URL"] = from_container(env["CAST_BASE_URL"])
         return env
 
-    def command(self, url: str, image: str, record_dir: Path | None, name: str | None = None) -> list[str]:
-        """The `docker run` of the streamer for the live view at `url`; the environment's names are passed through,
-        so their values (the keys) stay off the command line."""
+    def command(self, url: str, image: str, record_dir: Path | None, name: str | None = None,
+                detach: bool = False) -> list[str]:
+        """The `docker run` of the streamer for the live view at `url`, detached or not; the environment's names are
+        passed through, so their values (the keys) stay off the command line."""
         network, page = ([], from_container(url)) if sys.platform == "darwin" else (["--network", "host"], url)
         mount = ([] if record_dir is None else
                  ["-v", f"{record_dir.resolve()}:/rec", "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"])
         names = ["STREAM_URL", *(["CAST_BASE_URL", "CAST_API_KEY"] if self.cast else [])]
-        return ["docker", "run", "--rm", *(["--name", name] if name else []), "--shm-size", "1g", *network, *mount,
+        return ["docker", "run", *(["-d"] if detach else []), "--rm", *(["--name", name] if name else []),
+                "--shm-size", "1g", *network, *mount,
                 *[a for n in names for a in ("-e", n)], image, "--url", page, "--size", self.size,
                 "--fps", str(self.fps), "--bitrate", self.bitrate, "--linger", str(self.linger),
                 *(["--cast-config", json.dumps({"model": self.caster_model})] if self.cast else []),

@@ -18,12 +18,13 @@ import pytest
 from agent_env.artifact import FileArtifact
 from agent_env.config import ConfigError
 from agent_env.task_step.context import TaskStepContext
+from agentenv_game.steps import CancelMatchTaskStep
 from click.testing import CliRunner
+from conftest import new_game
 from test_steps import deployed, run_context
 
 from agentenv_rts import broadcast
-from agentenv_rts.session import RemoteSession
-from agentenv_rts.steps import RTSBroadcastTaskStep, RTSFinishTaskStep
+from agentenv_rts.steps import RTSBroadcastTaskStep, SaveRTSBroadcastTaskStep
 from agentenv_rts.streamer import stream
 from agentenv_wc3 import cli
 from agentenv_wc3.server import WC3Env
@@ -351,9 +352,30 @@ args = sys.argv[1:]
 here = pathlib.Path(os.environ["FAKE_DOCKER_DIR"])
 with (here / "calls.jsonl").open("a") as f:
     f.write(json.dumps(args) + "\\n")
+
+
+def alive(name):
+    path = here / (name + ".pid")
+    try:
+        os.kill(int(path.read_text()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 if args[0] == "stop":
-    os.kill(int((here / (args[-1] + ".pid")).read_text()), signal.SIGTERM)
+    if alive(args[-1]):
+        os.kill(int((here / (args[-1] + ".pid")).read_text()), signal.SIGTERM)
+    while alive(args[-1]):
+        time.sleep(0.05)
+elif args[0] == "inspect":
+    if not alive(args[-1]):
+        sys.exit(1)   # gone: --rm removed it
+    print("true")
 elif args[0] == "run":
+    if "-d" in args and os.fork():
+        time.sleep(0.3)   # detached: docker returns once the container runs
+        sys.exit(0)
     (here / (args[args.index("--name") + 1] + ".pid")).write_text(str(os.getpid()))
     rec = next(a.split(":")[0] for a in args if a.endswith(":/rec"))
 
@@ -362,7 +384,7 @@ elif args[0] == "run":
     def finish(*_):
         pathlib.Path(rec, "stream-test.mp4").write_bytes(b"\\0\\0\\0\\x18ftypisom" + b"x" * 100)
         pathlib.Path(rec, "stream-test.mkv").unlink()
-        sys.exit(0)
+        os._exit(0)
 
     signal.signal(signal.SIGTERM, finish)
     if os.environ.get("FAKE_STREAM") == "end":
@@ -378,70 +400,86 @@ elif args[0] == "run":
 
 @pytest.fixture
 def fake_docker(tmp_path, monkeypatch):
-    """A `docker` on PATH that records its calls; `run` records a broadcast and exits after a second (FAKE_STREAM=end)
-    or streams until `docker stop` (SIGTERM), as the streamer does."""
+    """A `docker` on PATH that records its calls; a detached `run` records a broadcast and exits after a second
+    (FAKE_STREAM=end), dies (die), or streams until `docker stop` (SIGTERM), as the streamer does; `inspect` says
+    whether it still runs."""
     directory = tmp_path / "docker-bin"
     directory.mkdir()
     (directory / "docker").write_text(FAKE_DOCKER.format(python=sys.executable))
     (directory / "docker").chmod(0o755)
     monkeypatch.setenv("PATH", f"{directory}:{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_DOCKER_DIR", str(directory))
-    monkeypatch.setattr(RTSBroadcastTaskStep, "POLL_SECONDS", 0.2)
-    return lambda: [json.loads(line) for line in (directory / "calls.jsonl").read_text().splitlines()]
+    monkeypatch.setattr(SaveRTSBroadcastTaskStep, "POLL_SECONDS", 0.2)
+    calls = directory / "calls.jsonl"
+    return lambda: [json.loads(line) for line in calls.read_text().splitlines()] if calls.is_file() else []
 
 
-async def broadcast_of(record, **options) -> TaskStepContext:
+async def on_air(record, **options) -> TaskStepContext:
+    """A run's rts_broadcast step, once its match exists."""
     step = RTSBroadcastTaskStep(id="broadcast", version=None, env_id="wc3", cast=False, **options)
     return await step.execute(run_context(record))
 
 
+async def saved(context: TaskStepContext, **options) -> TaskStepContext:
+    return await SaveRTSBroadcastTaskStep(id="save", version=None, env_id="wc3", **options).execute(context)
+
+
 @pytest.mark.anyio
-async def test_a_broadcast_step_records_the_game_and_keeps_its_keys_off_the_command_line(
+async def test_a_broadcast_is_live_before_the_match_starts_and_its_video_is_kept_once_it_ends(
         env_vars, local_stores, fake_docker, monkeypatch):
     monkeypatch.setenv("FAKE_STREAM", "end")
-    async with deployed(WC3Env()) as record:
-        await asyncio.to_thread(RemoteSession(record.mcp_url.removesuffix("/mcp")).step, {0: []})
-        context = await broadcast_of(record)
-    [saved] = context.metadata["broadcasts"]["broadcast"]
-    assert saved["name"] == "stream-test.mp4" and FileArtifact.get(saved["artifact_id"], 1).load()[4:8] == b"ftyp"
+    env = WC3Env()
+    async with deployed(env) as record:
+        await new_game(env)
+        context = await on_air(record)
+        started = context.metadata["broadcasts"]["broadcast"]
+        assert started["container"].startswith("rts-broadcast-") and Path(started["recording"]).is_dir()
+        assert env.match.status == "not_started"   # the step returned, live, before anyone moved
+        context = await saved(context)
+    [video] = context.metadata["broadcasts"]["broadcast"]["videos"]
+    assert video["name"] == "stream-test.mp4" and FileArtifact.get(video["artifact_id"], 1).load()[4:8] == b"ftyp"
+    assert not Path(started["recording"]).exists()
     run = next(c for c in fake_docker() if c[0] == "run")
     live = record.environment_url + "/live"
+    assert run[:2] == ["run", "-d"] and run[-2:] == ["--record", "/rec"]
     assert run[run.index("--url") + 1] == (broadcast.from_container(live) if sys.platform == "darwin" else live)
-    assert run[-2:] == ["--record", "/rec"]
     assert "STREAM_URL" in run and "--cast-config" not in run
 
 
 @pytest.mark.anyio
-async def test_a_broadcast_ends_when_the_game_stands_still_or_the_step_is_cancelled(
+async def test_a_broadcast_ends_when_the_match_stands_still_or_the_save_is_cancelled(
         env_vars, local_stores, fake_docker, monkeypatch):
     monkeypatch.setenv("FAKE_STREAM", "hang")
-    async with deployed(WC3Env()) as record:
-        await asyncio.to_thread(RemoteSession(record.mcp_url.removesuffix("/mcp")).step, {0: []})
-        context = await asyncio.wait_for(broadcast_of(record, stall_seconds=1), 20)   # nobody plays: it stalls
-        assert [c[0] for c in fake_docker()][-2:] == ["run", "stop"]
-        assert context.metadata["broadcasts"]["broadcast"][0]["name"] == "stream-test.mp4"
-        running = asyncio.create_task(broadcast_of(record))
-        await asyncio.sleep(2)
+    env = WC3Env()
+    async with deployed(env) as record:
+        await new_game(env)
+        context = await asyncio.wait_for(saved(await on_air(record), stall_seconds=1), 20)   # nobody plays: it stalls
+        assert [c[0] for c in fake_docker() if c[0] != "inspect"][-2:] == ["run", "stop"]
+        assert context.metadata["broadcasts"]["broadcast"]["videos"][0]["name"] == "stream-test.mp4"
+        running = asyncio.create_task(saved(await on_air(record)))
+        await asyncio.sleep(1)
         running.cancel()
         with pytest.raises(asyncio.CancelledError):
             await running
-        assert [c[0] for c in fake_docker()][-2:] == ["run", "stop"]   # the container did not outlive the step
+        assert [c[0] for c in fake_docker() if c[0] != "inspect"][-2:] == ["run", "stop"]   # it did not outlive the run
 
 
 @pytest.mark.anyio
-async def test_a_broadcast_of_a_finished_game_or_without_its_key_starts_nothing(env_vars, local_stores, fake_docker,
-                                                                             monkeypatch):
+async def test_a_broadcast_without_its_key_or_its_match_or_of_a_match_over_starts_nothing(
+        env_vars, local_stores, fake_docker, monkeypatch):
     monkeypatch.delenv("TWITCH_STREAM_KEY", raising=False)
-    async with deployed(WC3Env()) as record:
-        session = RemoteSession(record.mcp_url.removesuffix("/mcp"))
-        await asyncio.to_thread(session.step, {0: []})
-        noted = await broadcast_of(record, to=["twitch"])   # the run goes on, the error noted
+    env = WC3Env()
+    async with deployed(env) as record:
+        noted = await on_air(record)   # the run goes on, the error noted
+        assert "has no match: put the step after close_lobby" in noted.metadata["broadcast_errors"]["broadcast"]
+        await new_game(env)
+        noted = await on_air(record, to=["twitch"])
         assert "TWITCH_STREAM_KEY" in noted.metadata["broadcast_errors"]["broadcast"]
         with pytest.raises(broadcast.BroadcastError, match="TWITCH_STREAM_KEY"):
-            await broadcast_of(record, to=["twitch"], fail_task_on_error=True)
-        await RTSFinishTaskStep(id="finish", version=None, env_id="wc3", rule="forfeit").execute(run_context(record))
-        context = await broadcast_of(record)
-    assert context.metadata["broadcasts"]["broadcast"] == []
+            await on_air(record, to=["twitch"], fail_task_on_error=True)
+        await CancelMatchTaskStep(id="cancel", version=None, env_id="wc3").execute(run_context(record))
+        context = await saved(await on_air(record))
+    assert context.metadata["broadcasts"]["broadcast"]["videos"] == [] and "broadcast_errors" not in context.metadata
     assert not any(c[0] == "run" for c in fake_docker())
     with pytest.raises(ValueError, match="goes nowhere"):
         RTSBroadcastTaskStep(id="b", version=None, env_id="wc3", record=False)
@@ -450,8 +488,9 @@ async def test_a_broadcast_of_a_finished_game_or_without_its_key_starts_nothing(
 @pytest.mark.anyio
 async def test_a_streamer_that_dies_leaves_what_it_recorded(env_vars, local_stores, fake_docker, monkeypatch):
     monkeypatch.setenv("FAKE_STREAM", "die")
-    async with deployed(WC3Env()) as record:
-        await asyncio.to_thread(RemoteSession(record.mcp_url.removesuffix("/mcp")).step, {0: []})
-        context = await broadcast_of(record)
-    [saved] = context.metadata["broadcasts"]["broadcast"]
-    assert saved["name"] == "stream-test.mkv" and "broadcast_errors" not in context.metadata
+    env = WC3Env()
+    async with deployed(env) as record:
+        await new_game(env)
+        context = await saved(await on_air(record))
+    [video] = context.metadata["broadcasts"]["broadcast"]["videos"]
+    assert video["name"] == "stream-test.mkv" and "broadcast_errors" not in context.metadata

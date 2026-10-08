@@ -38,10 +38,10 @@ def test_a_spec_becomes_one_task_per_combination_and_an_eval_over_them(generated
     for s in steps:
         registry[s["type"]].from_dict(s)
     by_id = {s["id"]: s for s in steps}
-    settings = by_id["match"]["additional_settings"]
+    settings = by_id["match"]["game_settings"]
     assert (settings["map"], settings["seed"], settings["time_limit_seconds"]) == ("(2)TerenasStand.w3x", 2, 300)
-    assert by_id["slot-wc3"]["additional_settings"] == {"faction": "orc", "team": 1}
-    assert by_id["slot-ai"]["additional_settings"] == {"faction": "orc", "team": 2, "ai_level": "easy"}
+    assert by_id["slot-wc3"]["game_settings"] == {"faction": "orc", "team": 1}
+    assert by_id["slot-ai"]["game_settings"] == {"faction": "orc", "team": 2, "ai_level": "easy"}
     play = by_id["play"]
     assert play["model"] == "openai/gpt-5.4-mini" and play["prompt_id"] == "first-eval-gpt-5.4-mini-terenasstand-s2"
     assert "as Orc on Terenas Stand, a 2-player map" in play["prompt"] and '{"type_id": "Peon"}' in play["prompt"]
@@ -52,19 +52,19 @@ def test_a_spec_becomes_one_task_per_combination_and_an_eval_over_them(generated
 
 
 def test_a_template_of_agents_gets_the_race_on_the_players_slot_and_the_opponent_on_the_ais(tmp_path):
-    template = [{"id": "match", "type": "create_match"},
-                {"id": "slot-wc3", "type": "add_player_slot", "occupant": {"kind": "agent", "name": "wc3"},
-                 "additional_settings": {"faction": "human", "team": 1}},
-                {"id": "slot-ai", "type": "add_player_slot", "occupant": {"kind": "ai"},
-                 "additional_settings": {"faction": "orc", "team": 2}},
+    template = [{"id": "match", "type": "open_lobby"},
+                {"id": "slot-wc3", "type": "add_player_slot", "player_kind": "agent", "player_name": "wc3",
+                 "game_settings": {"faction": "human", "team": 1}},
+                {"id": "slot-ai", "type": "add_player_slot", "player_kind": "ai",
+                 "game_settings": {"faction": "orc", "team": 2}},
                 {"id": "agent", "type": "deploy_agent", "agent_name": "wc3"},
                 {"id": "play", "type": "prompt_agent", "agent_name": "wc3", "prompt": "x"}]
     (tmp_path / "t.json").write_text(json.dumps(template))
     spec = sweep.Spec(name="s", template=str(tmp_path / "t.json"), models=["m"], races=["undead"],
                       opponents=[{"computer": "insane", "race": "night_elf"}], prompt=None)
     steps = sweep.task_of(spec, spec.steps(), spec.combinations()[0], "s")
-    assert steps[1]["additional_settings"] == {"faction": "undead", "team": 1}
-    assert steps[2]["additional_settings"] == {"faction": "night_elf", "team": 2, "ai_level": "insane"}
+    assert steps[1]["game_settings"] == {"faction": "undead", "team": 1}
+    assert steps[2]["game_settings"] == {"faction": "night_elf", "team": 2, "ai_level": "insane"}
     assert steps[4]["prompt"] == "x"
 
 

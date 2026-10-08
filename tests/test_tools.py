@@ -2,7 +2,7 @@
 
 
 import pytest
-from agentenv_game import LobbyError
+from agentenv_game import GameError, LobbyStatus
 from conftest import new_game
 
 from agentenv_wc3 import render
@@ -117,9 +117,9 @@ async def test_data_get_and_new_game(env):
     assert summary["opponent_structures"] == 1
     insane = [{"agent": "wc3", "race": "human"}, {"computer": "insane", "race": "orc"}]
     result = await new_game(env, insane, time_limit_seconds=600, seed=7)
-    assert result["state"] == "closed" and result["game"]["setup"]
+    assert result.status is LobbyStatus.CLOSED and env.setup
     assert env.scenario["seed"] == 7 and env.scenario["ai_difficulty"] == "insane" and env.stats["games"] == 2
-    with pytest.raises(LobbyError, match="ai_level must be one of easy, normal, insane, got 'godlike'"):
+    with pytest.raises(GameError, match="game_settings.ai_level: Input should be 'easy', 'normal' or 'insane'"):
         await new_game(env, [{"agent": "wc3"}, {"computer": "godlike"}])
 
 

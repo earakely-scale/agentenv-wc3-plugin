@@ -45,9 +45,9 @@
   },
   {
     "id": "match",
-    "type": "create_match",
+    "type": "open_lobby",
     "env_id": "wc3",
-    "additional_settings": {
+    "game_settings": {
       "map": "(2)EchoIsles.w3x",
       "seed": 3,
       "time_limit_seconds": 240,
@@ -64,12 +64,10 @@
     "id": "slot-red",
     "type": "add_player_slot",
     "env_id": "wc3",
-    "occupant": {
-      "kind": "agent",
-      "name": "red"
-    },
-    "slot": 0,
-    "additional_settings": {
+    "player_id": "0",
+    "player_kind": "agent",
+    "player_name": "red",
+    "game_settings": {
       "faction": "human",
       "label": "Red",
       "omniscient": true
@@ -83,12 +81,10 @@
     "id": "slot-blue",
     "type": "add_player_slot",
     "env_id": "wc3",
-    "occupant": {
-      "kind": "agent",
-      "name": "blue"
-    },
-    "slot": 1,
-    "additional_settings": {
+    "player_id": "1",
+    "player_kind": "agent",
+    "player_name": "blue",
+    "game_settings": {
       "faction": "orc",
       "label": "Blue",
       "omniscient": true
@@ -100,7 +96,7 @@
   },
   {
     "id": "start",
-    "type": "start_match",
+    "type": "close_lobby",
     "env_id": "wc3",
     "depends_on": [
       "slot-red",
@@ -150,9 +146,8 @@
     "cast": false,
     "title": "chaos-game-crash",
     "depends_on": [
-      "deploy"
-    ],
-    "stall_seconds": 90
+      "stage"
+    ]
   },
   {
     "id": "play-red",
@@ -162,7 +157,8 @@
     "prompt": "Play your seat with the script.",
     "timeout_seconds": 300,
     "depends_on": [
-      "stage"
+      "stage",
+      "broadcast"
     ]
   },
   {
@@ -173,16 +169,27 @@
     "prompt": "Play your seat with the script.",
     "timeout_seconds": 300,
     "depends_on": [
-      "stage"
+      "stage",
+      "broadcast"
     ]
   },
   {
     "id": "finish",
-    "type": "rts_finish",
+    "type": "finish_match",
     "env_id": "wc3",
     "depends_on": [
       "play-red",
       "play-blue"
+    ]
+  },
+  {
+    "id": "save-broadcast",
+    "type": "save_rts_broadcast",
+    "env_id": "wc3",
+    "broadcast": "broadcast",
+    "stall_seconds": 90,
+    "depends_on": [
+      "finish"
     ]
   },
   {

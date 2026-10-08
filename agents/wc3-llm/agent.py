@@ -7,7 +7,7 @@ times) if the game is not over then. A long game fits: once the tool results pas
 are trimmed, and the system prompt and the newest message are marked for prompt caching, so each turn pays for its
 history once (Anthropic models through LiteLLM; other providers ignore the marks). Spectators see its model as its
 name, what it writes between tool calls as its plan, and its running cost (urn:rts:note/v1). With
-WC3_MAX_COST_USD it stops playing once a game has cost that much (the task's rts_finish then plays the game out).
+WC3_MAX_COST_USD it stops playing once a game has cost that much (the task's finish_match then plays the game out).
 """
 
 from __future__ import annotations

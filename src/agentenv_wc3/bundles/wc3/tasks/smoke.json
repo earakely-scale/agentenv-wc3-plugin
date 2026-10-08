@@ -18,9 +18,9 @@
   },
   {
     "id": "match",
-    "type": "create_match",
+    "type": "open_lobby",
     "env_id": "wc3",
-    "additional_settings": {
+    "game_settings": {
       "map": "(2)EchoIsles.w3x",
       "seed": 1,
       "time_limit_seconds": 120
@@ -33,12 +33,10 @@
     "id": "slot-player",
     "type": "add_player_slot",
     "env_id": "wc3",
-    "occupant": {
-      "kind": "agent",
-      "name": "player"
-    },
-    "slot": 0,
-    "additional_settings": {
+    "player_id": "0",
+    "player_kind": "agent",
+    "player_name": "player",
+    "game_settings": {
       "faction": "human",
       "team": 1
     },
@@ -51,11 +49,9 @@
     "id": "slot-ai",
     "type": "add_player_slot",
     "env_id": "wc3",
-    "occupant": {
-      "kind": "ai"
-    },
-    "slot": 1,
-    "additional_settings": {
+    "player_id": "1",
+    "player_kind": "ai",
+    "game_settings": {
       "faction": "orc",
       "team": 2,
       "ai_level": "normal"
@@ -66,7 +62,7 @@
   },
   {
     "id": "start",
-    "type": "start_match",
+    "type": "close_lobby",
     "env_id": "wc3",
     "depends_on": [
       "slot-player",
@@ -75,19 +71,9 @@
     ]
   },
   {
-    "id": "idle",
-    "type": "apply_server_config",
+    "id": "finish",
+    "type": "finish_match",
     "env_id": "wc3",
-    "timeout_seconds": 600,
-    "directives": [
-      {
-        "service": "wc3",
-        "uri": "urn:wc3:idle/v1",
-        "args": {
-          "seconds": 120
-        }
-      }
-    ],
     "depends_on": [
       "deploy",
       "start"
@@ -100,7 +86,7 @@
     "rubric": "smoke",
     "verifier_id": "smoke",
     "depends_on": [
-      "idle"
+      "finish"
     ]
   },
   {

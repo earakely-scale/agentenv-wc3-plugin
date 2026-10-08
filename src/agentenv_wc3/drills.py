@@ -103,22 +103,21 @@ def convert(name: str, definition: dict) -> list[dict]:
                                    "SCRIPT_EVERY_SECONDS": "5"}, "depends_on": ["deploy"]})
     steps.append({"id": "license", "type": "add_license", "env_id": "wc3", "files": LICENSE_SECRETS,
                   "depends_on": ["deploy"]})
-    steps.append({"id": "match", "type": "create_match", "env_id": "wc3",
-                  "additional_settings": {"map": MAP, "seed": 1, "time_limit_seconds": seconds + warmup,
-                                          "mode": "stepping"}, "depends_on": ["deploy"]})
-    steps.append({"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3",
-                  "occupant": {"kind": "agent", "name": "wc3"}, "slot": 0,
-                  "additional_settings": {"faction": RACES[race]}, "depends_on": ["match", "agent"]})
+    steps.append({"id": "match", "type": "open_lobby", "env_id": "wc3",
+                  "game_settings": {"map": MAP, "seed": 1, "time_limit_seconds": seconds + warmup,
+                                    "mode": "stepping"}, "depends_on": ["deploy"]})
+    steps.append({"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3", "player_id": "0",
+                  "player_kind": "agent", "player_name": "wc3", "game_settings": {"faction": RACES[race]},
+                  "depends_on": ["match", "agent"]})
     if scripted:
-        steps.append({"id": "slot-opponent", "type": "add_player_slot", "env_id": "wc3",
-                      "occupant": {"kind": "agent", "name": "opponent"}, "slot": 1,
-                      "additional_settings": {"faction": "orc", "omniscient": True},
-                      "depends_on": ["match", "opponent"]})
+        steps.append({"id": "slot-opponent", "type": "add_player_slot", "env_id": "wc3", "player_id": "1",
+                      "player_kind": "agent", "player_name": "opponent",
+                      "game_settings": {"faction": "orc", "omniscient": True}, "depends_on": ["match", "opponent"]})
     else:
-        steps.append({"id": "slot-ai", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "ai"},
-                      "slot": 1, "additional_settings": {"faction": "orc", "ai_level": AI_DIFFICULTY},
+        steps.append({"id": "slot-ai", "type": "add_player_slot", "env_id": "wc3", "player_id": "1",
+                      "player_kind": "ai", "game_settings": {"faction": "orc", "ai_level": AI_DIFFICULTY},
                       "depends_on": ["match"]})
-    steps.append({"id": "start", "type": "start_match", "env_id": "wc3",
+    steps.append({"id": "start", "type": "close_lobby", "env_id": "wc3",
                   "depends_on": ["slot-wc3", "slot-opponent" if scripted else "slot-ai", "license"]})
     start = "start"
     if ops or warmup:
@@ -134,7 +133,7 @@ def convert(name: str, definition: dict) -> list[dict]:
                       "prompt_id": f"{task}-opponent", "prompt": "Play your seat with the script.",
                       "timeout_seconds": timeout, "depends_on": [start]})
     return [*steps,
-            {"id": "finish", "type": "rts_finish", "env_id": "wc3",
+            {"id": "finish", "type": "finish_match", "env_id": "wc3",
              "depends_on": ["play", "play-opponent"] if scripted else ["play"]},
             {"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks",
              "checks": checks(definition), "verifier_id": "drill", "depends_on": ["finish"]},

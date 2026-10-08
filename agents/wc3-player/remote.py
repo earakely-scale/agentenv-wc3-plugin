@@ -2,7 +2,7 @@
 runner uses it (reset, step, observations, debug, save_replay, config, close), over the env's urn:rts session
 (agentenv_rts.session), and its micro transport (Jev's `timed_call`) answered by any chat model.
 
-The env already holds the game the task's start_match created: `reset` only observes it, and the replay is the task's
+The env already holds the game the task's close_lobby created: `reset` only observes it, and the replay is the task's
 to save (save_wc3_replay), so `save_replay` declines. wc3agent plays slot 0; at a seat (the env's replies name its
 slot, "you") the seat's slot and slot 0 trade numbers both ways, so slot 0 is always the seat's.
 """

@@ -47,9 +47,9 @@
   },
   {
     "id": "match",
-    "type": "create_match",
+    "type": "open_lobby",
     "env_id": "wc3",
-    "additional_settings": {
+    "game_settings": {
       "map": "(2)EchoIsles.w3x",
       "seed": 1,
       "time_limit_seconds": 150,
@@ -63,12 +63,10 @@
     "id": "slot-wc3",
     "type": "add_player_slot",
     "env_id": "wc3",
-    "occupant": {
-      "kind": "agent",
-      "name": "wc3"
-    },
-    "slot": 0,
-    "additional_settings": {
+    "player_id": "0",
+    "player_kind": "agent",
+    "player_name": "wc3",
+    "game_settings": {
       "faction": "night_elf"
     },
     "depends_on": [
@@ -80,12 +78,10 @@
     "id": "slot-opponent",
     "type": "add_player_slot",
     "env_id": "wc3",
-    "occupant": {
-      "kind": "agent",
-      "name": "opponent"
-    },
-    "slot": 1,
-    "additional_settings": {
+    "player_id": "1",
+    "player_kind": "agent",
+    "player_name": "opponent",
+    "game_settings": {
       "faction": "orc",
       "omniscient": true
     },
@@ -96,7 +92,7 @@
   },
   {
     "id": "start",
-    "type": "start_match",
+    "type": "close_lobby",
     "env_id": "wc3",
     "depends_on": [
       "slot-wc3",
@@ -205,7 +201,7 @@
   },
   {
     "id": "finish",
-    "type": "rts_finish",
+    "type": "finish_match",
     "env_id": "wc3",
     "depends_on": [
       "play",

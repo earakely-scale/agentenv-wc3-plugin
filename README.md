@@ -166,17 +166,23 @@ address; forward it with `ssh -L 8080:127.0.0.1:<port> <host>` and open `http://
 A broadcast shows the game's picture with a score bug, the agents' plans, the feed and two AI casters, voiced and
 captioned. There are two ways to make one.
 
-**In the task: the `rts_broadcast` step.** It starts with the env, beside the agents and the match. It holds the
-game's start until the stream is live, so the broadcast has the game from its first move. It records the game (and
-streams it, with `to`), and stores the video as an artifact of the run:
+**In the task: the `rts_broadcast` and `save_rts_broadcast` steps.** `rts_broadcast` starts the broadcast once the
+lobby has closed, and returns when the stream is live. The agents' `prompt_agent` steps depend on it, so the match,
+which starts at their first moves, is on air from the start. `save_rts_broadcast`, after `finish_match`, waits for
+the broadcast to end and stores its video as an artifact of the run:
 
 ```json
 {"id": "broadcast", "type": "rts_broadcast", "env_id": "wc3", "to": ["twitch"], "title": "Sonnet vs the Orc AI",
- "depends_on": ["deploy"]}
+ "depends_on": ["start"]},
+{"id": "play", "type": "prompt_agent", "agent_name": "sonnet", "depends_on": ["start", "broadcast"], "...": "..."},
+{"id": "finish", "type": "finish_match", "env_id": "wc3", "depends_on": ["play"]},
+{"id": "save-broadcast", "type": "save_rts_broadcast", "env_id": "wc3", "broadcast": "broadcast",
+ "depends_on": ["finish"]}
 ```
 
-- **When it ends:** after GAME OVER. It also ends if the game clock stands still for `stall_seconds` (a run whose play
-  failed) or if the run is cancelled, so it never holds a run open.
+- **When it ends:** `linger_seconds` after GAME OVER. `save_rts_broadcast` ends it sooner if the match's clock stands
+  still for `stall_seconds` (a run whose play failed), or if the run is cancelled. A run that stops before
+  `save_rts_broadcast` leaves no stream up: the streamer ends itself a minute after the env is gone.
 - **If it fails,** the run goes on, and the error is noted in the run's `broadcast_errors`, unless the step sets
   `fail_task_on_error`. If the streamer dies mid-game, the video it had recorded so far is kept.
 - **An example:** `broadcast-smoke` records two scripted players, at no model cost.
@@ -195,7 +201,7 @@ To go out live, give a stream key: `to` in the step, or `--to twitch`, `--to x` 
 
 | Task | Who plays | Game | Measured on the real game |
 |---|---|---|---|
-| `smoke` | nobody: the harness lets the game run | 2 minutes | 40 s, $0 |
+| `smoke` | nobody: `finish_match` plays the game out | 2 minutes | 40 s, $0 |
 | `broadcast-smoke` | two `wc3-scripted` seats (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per seat | 2 min, $0; red 0.25, blue 0.43, the same both times it ran; a 1080p broadcast of 105 s |
 | `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k. In `first-eval`, 6 games: 0.44 ± 0.01, $0.11 a game |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
@@ -223,8 +229,7 @@ To go out live, give a stream key: `to` in the step, or `--to twitch`, `--to x` 
   - a win counts three times as much as not being defeated or as outscoring the opponent;
   - an undecided game at the time limit is a draw, so outscoring the opponent earns its part, but a win needs every
     enemy building destroyed;
-  - the grade is 0 if the game stopped working, if the agent gave no orders, or if the harness played part of the
-    game.
+  - the grade is 0 if the game stopped working, or if the agent gave no orders.
 
   `duel-quick` adds army, kills, buildings, tier, expansions and hero level (`dense`); drills use their own checks.
 
@@ -236,39 +241,46 @@ is built from a few steps:
 | Step | What it does |
 |---|---|
 | `deploy_env` | Starts the env registered as `wc3` |
-| `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. An agent that plays deploys with `"env_ids": []`: its slot gives it its address |
+| `deploy_agent` | Starts an agent: `wc3-llm`, `wc3-macro-micro`, `wc3-scripted` or any A2A agent that takes an MCP server. An agent that plays deploys with `"env_ids": []`: its player slot gives it its address |
 | `add_license` | From agentenv-game-env: gives the env your activation files from agent-env's secret store, which the game needs when it is created |
-| `create_match` | From [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env): opens the match's lobby with its settings (map, seed, time limit, clock) |
-| `add_player_slot` | From agentenv-game-env, one per player: an agent, which then plays at `<env>/players/<name>/mcp`, or the game's AI, with its race, team, AI level and label |
-| `start_match` | From agentenv-game-env: closes the lobby, which creates the game |
+| `open_lobby` | From [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env): opens the match's lobby with its settings (map, seed, time limit, clock) |
+| `add_player_slot` | From agentenv-game-env, one per player: an agent, which then plays at `<env>/players/<player_id>/mcp`, or the game's AI, with its race, team, AI level and label |
+| `close_lobby` | From agentenv-game-env: closes the lobby, which creates the game and its match |
 | `apply_server_config` with `urn:wc3:stage/v1` | Optional: stages the board before play (units, levels, items, resources, a paused AI) |
+| `rts_broadcast` | Optional, after `close_lobby`: starts the broadcast, with casters, and returns once it is live |
 | `prompt_agent` | One per agent: the prompt, and the model it plays on. It lasts the whole game |
-| `rts_broadcast` | Optional, from the env's deploy on: holds the game's start until it is live, then streams or records the game, with casters |
-| `rts_finish` | After every play step: settles a game its agents stopped before its end (`play_out`, `forfeit` or `as_is`) |
+| `finish_match` | From agentenv-game-env, after every play step: plays the match out to its end, with no more orders from its agents |
+| `save_rts_broadcast` | With `rts_broadcast`, after `finish_match`: keeps the broadcast's video |
 | `rts_grade` | Grades each agent seat with a rubric, weights, targets and checks |
 | `save_wc3_replay`, `save_rts_recording` | The `.w3g`, and the recording (map MP4, HTML replay, timeline JSON, the game's video, highlights) |
 
 A game runs as this DAG:
 
 ```
-deploy ─┬─► create_match ─┬─► add_player_slot (the AI) ──────────────────┐
-        │                 └─► add_player_slot (an agent) ◄─ deploy_agent ┤
-        ├─► add_license ─────────────────────────────────────────────────┴─► start_match ─► stage ─► play (per agent)
-        │                                                                     ─► rts_finish ─► rts_grade ─► replay, recording
-        └─► rts_broadcast (optional: holds the start until it is live, ends after GAME OVER)
+deploy ─┬─► open_lobby ─┬─► add_player_slot (the AI) ──────────────────┐
+        │               └─► add_player_slot (an agent) ◄─ deploy_agent ┤
+        └─► add_license ───────────────────────────────────────────────┴─► close_lobby ─► stage ─► play (per agent)
+                                                         ─► finish_match ─► rts_grade ─► replay, recording
+   optional: close_lobby (or stage) ─► rts_broadcast ─► play;  finish_match ─► save_rts_broadcast
 ```
 
 **Who plays** is the env's lobby (`urn:game:lobby/v1`, from
-[agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)). `create_match` opens it with the match's
-settings. Each `add_player_slot` fills one slot, either with an agent or with the game's AI. `start_match` closes the
-lobby, which creates the game from its slots.
+[agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)). `open_lobby` opens it with the match's
+settings. Each `add_player_slot` fills one player slot, either with an agent or with the game's AI; its `player_id` is
+the game's player number. `close_lobby` closes the lobby, which creates the game and its match
+(`urn:game:match/v1`) from its player slots.
 
-**When the game starts:** `start_match` creates the game with its clock stopped. Each agent's first move is its
-"ready", and the game starts once every agent has made one, carrying out all their opening orders. Until then
-`get_state` says so and the live page shows "Waiting for …". An agent that never moves stops holding the start after
-`lockstep.stall_seconds`. In `stepping` mode time then passes only as the agents step, and several agents move in
-lockstep. In `realtime` mode the game runs on its own clock. Holding a realtime game at its start needs the hook patch
-from step 2 of [Play the real game](#play-the-real-game-x86-64-linux).
+**When the match starts:** `close_lobby` creates the game with its clock stopped. Each agent's first move makes it
+ready, and the match starts once every agent is ready, carrying out all their opening orders. Until then `get_state`
+says so, the match's `get` shows each player `not_ready` or `ready`, and the live page shows "Waiting for …". An agent
+that never moves is started without after `lockstep.stall_seconds`, and the match's `status_detail` says so. In
+`stepping` mode time then passes only as the agents step, and several agents move in lockstep. In `realtime` mode the
+game runs on its own clock. Holding a realtime game at its start needs the hook patch from step 2 of
+[Play the real game](#play-the-real-game-x86-64-linux).
+
+**When it ends:** by the game's rules, at its time limit, or played out by `finish_match` once its agents have
+stopped. The match's `get` then says `finished`, how it ended, and each player's outcome (`won`, `lost`, `drawn` or
+`undecided`) and scores (`score`, `units_killed`, `army`). `finish_match` keeps it in the run's `metadata["game_match"]`.
 
 ### Model against model, with different kinds of agent
 
@@ -284,47 +296,51 @@ an example; the bundled agent-against-agent task is `duel-quick`:
    "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5"}, "depends_on": ["deploy"]},
   {"id": "license", "type": "add_license", "env_id": "wc3", "depends_on": ["deploy"],
    "files": {"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}},
-  {"id": "match", "type": "create_match", "env_id": "wc3", "depends_on": ["deploy"],
-   "additional_settings": {"map": "(2)EchoIsles.w3x", "seed": 7, "time_limit_seconds": 900}},
-  {"id": "slot-a", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "sonnet"},
-   "additional_settings": {"faction": "human", "label": "Claude Sonnet 5.5"}, "depends_on": ["match", "agent-a"]},
-  {"id": "slot-b", "type": "add_player_slot", "env_id": "wc3", "occupant": {"kind": "agent", "name": "bot"},
-   "additional_settings": {"faction": "orc"}, "depends_on": ["match", "agent-b"]},
-  {"id": "start", "type": "start_match", "env_id": "wc3", "depends_on": ["slot-a", "slot-b", "license"]},
-  {"id": "broadcast", "type": "rts_broadcast", "env_id": "wc3", "title": "Sonnet vs wc3agent", "depends_on": ["deploy"]},
+  {"id": "match", "type": "open_lobby", "env_id": "wc3", "depends_on": ["deploy"],
+   "game_settings": {"map": "(2)EchoIsles.w3x", "seed": 7, "time_limit_seconds": 900}},
+  {"id": "slot-a", "type": "add_player_slot", "env_id": "wc3", "player_id": "0", "player_kind": "agent",
+   "player_name": "sonnet", "game_settings": {"faction": "human", "label": "Claude Sonnet 5.5"},
+   "depends_on": ["match", "agent-a"]},
+  {"id": "slot-b", "type": "add_player_slot", "env_id": "wc3", "player_id": "1", "player_kind": "agent",
+   "player_name": "bot", "game_settings": {"faction": "orc"}, "depends_on": ["match", "agent-b"]},
+  {"id": "start", "type": "close_lobby", "env_id": "wc3", "depends_on": ["slot-a", "slot-b", "license"]},
+  {"id": "broadcast", "type": "rts_broadcast", "env_id": "wc3", "title": "Sonnet vs wc3agent", "depends_on": ["start"]},
   {"id": "play-a", "type": "prompt_agent", "agent_name": "sonnet", "model": "anthropic/claude-sonnet-5-5",
-   "prompt_id": "duel-a", "prompt": "Win this game of Warcraft III.", "depends_on": ["start"]},
+   "prompt_id": "duel-a", "prompt": "Win this game of Warcraft III.", "depends_on": ["start", "broadcast"]},
   {"id": "play-b", "type": "prompt_agent", "agent_name": "bot", "model": "anthropic/claude-haiku-4-5",
-   "prompt_id": "duel-b", "prompt": "Play the game the env has started to its end.", "depends_on": ["start"]},
-  {"id": "finish", "type": "rts_finish", "env_id": "wc3", "rule": "forfeit", "depends_on": ["play-a", "play-b"]},
+   "prompt_id": "duel-b", "prompt": "Play the game the env has started to its end.",
+   "depends_on": ["start", "broadcast"]},
+  {"id": "finish", "type": "finish_match", "env_id": "wc3", "depends_on": ["play-a", "play-b"]},
+  {"id": "save-broadcast", "type": "save_rts_broadcast", "env_id": "wc3", "depends_on": ["finish"]},
   {"id": "grade", "type": "rts_grade", "env_id": "wc3", "rubric": "dense", "depends_on": ["finish"]},
   {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}
 ]
 ```
 
-Here an agent that stops before the end forfeits: `rts_finish` with `rule: forfeit` gives it the defeat, and the
-team rule gives its opponents the win.
+An agent that stops before the end leaves its side to the game: `finish_match` plays the match out to its end with no
+more orders from either agent, so every match is graded at its end.
 
 ### Teams, allies and free-for-all
 
-Only the slots change (and `map`: one with as many start locations as players). Slots on one team are allies
-(passive to each other, sharing vision) and win together. A slot without a `team` is its own team, so slots with no
-teams make a free-for-all. Each line below is one `add_player_slot` step's `occupant` and `additional_settings`:
+Only the player slots change (and `map`: one with as many start locations as players). Player slots on one team are
+allies (passive to each other, sharing vision) and win together. A player slot without a `team` is its own team, so
+slots with no teams make a free-for-all. The lobby's `player_teams` lists the teams. Each line below is one
+`add_player_slot` step's player and `game_settings`:
 
 ```jsonc
 // two agents against two AIs, on (4)TurtleRock.w3x
-{"kind": "agent", "name": "p1"}  {"faction": "human", "team": 1}
-{"kind": "agent", "name": "p2"}  {"faction": "night_elf", "team": 1}
-{"kind": "ai"}                   {"faction": "orc", "team": 2, "ai_level": "normal"}
-{"kind": "ai"}                   {"faction": "undead", "team": 2, "ai_level": "normal"}
+"0" agent p1   {"faction": "human", "team": 1}
+"1" agent p2   {"faction": "night_elf", "team": 1}
+"2" ai         {"faction": "orc", "team": 2, "ai_level": "normal"}
+"3" ai         {"faction": "undead", "team": 2, "ai_level": "normal"}
 // an agent with an AI ally, against an AI (a 4-player map)
-{"kind": "agent", "name": "p1"}  {"faction": "orc", "team": 1}
-{"kind": "ai"}                   {"faction": "human", "team": 1, "ai_level": "easy"}
-{"kind": "ai"}                   {"faction": "undead", "team": 2, "ai_level": "easy"}
+"0" agent p1   {"faction": "orc", "team": 1}
+"1" ai         {"faction": "human", "team": 1, "ai_level": "easy"}
+"2" ai         {"faction": "undead", "team": 2, "ai_level": "easy"}
 // three agents, free for all: the game plays on until one is left
-{"kind": "agent", "name": "a"}   {"faction": "human"}
-{"kind": "agent", "name": "b"}   {"faction": "orc"}
-{"kind": "agent", "name": "c"}   {"faction": "undead"}
+"0" agent a    {"faction": "human"}
+"1" agent b    {"faction": "orc"}
+"2" agent c    {"faction": "undead"}
 ```
 
 ### A drill: stage the board, grade on checks
@@ -357,7 +373,8 @@ expansions, and settles a game at the time limit on score:
 
 ### Reference
 
-**`create_match`'s `additional_settings`**, Warcraft III's match settings:
+**`open_lobby`'s `game_settings`**, Warcraft III's match settings (the env's card publishes them as a JSON Schema in
+the lobby's `open` request):
 
 | Setting | What | Default |
 |---|---|---|
@@ -371,15 +388,16 @@ expansions, and settles a game at the time limit on score:
 | `allow_debug` | Lets an agent's `urn:rts:debug/v1` stage the game (keep it off for evaluations) | `false` |
 
 A setting the env doesn't take is refused as the lobby opens. A run can override any of them through agent-env's
-per-run step overrides (`{"additional_settings": {"seed": 7}}`).
+per-run step overrides (`{"game_settings": {"seed": 7}}`).
 
 **`add_license`** (agentenv-game-env): `"files": {"roc.w3k": "WC3_ROC_W3K", "tft.w3k": "WC3_TFT_W3K"}` maps each
 activation file to the secret that holds it. It asks the env what it lacks, and reads no secret when it lacks nothing:
 on the fake game, or with the files mounted at `WC3_LICENSE_DIR`. Without the files, the real game's lobby doesn't
 close.
 
-**A slot** (`add_player_slot`): `occupant` is `{"kind": "agent", "name": <a deploy_agent step's agent_name>}` or
-`{"kind": "ai"}`. `slot` is optional (the next free one). Its `additional_settings` are:
+**A player slot** (`add_player_slot`): `player_id` is the game's player number, `"0"` up to the map's start
+locations. `player_kind` is `agent`, with `player_name` a `deploy_agent` step's `agent_name`, or `ai`. Its
+`game_settings` (published in the lobby's `fill` request) are:
 - `faction`: `human`, `orc`, `undead`, `night_elf` or `random` (default `random`);
 - `team`: 1 to 12 (default: its own);
 - `label`: its name for spectators;
@@ -387,8 +405,9 @@ close.
   player's units (for harness opponents);
 - the AI only: `ai_level`, `easy`, `normal` or `insane` (default `normal`).
 
-A match takes no more players than its map's start locations, and at least one agent. Every AI slot shares one level,
-because the game has one AI level. agentenv-game-env's README documents the lobby and both steps in full.
+A match takes no more players than its map's start locations, and at least one agent. Every AI player slot shares
+one level, because the game has one AI level. agentenv-game-env's README documents the lobby, the match and their
+steps in full.
 
 **Stage ops** (`urn:wc3:stage/v1`):
 - **The ops:** `spawn`, `level`, `give`, `item`, `hp`, `mana`, `kill`, `remove`, `resources`, `ai` (`paused`),
@@ -412,14 +431,10 @@ because the game has one AI level. agentenv-game-env's README documents the lobb
 - **`gates`:** `game_ran` and `agent_played`.
 - **`seats`:** which agents to grade; every agent seat by default.
 
-**`rts_finish`:** `rule` decides what happens to a game still going once every play step has ended.
-- **`play_out` (default):** runs it with no orders to its end. That time is counted apart from the harness's `idle`,
-  so it doesn't trip the `agent_played` gate.
-- **`forfeit`:** every agent seat without a result loses.
-- **`as_is`:** leaves the game where it stopped.
-
-The summary keeps each seat's last move, and `rts_grade` adds a row of information (no weight) saying how the game
-ended.
+**`finish_match`** (agentenv-game-env): plays a match still going once every play step has ended to its end, the time
+limit at most, with no more orders from its agents (they wait, and then find the game over). That time is the
+harness's `finish_seconds` in the summary. `cancel_match` ends a match where it stands instead. The summary keeps each
+player slot's last move, and `rts_grade` adds a row of information (no weight) saying how the match ended.
 
 **`rts_broadcast`**
 
@@ -430,9 +445,12 @@ ended.
 | `cast`, `caster_model` | The two AI casters, and the model that writes their lines | `true`, Haiku 4.5 |
 | `title`, `size`, `fps`, `bitrate` | How it looks | the stream command's |
 | `linger_seconds` | How long it shows the end after GAME OVER | `60` |
-| `stall_seconds` | Ends the broadcast when the game clock stands still this long | `900` |
 | `key_secret`, `x_server_secret`, `x_key_secret` | The secrets that hold the stream keys | `TWITCH_STREAM_KEY`, `X_STREAM_SERVER`, `X_STREAM_KEY` |
 | `test` | Sends to Twitch as a bandwidth test (not live) | `false` |
+
+**`save_rts_broadcast`:** `broadcast`, the `rts_broadcast` step's id (default `broadcast`), and `stall_seconds`, after
+which a match whose clock stands still ends the broadcast (default `900`). The video goes in the run's
+`metadata["broadcasts"][<broadcast>]["videos"]`.
 
 **Per run:** `agent-env run wc3 --task <task> --model <model>` plays any task on another model, without editing it.
 
@@ -517,7 +535,7 @@ fixed policies and cadence:
   5 game seconds apart.
 - **Micro (System 1)** answers one multiple-choice question per army unit, at most once a second per group.
 
-It plays the game the task's `start_match` created, through the env's `urn:rts` session (raw observations in, raw
+It plays the game the task's `close_lobby` created, through the env's `urn:rts` session (raw observations in, raw
 wc3env actions out). It plays stepped (the game waits for the models) or in realtime (the game runs on, and slow
 answers just mean fewer decisions), as the match's `mode` says. At a seat's address it plays that seat. The
 `prompt_agent` step's prompt is wc3agent's goal, which it keeps first in every macro request.
@@ -638,8 +656,8 @@ flowchart LR
     `stall_seconds`, and the game then goes on without it.
 - **Realtime:** the game runs on its own clock, and a step only sends orders and observes.
 
-**Players:** each agent plays at its own slot's address, `<env>/players/<agent>/mcp`, which `add_player_slot`
-registers with it. It sees and orders only its own side, unless its slot is `omniscient`.
+**Players:** each agent plays at its own player slot's address, `<env>/players/<player_id>/mcp`, which
+`add_player_slot` registers with it. The slot's env card there lists its MCP tools and the `urn:rts` session. It sees and orders only its own side, unless its slot is `omniscient`.
 
 **How orders are checked:**
 - Orders given with `act` are checked against wc3env's own rules: the unit is yours, the target is in view, and the
@@ -662,8 +680,8 @@ registers with it. It sees and orders only its own side, unless its slot is `omn
 
 | AgentEnv piece | Here |
 |---|---|
-| Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level); six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:wc3:license/v1`, `urn:wc3:stage/v1`, `urn:wc3:idle/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:finish/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
-| Task steps | `save_wc3_replay`, in `steps.py`; `add_license`, `create_match`, `add_player_slot` and `start_match`, from agentenv-game-env; `rts_finish`, `rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
+| Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level), and its match, `urn:game:match/v1` (the start gate, the play-out, each player's outcome and scores); six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:game:license/v1`, `urn:wc3:stage/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
+| Task steps | `save_wc3_replay`, in `steps.py`; `add_license`, `open_lobby`, `add_player_slot`, `close_lobby`, `finish_match` and `cancel_match`, from agentenv-game-env; `rts_broadcast`, `save_rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
 | Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
 | CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `license` (`import`, `show`), `serve`, `watch`, `stream`, `recordings`, `drills import` |
@@ -685,7 +703,7 @@ registers with it. It sees and orders only its own side, unless its slot is `omn
 | `highlights.py` | A match's major moments on its video's clock: chapters embedded in the video and a highlight reel (ffmpeg) |
 | `streamer/` | The streamer image: any env's `/live?stream` to RTMP servers and a recording, encoded once, with the casters |
 | `broadcast.py` | Running that image for one broadcast: its targets from the secret store, its casters' endpoint, its `docker run` (the `stream` command and `rts_broadcast` share it) |
-| `steps.py` | The game-agnostic steps: `rts_finish` (an env's `urn:rts:finish/v1`), `rts_broadcast`, and `save_rts_recording`, which streams each recording file into a file artifact |
+| `steps.py` | The game-agnostic steps: `rts_broadcast` and `save_rts_broadcast` (they read the env's match, `urn:game:match/v1`), and `save_rts_recording`, which streams each recording file into a file artifact |
 | `grade.py` | `rts_grade`: grades each agent seat from the env's `data/get` summary with a rubric set in the task (`melee`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets, time-limit rule and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 

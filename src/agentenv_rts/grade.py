@@ -24,7 +24,7 @@ RUBRICS = {
     "dense": {**MELEE, "army_ratio": 1, "kills_ratio": 1, "buildings_destroyed": 1, "tier": 1, "expansions": 1,
               "hero_level": 1},
     "checks": {},
-    "smoke": {"ran_to_limit": 1, "idle_played": 1},
+    "smoke": {"ran_to_limit": 1, "played_out": 1},
 }
 TARGETS = {"army_ratio": 1.0, "buildings_destroyed": 5, "tier": 3, "expansions": 1, "hero_level": 5}
 GATES = ("game_ran", "agent_played")
@@ -195,10 +195,10 @@ def ran_to_limit(g: Game) -> dict:
     return {"criterion": "the game ran to its time limit", "result": g.result == "time_limit", "evidence": _clock(g)}
 
 
-def idle_played(g: Game) -> dict:
-    idle = (g.summary.get("harness") or {}).get("idle_seconds") or 0
-    return {"criterion": "it was played by the harness's idle extension", "result": idle > 0,
-            "evidence": f"the harness let {idle} game seconds pass"}
+def played_out(g: Game) -> dict:
+    played = (g.summary.get("harness") or {}).get("finish_seconds") or 0
+    return {"criterion": "finish_match played it out", "result": played > 0,
+            "evidence": f"finish_match let {played} game seconds pass"}
 
 
 def game_ran(g: Game) -> dict:
@@ -207,20 +207,17 @@ def game_ran(g: Game) -> dict:
 
 
 def agent_played(g: Game) -> dict:
-    orders, idle = g.seat.get("orders_sent") or 0, (g.summary.get("harness") or {}).get("idle_seconds") or 0
-    return {"criterion": "the agent played: it gave orders, and the harness let no game time pass for it",
-            "result": orders > 0 and not idle, "evidence": f"{orders} orders; the harness let {idle} game seconds pass"}
+    orders = g.seat.get("orders_sent") or 0
+    return {"criterion": "the agent played: it gave orders", "result": orders > 0, "evidence": f"{orders} orders"}
 
 
-def settled(finish: dict, seat: dict) -> dict:
-    """How the game came to its end once the agents stopped (rts_finish), for the record: no weight."""
-    stopped = any(x.get("slot") == seat.get("slot") for x in finish.get("open_seats") or ())
+def settled(match: dict, seat: dict) -> dict:
+    """How the match ended (finish_match's final match), for the record: no weight."""
     last = seat.get("last_move_seconds")
-    return {"name": "finish", "criterion": "how the game ended once the agents stopped (information only)",
-            "result": True, "weight": 0,
-            "evidence": (f"this seat stopped before the end (last move at {last} s); " if stopped else "")
-            + f"rts_finish {finish.get('rule')}: from {finish.get('from_seconds')} to {finish.get('to_seconds')} "
-              f"game seconds" + (", a forfeit" if seat.get("forfeit") else "")}
+    return {"name": "finish", "criterion": "how the match ended (information only)", "result": True, "weight": 0,
+            "evidence": f"the match {match.get('status')}"
+            + (f": {match['status_detail']}" if match.get("status_detail") else "")
+            + (f"; this player's last move at {last} s" if last is not None else "")}
 
 
 def check(g: Game, c: dict) -> dict:
@@ -235,7 +232,7 @@ def check(g: Game, c: dict) -> dict:
 
 
 CRITERIA = {f.__name__: f for f in (reached_end, win, survive, outscore, army_ratio, kills_ratio, buildings_destroyed,
-                                    tier, expansions, hero_level, ran_to_limit, idle_played)}
+                                    tier, expansions, hero_level, ran_to_limit, played_out)}
 GATE_CHECKS = {"game_ran": game_ran, "agent_played": agent_played}
 
 
@@ -303,9 +300,10 @@ class RTSGradeTaskStep(TaskStep):
     def criteria(self) -> dict[str, float]:
         return {k: w for k, w in {**RUBRICS[self.rubric], **self.weights}.items() if w}
 
-    def grade(self, summary: dict) -> dict[str, list[dict]]:
+    def grade(self, summary: dict, match: dict | None = None) -> dict[str, list[dict]]:
         """The rows of each graded seat's verification, by its key: `verifier_id` alone when the game's one agent
-        seat is graded (or no agent name identifies the seat), else `<verifier_id>:<agent>`."""
+        seat is graded (or no agent name identifies the seat), else `<verifier_id>:<agent>`. `match` is the final
+        match finish_match kept, which says how it ended."""
         everyone, agents = seats(summary)
         if self.seats is None:
             graded = [(s.get("agent"), s) for s in agents]
@@ -325,8 +323,8 @@ class RTSGradeTaskStep(TaskStep):
             out[key] = [{"name": k, **CRITERIA[k](g), "weight": w} for k, w in self.criteria().items()]
             out[key] += [check(g, c) for c in self.checks]
             out[key] += [{"name": k, **GATE_CHECKS[k](g), "weight": GATE_WEIGHT} for k in gates]
-            if finish := summary.get("finish"):
-                out[key].append(settled(finish, seat))
+            if match:
+                out[key].append(settled(match, seat))
         return out
 
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
@@ -343,7 +341,7 @@ class RTSGradeTaskStep(TaskStep):
             graded = {k: [{"name": "data_get", "criterion": "the env answered data/get", "result": False,
                            "weight": GATE_WEIGHT, "evidence": repr(e)}] for k in keys}
         else:
-            graded = step.grade(summary)
+            graded = step.grade(summary, context.metadata.get("game_match"))
             context.metadata.setdefault("rts_summary", {})[step.verifier_id] = summary   # what was graded
         verifications = context.metadata.setdefault("verifications", {})
         for key, rows in graded.items():

@@ -17,15 +17,21 @@ from agent_env.task.task import Task
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.registry import get_task_step_registry
 from agentenv_game import LICENSE
-from agentenv_game.steps import AddLicenseTaskStep, AddPlayerSlotTaskStep, CreateMatchTaskStep, StartMatchTaskStep
+from agentenv_game.steps import (
+    AddLicenseTaskStep,
+    AddPlayerSlotTaskStep,
+    CloseLobbyTaskStep,
+    FinishMatchTaskStep,
+    OpenLobbyTaskStep,
+)
 from agentenv_protocol import AgentEnvEnvironment, client, environment_card, extension
 from agentenv_protocol.types import WELL_KNOWN_PATH
 from click.testing import CliRunner
-from conftest import ONE_AGENT, slot_settings
+from conftest import ONE_AGENT, slot_request
 
 from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_wc3.license import LICENSE_SECRETS, license_from_secrets, read_license
-from agentenv_wc3.server import IDLE_EXTENSION, WC3Env
+from agentenv_wc3.server import WC3Env
 from agentenv_wc3.steps import REPLAY_EXTENSION, SaveWC3ReplayTaskStep
 
 pytestmark = pytest.mark.anyio
@@ -61,48 +67,53 @@ def run_context(record: DeployedEnv) -> TaskStepContext:
 
 def slot_of(index: int, seat: dict) -> AddPlayerSlotTaskStep:
     """A seat as a task's add_player_slot step (the agent connects on its own here)."""
-    occupant, given = slot_settings(seat)
-    return AddPlayerSlotTaskStep(id=f"slot-{index}", version=None, env_id="wc3", occupant=occupant, slot=index,
-                                 additional_settings=given, register=False)
+    fill = slot_request(index, seat)
+    return AddPlayerSlotTaskStep(id=f"slot-{index}", version=None, env_id="wc3", player_id=fill.player_id,
+                                 player_kind=fill.player_kind, player_name=fill.player_name,
+                                 game_settings=fill.game_settings, register=False)
 
 
 async def open_match(record: DeployedEnv, **settings) -> TaskStepContext:
-    """A match opened as a task opens one: the activation files (the fake game needs none), then create_match with
+    """A match opened as a task opens one: the activation files (the fake game needs none), then open_lobby with
     the match's settings."""
     context = run_context(record)
     await AddLicenseTaskStep(id="license", version=None, env_id="wc3", files=LICENSE_SECRETS).execute(context)
-    return await CreateMatchTaskStep(id="match", version=None, env_id="wc3", additional_settings=settings).execute(
-        context)
+    return await OpenLobbyTaskStep(id="match", version=None, env_id="wc3", game_settings=settings).execute(context)
 
 
 async def seat_and_start(context: TaskStepContext, seats: list[dict] | None = None) -> TaskStepContext:
-    """The players seated and the game created, as a task's add_player_slot and start_match steps do."""
+    """The players in their player slots and the game created, as a task's add_player_slot and close_lobby steps
+    do."""
     for index, seat in enumerate(seats or ONE_AGENT):
         await slot_of(index, seat).execute(context)
-    return await StartMatchTaskStep(id="start", version=None, env_id="wc3").execute(context)
+    return await CloseLobbyTaskStep(id="start", version=None, env_id="wc3").execute(context)
 
 
 def test_the_steps_are_registered():
     registry = get_task_step_registry()
     assert registry["save_wc3_replay"] is SaveWC3ReplayTaskStep and "wc3_license" not in registry
-    assert registry["create_match"] is CreateMatchTaskStep and registry["add_license"] is AddLicenseTaskStep
+    assert registry["open_lobby"] is OpenLobbyTaskStep and registry["add_license"] is AddLicenseTaskStep
+    assert "rts_finish" not in registry and registry["finish_match"] is FinishMatchTaskStep
 
 
-async def test_match_then_idle_passes_the_smoke_rubric(env_vars, license_dir):
+async def test_a_match_finish_plays_out_passes_the_smoke_rubric(env_vars, license_dir):
     env = WC3Env()
     async with deployed(env) as record:
         context = await open_match(record, seed=4, time_limit_seconds=90)
-        assert context.metadata["game_lobby"]["additional_settings"]["seed"] == 4
-        assert context.metadata["game_lobby"]["additional_settings"]["time_limit_seconds"] == 90
+        assert context.metadata["game_lobby"]["game_settings"]["seed"] == 4
+        assert context.metadata["game_lobby"]["game_settings"]["time_limit_seconds"] == 90
         await seat_and_start(context, [{"agent": "player", "race": "human"}, {"computer": "normal", "race": "orc"}])
-        assert context.metadata["game_lobby"]["state"] == "closed" and context.metadata["game_lobby"]["game"]["setup"]
-        result = await client.invoke_extension(record.environment_url, record.environment_card, IDLE_EXTENSION,
-                                               {"seconds": 300})
-        assert result["played_seconds"] == 90 and result["result"] == "time_limit"
-        smoke = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3", rubric="smoke").execute(
-            run_context(record))
+        assert context.metadata["game_lobby"]["status"] == "closed"
+        await FinishMatchTaskStep(id="finish", version=None, env_id="wc3").execute(context)
+        match = context.metadata["game_match"]
+        assert (match["status"], match["status_detail"]) == ("finished", "the time limit, 1:30; played out from 0:00")
+        assert match["progress"] == [{"name": "game", "unit": "seconds", "value": 90.0, "limit": 90}]
+        assert {p: s["status"] for p, s in match["player_states"].items()} == {"0": "undecided", "1": "undecided"}
+        smoke = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3", rubric="smoke").execute(context)
         [verification] = smoke.metadata["verifications"].values()
         assert verification["score"] == 1 and all(r["result"] for r in verification["results"]), verification
+        finish = next(r for r in verification["results"] if r["name"] == "finish")
+        assert finish["evidence"] == "the match finished: the time limit, 1:30; played out from 0:00"
         # The agents' rubric sees a game the harness played, and gives it nothing.
         melee = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3").execute(run_context(record))
         [verification] = melee.metadata["verifications"].values()
@@ -116,7 +127,7 @@ async def test_the_fake_game_needs_no_activation_files_and_reads_no_secrets(env_
         assert status == {"missing": [], "installed": []}
         context = await seat_and_start(await open_match(record, time_limit_seconds=120))
     assert context.metadata["game_license"] == {"installed": []}
-    assert context.metadata["game_lobby"]["additional_settings"]["time_limit_seconds"] == 120
+    assert context.metadata["game_lobby"]["game_settings"]["time_limit_seconds"] == 120
 
 
 async def test_the_real_game_lacks_its_activation_files_until_add_license_gives_them(
@@ -131,7 +142,7 @@ async def test_the_real_game_lacks_its_activation_files_until_add_license_gives_
         missing = (await client.invoke_extension(url, card, LICENSE, method="get"))["missing"]
         assert [(i["name"], i["kind"], i["group"]) for i in missing] == [("roc.w3k", "file", "warcraft3"),
                                                                         ("tft.w3k", "file", "warcraft3")]
-        context = await CreateMatchTaskStep(id="match", version=None, env_id="wc3").execute(run_context(record))
+        context = await OpenLobbyTaskStep(id="match", version=None, env_id="wc3").execute(run_context(record))
         with pytest.raises(RuntimeError, match="lobby close: not_licensed: the game lacks file roc.w3k .*import"):
             await seat_and_start(context)   # without add_license, the lobby doesn't close
         with pytest.raises(RuntimeError, match="secret store has no 'WC3_ROC_W3K' \\(file roc.w3k"):
@@ -201,9 +212,8 @@ async def test_the_replay_becomes_a_file_artifact(local_stores):
 async def test_a_game_without_a_replay_saves_nothing_and_says_why(env_vars, license_dir, local_stores, caplog):
     env = WC3Env()
     async with deployed(env) as record:
-        await seat_and_start(await open_match(record, time_limit_seconds=60))
-        await client.invoke_extension(record.environment_url, record.environment_card, IDLE_EXTENSION,
-                                      {"seconds": 60})
+        context = await seat_and_start(await open_match(record, time_limit_seconds=60))
+        await FinishMatchTaskStep(id="finish", version=None, env_id="wc3").execute(context)
         context = await SaveWC3ReplayTaskStep(id="replay", version=None, env_id="wc3").execute(run_context(record))
     assert context.metadata["replays"]["replay"] == []
     assert any("save_wc3_replay: no replay" in m for m in caplog.messages)
@@ -221,8 +231,8 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
     by_type = {s["type"]: s for s in steps}
     assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
     slots = [s for s in steps if s["type"] == "add_player_slot"]   # who plays: the lobby's slots, then the game
-    assert by_type["start_match"]["depends_on"] == [*(s["id"] for s in slots), "license"] and len(slots) >= 2
-    seated = {s["occupant"]["name"] for s in slots if s["occupant"]["kind"] == "agent"}
+    assert by_type["close_lobby"]["depends_on"] == [*(s["id"] for s in slots), "license"] and len(slots) >= 2
+    seated = {s["player_name"] for s in slots if s["player_kind"] == "agent"}
     assert {s["agent_name"] for s in steps if s["type"] == "prompt_agent"} <= seated
     assert all(s["env_ids"] == [] for s in steps if s["type"] == "deploy_agent")
     assert all(not ({"match", "seat"} & set(s["depends_on"])) for s in steps if s["type"] == "prompt_agent")
@@ -231,12 +241,15 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
                 else ("dense", "duel") if task.startswith("duel") else ("dense", task) if task.startswith("broadcast")
                 else ("melee", "wc3"))
     assert grade["id"] == "grade" and (grade["rubric"], grade["verifier_id"]) == expected
-    if task != "smoke":   # a game played by agents is settled before it is graded
-        assert by_type["rts_finish"]["id"] in grade["depends_on"]
-        plays = [s["id"] for s in steps if s["type"] == "prompt_agent"]
-        assert sorted(by_type["rts_finish"]["depends_on"]) == sorted(plays)
+    assert by_type["finish_match"]["id"] in grade["depends_on"]   # every match is played out before it is graded
+    plays = [s for s in steps if s["type"] == "prompt_agent"]
+    if task != "smoke":
+        assert sorted(by_type["finish_match"]["depends_on"]) == sorted(s["id"] for s in plays)
+    if broadcast := by_type.get("rts_broadcast"):   # on air before the first move, saved once the match is over
+        assert all(broadcast["id"] in s["depends_on"] for s in plays)
+        assert by_type["save_rts_broadcast"]["depends_on"] == [by_type["finish_match"]["id"]]
     if task.startswith("macro-micro"):
         agent = by_type["deploy_agent"]
         assert agent["a2a_agent_id"] == "wc3-macro-micro" and agent["env_vars"]["WC3_MICRO_MODEL"]
-        mode = by_type["create_match"]["additional_settings"]["mode"]
+        mode = by_type["open_lobby"]["game_settings"]["mode"]
         assert mode == ("realtime" if task.endswith("realtime") else "stepping")

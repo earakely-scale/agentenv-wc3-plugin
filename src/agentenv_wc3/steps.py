@@ -1,5 +1,6 @@
 """The plugin's task step: `save_wc3_replay` stores the finished game's replay as a file artifact. The rest of a
-WC3 task is agentenv_game's: add_license (your activation files), create_match, add_player_slot and start_match."""
+WC3 task is agentenv_game's: add_license (your activation files), open_lobby, add_player_slot, close_lobby and
+finish_match."""
 
 from __future__ import annotations
 

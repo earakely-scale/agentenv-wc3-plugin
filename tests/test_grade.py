@@ -14,7 +14,8 @@ pytestmark = pytest.mark.anyio
 
 
 def wc3_verifier(s: dict) -> list[dict]:
-    """wc3-verifier's grade(), as the five agent tasks ran it before rts_grade: the reference melee must match."""
+    """wc3-verifier's grade(), as the five agent tasks ran it before rts_grade (its agent_played without the idle
+    extension, which finish_match replaced): the reference melee must match."""
     mine, theirs = (s.get("score") or {}).get("total", 0), (s.get("opponent_score") or {}).get("total", 0)
     harness = s.get("harness") or {}
     return [
@@ -24,24 +25,24 @@ def wc3_verifier(s: dict) -> list[dict]:
         {"criterion": "outscored the AI on the game's score total", "result": mine > theirs,
          "score": min(1.0, mine / theirs) if theirs else float(mine > 0)},
         {"criterion": "the game kept running", "weight": -100, "result": not s.get("engine_failed")},
-        {"criterion": "the agent played: it gave orders, and the harness let no game time pass for it",
-         "weight": -100, "result": harness.get("orders_sent", 0) > 0 and not harness.get("idle_seconds")},
+        {"criterion": "the agent played: it gave orders", "weight": -100, "result": harness.get("orders_sent", 0) > 0},
     ]
 
 
 def smoke_verifier(s: dict) -> list[dict]:
-    """smoke-verifier's grade(), as the smoke task ran it before rts_grade: the reference smoke must match."""
+    """smoke-verifier's grade(), as the smoke task ran it before rts_grade, played out by finish_match where the idle
+    extension played it then: the reference smoke must match."""
     harness = s.get("harness") or {}
     return [
         {"criterion": "the game ran to its time limit", "result": s.get("result") == "time_limit"},
-        {"criterion": "it was played by the harness's idle extension", "result": harness.get("idle_seconds", 0) > 0},
+        {"criterion": "finish_match played it out", "result": harness.get("finish_seconds", 0) > 0},
         {"criterion": "the game kept running", "weight": -100, "result": not s.get("engine_failed")},
     ]
 
 
 TODAY = {"game_over": True, "result": "time_limit", "game_time_seconds": 300.0, "time_limit_seconds": 300,
          "ai_difficulty": "easy", "score": {"total": 900}, "opponent_score": {"total": 1800}, "engine_failed": False,
-         "error": None, "harness": {"orders_sent": 40, "idle_seconds": 0}}
+         "error": None, "harness": {"orders_sent": 40, "finish_seconds": 0}}
 TODAYS = {
     "victory": {**TODAY, "result": "victory"},
     "defeat": {**TODAY, "result": "defeat"},
@@ -51,8 +52,8 @@ TODAYS = {
     "an AI with no score": {**TODAY, "opponent_score": {}},
     "still running": {**TODAY, "game_over": False, "result": None},
     "the engine failed": {**TODAY, "engine_failed": True, "error": "wine died"},
-    "no orders": {**TODAY, "harness": {"orders_sent": 0, "idle_seconds": 0}},
-    "the harness played": {**TODAY, "harness": {"orders_sent": 40, "idle_seconds": 120}},
+    "no orders": {**TODAY, "harness": {"orders_sent": 0, "finish_seconds": 0}},
+    "played out": {**TODAY, "harness": {"orders_sent": 40, "finish_seconds": 120}},
 }
 
 
@@ -63,7 +64,7 @@ def seat(agent=None, computer=None, team=1, result="time_limit", orders=50, **me
 
 def game(*seats, **fields) -> dict:
     return {"game_over": True, "game_time_seconds": 600, "time_limit_seconds": 600, "engine_failed": False,
-            "error": None, "harness": {"orders_sent": 0, "idle_seconds": 0, "staged_seconds": 0},
+            "error": None, "harness": {"orders_sent": 0, "finish_seconds": 0, "staged_seconds": 0},
             "seats": list(seats), **fields}
 
 
@@ -232,14 +233,14 @@ def test_a_failed_gate_zeroes_the_seat_and_gates_can_be_left_out():
     assert score(step(gates=["game_ran"]).grade(beaten)["grade:alice"]) == 1
     assert score(step(gates=[]).grade({**beaten, "engine_failed": True})["grade:alice"]) == 1
     assert score(step(gates=["game_ran"]).grade({**beaten, "engine_failed": True})["grade:alice"]) == 0
-    idled = {**DUEL, "harness": {"idle_seconds": 30}}
-    assert all(score(rows) == 0 for rows in step().grade(idled).values())
+    silent = game(seat("alice", orders=0, **ALICE), seat("bob", team=2, orders=0, **BOB))
+    assert all(score(rows) == 0 for rows in step().grade(silent).values())
 
 
 def test_smoke_never_asks_that_the_agent_played():
-    played_by_the_harness = {**TODAY, "harness": {"orders_sent": 0, "idle_seconds": 300}}
+    played_by_the_harness = {**TODAY, "harness": {"orders_sent": 0, "finish_seconds": 300}}
     rows = step(rubric="smoke", gates=["game_ran", "agent_played"]).grade(played_by_the_harness)["grade"]
-    assert [r["name"] for r in rows] == ["ran_to_limit", "idle_played", "game_ran"] and score(rows) == 1
+    assert [r["name"] for r in rows] == ["ran_to_limit", "played_out", "game_ran"] and score(rows) == 1
 
 
 @pytest.mark.parametrize(("fields", "message"), [

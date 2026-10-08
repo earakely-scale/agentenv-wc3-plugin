@@ -4,10 +4,10 @@ are saved.
 
 Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once), gives it your activation files
 (`roc.w3k`, `tft.w3k`) with agentenv-game-env's `add_license` step from agent-env's secret store (where
-`agent-env wc3 license import` puts them), and opens its match with `create_match`.
+`agent-env wc3 license import` puts them), and opens its match's lobby with `open_lobby`.
 
-- `smoke` needs no model and no agent: the harness lets a 2-minute game run with no orders (`urn:wc3:idle/v1`)
-  and checks that it launched, ran to its time limit and kept running, then saves the replay. It checks the image,
+- `smoke` needs no model and no agent: `finish_match` plays a 2-minute game out with no orders and checks that it
+  launched, ran to its time limit and kept running, then saves the replay. It checks the image,
   Wine, the license files, the worker and the extensions end to end.
 - `vs-ai-quick`: `wc3-llm` with Haiku 4.5 plays Human through the MCP tools (`get_state`, `act`, `advance`)
   against the easy Orc AI, for 5 minutes of game time.
@@ -28,11 +28,11 @@ by the `smoke` rubric.
   minutes stepped or 10 in realtime. `WC3_MICRO_MODEL` in the `deploy_agent` step picks the micro model (`jev` for
   TypeSafe's Jev); the `prompt_agent` model is the macro model. `agent-env wc3 setup --agent` registers the agent.
 
-Every task with agents settles its game before grading it (`rts_finish`, `play_out`: the game runs to its end once
-its agents have stopped). Each player is a slot of the env's lobby: `create_match` opens it, an `add_player_slot` step
-fills a slot per player (an agent, or the game's AI), and `start_match` creates the game. `broadcast-smoke` plays two
-`wc3-scripted` seats against each other for two minutes with a recorded broadcast (`rts_broadcast`), at no model
-cost.
+Every task plays its match out before grading it (`finish_match`: the game runs to its end once its agents have
+stopped). Each player is a player slot of the env's lobby: `open_lobby` opens it, an `add_player_slot` step fills a
+player slot per player (an agent, or the game's AI), and `close_lobby` creates the game and its match.
+`broadcast-smoke` plays two `wc3-scripted` agents against each other for two minutes with a recorded broadcast
+(`rts_broadcast`, live before the first move, and `save_rts_broadcast`), at no model cost.
 
 Every task also saves the spectator recording (`save_rts_recording`): an MP4 of the map, a self-contained HTML
 replay and the timeline as JSON; `macro-micro-realtime` adds the game's own video, with chapters, and a highlight reel

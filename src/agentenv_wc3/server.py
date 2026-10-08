@@ -14,10 +14,11 @@ at the agent's fights and key moments (frames.Director), and the recording has t
 (agentenv_rts.display). Spectators read a feed of what happened (frames.Feed), and what players tell them through
 `urn:rts:note/v1`: their plans (also shown in the game's picture), their names and their running costs.
 
-Who plays comes from the env's lobby (agentenv_game, `urn:game:lobby/v1`): create_match opens it with the match's
-settings, add_player_slot fills a slot per player (an agent, which plays at `/players/<name>/mcp`, or the game's AI),
-and start_match closes it, which creates the game. An env whose lobby was never opened plays its default game: an
-agent at the env's own address against the game's AI.
+Who plays comes from the env's lobby (agentenv_game, `urn:game:lobby/v1`): open_lobby opens it with the match's
+settings, add_player_slot fills a player slot per player (an agent, which plays at `/players/<player_id>/mcp`, or the
+game's AI), and close_lobby closes it, which creates the game and its match (`urn:game:match/v1`). The match starts
+at its players' first moves, and finish_match plays it out once they have stopped. An env whose lobby was never
+opened plays its default game: an agent at the env's own address against the game's AI.
 """
 
 from __future__ import annotations
@@ -39,27 +40,46 @@ from typing import Annotated, Any, Literal
 
 from agentenv_game import (
     AgentEnvGameEnv,
+    Counter,
+    GameError,
     LicenseItem,
     LicenseParts,
     Lobby,
-    LobbyState,
-    OccupantKind,
+    LobbyStatus,
+    MatchReport,
+    PlayerKind,
     PlayerSlot,
-    PlayerSlotSettings,
-    check_slot,
+    PlayerSlotLimits,
+    PlayerStatus,
+    PlayerTeam,
+    Score,
+    begin_game,
+    check_player_slot,
     create_game,
-    current_player,
     install_license,
     license_needs,
-    open_lobby,
+    match_report,
+    play_out,
+    player_slot_card,
+    player_slot_limits,
+    player_teams,
 )
+from agentenv_game.match import FINAL
 from agentenv_protocol import (
+    AgentEnvFastMCPApplication,
     DataPart,
     environment_card,
     extension,
     get_data,
     reset_data,
     tool,
+)
+from agentenv_protocol.types import (
+    MCP_PATH,
+    MCP_TRANSPORT,
+    EnvironmentCapabilities,
+    EnvironmentCard,
+    EnvironmentInterface,
 )
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
@@ -70,7 +90,7 @@ from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
 from agentenv_rts.seats import Lockstep
-from agentenv_rts.session import DEBUG, FINISH, FINISH_RULES, HOLD, NOTE, NOTE_KINDS, OBSERVE, STEP
+from agentenv_rts.session import DEBUG, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
 
 from . import frames, metrics, render
@@ -92,11 +112,7 @@ DEFAULT_SCENARIO = {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race":
                     "allow_debug": False, "client_view": False, "labels": None, "seats": None, "step_ms": 1000,
                     "lockstep": {"stall_seconds": 600}}
 SEAT_KEYS = ("agent", "computer", "race", "team", "slot", "ai_assist", "omniscient")
-SETTINGS = ("map", "seed", "randomize_starts", "time_limit_seconds", "mode", "allow_debug", "client_view", "step_ms",
-            "lockstep")
-"""What a match's lobby takes as its settings; its players are the lobby's slots."""
-SLOT_SETTINGS = {OccupantKind.AGENT: ("faction", "team", "label", "ai_assist", "omniscient"),
-                 OccupantKind.AI: ("faction", "team", "label", "ai_level")}
+OUTCOMES = {"victory": "won", "defeat": "lost", "draw": "drawn"}
 AGENT_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MODES = ("stepping", "realtime")
 ALLIANCE = (0, 1, 2, 3, 4, 5)   # passive, help request and response, shared experience, spells and vision
@@ -113,7 +129,6 @@ NOTE_CHARS = 400
 OVERLAY = {"x": -1.0, "y": 1.0, "seconds": 9}   # a plan shows top left in the game's picture, under its resources
 
 REPLAY_EXTENSION = "urn:wc3:replay/v1"
-IDLE_EXTENSION = "urn:wc3:idle/v1"
 STAGE_EXTENSION = "urn:wc3:stage/v1"
 STAGE_OPS = ("spawn", "level", "give", "item", "hp", "mana", "kill", "remove", "resources", "ai", "research",
              "invulnerable", "alliance", "destructable")
@@ -131,6 +146,58 @@ class Action(BaseModel):
                     '"auto_place": true} for build, {"order": "Blizzard", "x": .., "y": ..} for cast. Type names '
                     'or ids both work. Add "queued": true to append to the unit\'s orders instead of replacing '
                     "them.")] = {}
+
+
+class LockstepSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", use_attribute_docstrings=True)
+    stall_seconds: int | float = Field(600, gt=0)
+    """How long the game waits for a silent agent: at the start, before it starts without it, and, with several
+    agents stepping, at each turn."""
+
+
+class MatchSettings(BaseModel):
+    """A match's settings, the lobby's game_settings; its players are the lobby's player slots."""
+
+    model_config = ConfigDict(extra="forbid", use_attribute_docstrings=True)
+    map: str = Field(DEFAULT_SCENARIO["map"], min_length=1)
+    """A map in the game's Maps folder, or a path to one."""
+    seed: int | None = Field(None, ge=0, le=0x7FFFFFFF)
+    """The game's random seed; null for a new one each game."""
+    randomize_starts: bool = False
+    """Shuffle the start locations."""
+    time_limit_seconds: int = Field(DEFAULT_SCENARIO["time_limit_seconds"], ge=60, le=4 * 3600)
+    """Game seconds; at the limit the match ends, and the higher score is ahead."""
+    mode: Literal[MODES] = "stepping"
+    """stepping: the game waits while the agents think; realtime: it runs on its own clock."""
+    allow_debug: bool = False
+    """Allow debug ops that stage the game (urn:rts:debug/v1)."""
+    client_view: bool = False
+    """Show and record the game's own picture."""
+    step_ms: int = Field(DEFAULT_STEP_MS, ge=25, le=MAX_ADVANCE_SECONDS * 1000)
+    """The game time one step of the engine plays."""
+    lockstep: LockstepSettings = LockstepSettings()
+
+
+class SlotSettings(BaseModel):
+    """A player slot's settings: faction, team and label for every player; ai_assist and omniscient for an agent;
+    ai_level for the game's AI."""
+
+    model_config = ConfigDict(extra="forbid", use_attribute_docstrings=True)
+    faction: Literal[RACES] = "random"
+    team: int | None = Field(None, ge=1, le=12)
+    """Player slots on one team are allies; without one, a player slot is a team of its own."""
+    label: str | None = Field(None, min_length=1, max_length=60)
+    """Its name on the live page and the broadcast."""
+    ai_assist: bool = False
+    """An agent: the game's AI plays its units beside it."""
+    omniscient: bool = False
+    """An agent: it sees every player's observation."""
+    ai_level: Literal[tuple(DIFFICULTIES)] | None = None
+    """The game's AI: easy, normal (the default) or insane, one level for every AI player slot."""
+
+
+def team_of(slot: PlayerSlot) -> int:
+    return slot.game_settings["team"] or int(slot.player_id) + 1
 
 
 MAKES = {"build": ("builds",), "train": ("trains", "upgrades_to", "sells_units"), "research": ("researches",)}
@@ -215,22 +282,22 @@ def seats_of(s: dict) -> list[dict]:
 
 
 def scenario_of(lobby: Lobby) -> dict:
-    """The game a closed lobby describes, as the env plays it: the lobby's settings, a seat per slot, and the
-    matchup the game's own setup and agents read (the first agent's race, the first AI's race and level)."""
+    """The game a closed lobby describes, as the env plays it: the lobby's settings, a seat per player slot (its
+    player_id is the game's player number), and the matchup the game's own setup and agents read (the first agent's
+    race, the first AI's race and level)."""
     seats = []
-    for s in lobby.slots:
-        given = s.additional_settings
-        seat = {"slot": s.slot, "race": given.get("faction", "random"), "team": given.get("team", s.slot + 1)}
-        if s.occupant.kind is OccupantKind.AGENT:
-            seat.update(agent=s.occupant.name, ai_assist=given.get("ai_assist", False),
-                        omniscient=given.get("omniscient", False))
+    for s in lobby.player_slots:
+        given = s.game_settings
+        seat = {"slot": int(s.player_id), "race": given["faction"], "team": team_of(s)}
+        if s.player_kind is PlayerKind.AGENT:
+            seat.update(agent=s.player_name, ai_assist=given["ai_assist"], omniscient=given["omniscient"])
         else:
-            seat["computer"] = given.get("ai_level", DEFAULT_SCENARIO["ai_difficulty"])
+            seat["computer"] = given["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"]
         seats.append(seat)
     agents, computers = [x for x in seats if "agent" in x], [x for x in seats if "computer" in x]
-    labels = {str(s.slot): s.additional_settings["label"] for s in lobby.slots if "label" in s.additional_settings}
+    labels = {s.player_id: s.game_settings["label"] for s in lobby.player_slots if s.game_settings["label"]}
     level = computers[0]["computer"] if computers else DEFAULT_SCENARIO["ai_difficulty"]
-    return check_scenario({**DEFAULT_SCENARIO, **lobby.additional_settings, "seats": seats, "labels": labels or None,
+    return check_scenario({**DEFAULT_SCENARIO, **lobby.game_settings, "seats": seats, "labels": labels or None,
                            "race": agents[0]["race"] if agents else "random",
                            "opponent_race": computers[0]["race"] if computers else "random", "ai_difficulty": level})
 
@@ -266,6 +333,9 @@ def link_license(source: Path, target: Path) -> None:
 
 @environment_card(name="wc3")
 class WC3Env(AgentEnvGameEnv):
+    GameSettings = MatchSettings
+    PlayerSlotSettings = SlotSettings
+
     def __init__(self):
         super().__init__()
         given = os.environ.get("WC3_WORKER_CMD")   # a shell-quoted command line, e.g. for the fake game
@@ -288,12 +358,9 @@ class WC3Env(AgentEnvGameEnv):
         self.orders_sent: dict[int, int] = {}
         self.lockstep: Lockstep | None = None
         self.started = asyncio.Event()
-        self.ready: set[int] = set()
         self.created, self.begun = time.monotonic(), False
-        self.forfeits: dict[int, str] = {}
-        self.holds: dict[str, float] = {}   # what holds the next game's start, and until when (monotonic)
         self.last_move: dict[int, float] = {}
-        self.finished: dict | None = None
+        self.played_out_from: float | None = None
         self.metrics: metrics.Metrics | None = None
         self.done = False
         self.names = render.Names()
@@ -308,8 +375,8 @@ class WC3Env(AgentEnvGameEnv):
         self.notes: list[dict] = []
         self.agents: dict[int, dict] = {}
         self.stats = {"games": 0, "tool_calls": 0, "invalid_calls": 0, "advances": 0, "orders_sent": 0,
-                      "orders_rejected": 0, "extension_calls": 0, "idle_seconds": 0, "session_steps": 0,
-                      "staged_seconds": 0, "finish_seconds": 0}
+                      "orders_rejected": 0, "extension_calls": 0, "session_steps": 0, "staged_seconds": 0,
+                      "finish_seconds": 0}
 
     # ---- the game ----
 
@@ -343,8 +410,8 @@ class WC3Env(AgentEnvGameEnv):
                                         visible=scenario["client_view"],
                                         window=WINDOW if scenario["client_view"] else None)
         self.scenario, self.setup, self.seats = scenario, result.get("setup"), seats
-        self.started, self.ready, self.created, self.begun = asyncio.Event(), set(), time.monotonic(), False
-        self.forfeits, self.last_move, self.finished = {}, {}, None
+        self.started, self.created, self.begun = asyncio.Event(), time.monotonic(), False
+        self.last_move, self.played_out_from = {}, None
         self.lead = next(x["slot"] for x in seats if x["computer"] is None)
         self.obs = {int(k): v for k, v in result["observations"].items()}
         agents = [x["slot"] for x in seats if x["computer"] is None]
@@ -386,25 +453,30 @@ class WC3Env(AgentEnvGameEnv):
                                                                              "kind": kind, "enabled": 1})
 
     async def _ensure_game(self) -> None:
-        """Under the lock: the game is there, or an open lobby refuses play until it closes."""
+        """Under the lock: the game is there. Until a lobby is opened that is the default game, one agent at the
+        root against the AI; after, only the game a closed lobby created."""
         if self.failed:
             raise WorkerError("game_failed", f"the game stopped working: {self.failed}. A new game (data/reset, or a "
                                              "new lobby) starts it again.")
-        if self.lobby_opened and self.lobby.state is LobbyState.OPEN:
-            raise WorkerError("no_game", "the game has not started: its lobby is open, and closing it (start_match) "
-                                         "creates the game")
+        status = self.lobby.status
+        if status not in (LobbyStatus.NOT_OPENED, LobbyStatus.CLOSED):
+            raise WorkerError("no_game", f"there is no game: the lobby is {status}, and "
+                              + ("closing it (close_lobby) creates the game" if status is LobbyStatus.OPEN
+                                 else "a new one (open_lobby) is for the next game"))
         if not self.obs:
             await self._new_game(self.scenario)
 
     def _seat(self) -> dict | None:
-        """The seat the current request plays: its agent's slot, at `/players/<agent>`; None at the env's root."""
-        name = current_player()
-        if name is None:
+        """The seat the current request plays: its player slot's, at `/players/<player_id>`; None at the root."""
+        try:
+            slot = self.player()
+        except GameError as e:
+            raise WorkerError(e.code, e.message) from e
+        if slot is None:
             return None
-        seat = next((x for x in self.seats if x["agent"] == name), None)
+        seat = next((x for x in self.seats if x["slot"] == int(slot.player_id)), None)
         if seat is None:
-            raise WorkerError("unknown_seat", f"{name!r} plays no seat in this game; the seats are "
-                                              + ", ".join(x["agent"] for x in self.seats if x["agent"]))
+            raise WorkerError("unknown_player", f"player slot {slot.player_id} plays no seat in this game")
         return seat
 
     def _slot(self) -> int:
@@ -420,16 +492,21 @@ class WC3Env(AgentEnvGameEnv):
         """Over once every agent seat has a result, so in a free-for-all the last seats play on after one is out."""
         return self.done or all(self._result_of(x["slot"]) for x in self.seats if x["computer"] is None)
 
+    def _ended(self) -> bool:
+        """The match is over for its players: the game ended or stopped working, or the harness ended the match
+        (cancel_match)."""
+        return (self.failed is not None or self.game_over
+                or ((match := self.match) is not None and match.status in FINAL))
+
     def _out(self, slot: int) -> bool:
-        """This seat's game is over: the game is, or the seat has a result, or the game stopped working."""
-        return self.failed is not None or self.game_over or bool(self._result_of(slot))
+        """This seat's game is over: the match is, or the seat has a result."""
+        return self._ended() or bool(self._result_of(slot))
 
     def _seconds(self) -> float:
         return max((o.get("game_time_seconds") or 0.0 for o in self.obs.values()), default=0.0)
 
     def _given(self, slot: int) -> str:
-        """The game's own result for a seat, else the defeat the harness gave it for a forfeit."""
-        return (self.obs.get(slot) or {}).get("result") or self.forfeits.get(slot, "")
+        return (self.obs.get(slot) or {}).get("result") or ""
 
     def _result_of(self, slot: int) -> str:
         """The game's result for a seat, else victory once every seat on the other teams is defeated: the game
@@ -459,48 +536,44 @@ class WC3Env(AgentEnvGameEnv):
         return self.step_info.pop(slot)
 
     async def _ready(self, slot: int) -> None:
-        """A seat's first move says it is ready. The game begins once every agent seat is ready and nothing holds
-        its start (urn:rts:hold/v1: a broadcast going live, say), with all their opening orders; until then a
-        realtime game stands at its start, and a stepped one doesn't step. A seat silent, or a hold kept, for
-        lockstep's stall_seconds since the game was created stops holding it."""
-        self.ready.add(slot)
+        """A player slot's first move says it is ready. The match starts once every player is (agentenv_game's start
+        gate), with all their opening orders; until then a realtime game stands at its start, and a stepped one
+        doesn't step. Lockstep's stall_seconds after the game was created, it starts without the silent ones. The
+        default game, at the root without a lobby, starts at its first move."""
+        if self.match is None:
+            await self.start_clock()
+            return
+        await self.player_ready(str(slot))
         stall = self.scenario["lockstep"]["stall_seconds"]
         while not self.begun and not self._out(slot):
-            waiting = [x["slot"] for x in self.seats if x["computer"] is None and x["slot"] not in self.ready
-                       and not self._out(x["slot"])]
-            holds = self._holds()
             left = stall - (time.monotonic() - self.created)
-            if not (waiting or holds) or left <= 0:
-                if waiting or holds:
-                    log.warning("starting without %s: no first move or release in %s s", [*waiting, *holds], stall)
-                await self._start()
+            if left <= 0:
+                waiting = [p for p, x in self.match.player_states.items() if x.status is PlayerStatus.NOT_READY]
+                log.warning("starting without %s: no first move in %s s", waiting, stall)
+                await self.begin_match(f"started without player slot{'s' if len(waiting) > 1 else ''} "
+                                       f"{', '.join(waiting)}: no first move in {stall:g} s")
                 break
             try:
                 await asyncio.wait_for(self.started.wait(), timeout=min(left, 1.0))
             except TimeoutError:
                 pass
 
-    async def _start(self) -> None:
-        """The game begins: a realtime game held at its start runs on its own clock from now."""
+    @begin_game
+    async def start_clock(self) -> None:
+        """The match starts: a realtime game held at its start runs on its own clock from now."""
         self.begun = True
         async with self.lock:
             if self.started.is_set():
                 return
             await self.bridge.call("release")
             self.started.set()
-            log.warning("GAME STARTED at %.1f s, ready: %s", self._seconds(), sorted(self.ready))
-
-    def _holds(self) -> list[str]:
-        now = time.monotonic()
-        self.holds = {name: until for name, until in self.holds.items() if until > now}
-        return sorted(self.holds)
+            log.warning("GAME STARTED at %.1f s", self._seconds())
 
     def _waiting(self) -> list[int]:
-        """The agent seats the game waits for before it begins: those yet to make their first move (what else holds
-        its start, `holds`, the live page shows apart)."""
-        if self.begun or self.game_over:
+        """The player slots the match waits for before it starts: those yet to make their first move."""
+        if self.begun or self.game_over or (match := self.match) is None:
             return []
-        return [x["slot"] for x in self.seats if x["computer"] is None and x["slot"] not in self.ready]
+        return [int(p) for p, x in match.player_states.items() if x.status is PlayerStatus.NOT_READY]
 
     async def _chunk(self, batches: dict[int, list], seconds: float) -> None:
         """One step of the game with every waiting seat's orders; its observations become the game's state."""
@@ -892,11 +965,10 @@ class WC3Env(AgentEnvGameEnv):
                            "result": self._result_of(x["slot"]) if self.obs else "",
                            "orders_sent": self.orders_sent.get(x["slot"], 0),
                            "stalls": self.lockstep.stalls.get(x["slot"], 0) if self.lockstep else 0,
-                           "last_move_seconds": self.last_move.get(x["slot"]), "forfeit": x["slot"] in self.forfeits,
+                           "last_move_seconds": self.last_move.get(x["slot"]),
                            "spend": self.agents.get(x["slot"]) or {},
                            "metrics": self.metrics.of(x["slot"], self.obs.get(x["slot"]) or {})
                            if self.metrics is not None and self.obs else {}} for x in self.seats],
-                "finish": self.finished,
                 "handles": {n: {"slot": h["slot"], "staged": len(h["ids"]),
                                 "alive": len(set(h["ids"]) - self.metrics.deaths)}
                             for n, h in (self.metrics.handles if self.metrics else {}).items()},
@@ -922,81 +994,113 @@ class WC3Env(AgentEnvGameEnv):
     def link_activation_files(self, parts: LicenseParts) -> None:
         attach_license(parts.files, self.license_store, self.game_dir)
 
-    # ---- the lobby (urn:game:lobby/v1, served by AgentEnvGameEnv) ----
+    # ---- the lobby (urn:game:lobby/v1, served by AgentEnvGameEnv): settings in MatchSettings and SlotSettings ----
 
-    @open_lobby
-    def match_settings(self, additional_settings: dict, player_slot_settings: PlayerSlotSettings | None):
-        """A match's settings (SETTINGS; the rest as the env's default game has them), and its slots: no more than
-        the map's start locations, each an agent or the game's AI."""
-        if unknown := sorted(set(additional_settings) - set(SETTINGS)):
-            raise ValueError(f"a match's settings are {', '.join(SETTINGS)}, not {unknown}: its players are the "
-                             "lobby's slots (add_player_slot)")
-        settings = {k: v for k, v in check_scenario({**scenario_from_env(), **additional_settings}).items()
-                    if k in SETTINGS}
-        starts, given = map_players(settings["map"]), player_slot_settings or PlayerSlotSettings()
-        if given.max is not None and given.max > starts:
-            raise ValueError(f"{settings['map']} has {starts} start locations, so no more than {starts} players")
-        return settings, PlayerSlotSettings(
-            min=max(given.min or 1, 1), max=given.max or starts,
-            additional_settings={"occupants": ["agent", "ai"], "factions": list(RACES), "teams": True,
-                                 "ai_levels": list(DIFFICULTIES), "one_ai_level": True})
+    @player_slot_limits
+    def slot_limits(self, game_settings: MatchSettings, requested: PlayerSlotLimits) -> PlayerSlotLimits:
+        """No more player slots than the map's start locations, each an agent or the game's AI."""
+        starts = map_players(game_settings.map)
+        if requested.max is not None and requested.max > starts:
+            raise ValueError(f"{game_settings.map} has {starts} start locations, so no more than {starts} players")
+        return PlayerSlotLimits(min=max(requested.min or 1, 1), max=requested.max or starts,
+                                player_kinds=[PlayerKind.AGENT, PlayerKind.AI])
 
-    @check_slot
-    def seat_rules(self, slot: PlayerSlot, lobby: Lobby) -> None:
-        """A slot's settings: faction (a race), team, label; for an agent ai_assist and omniscient; for the game's AI
-        ai_level, which every AI slot shares, since the game has one AI level."""
-        given, allowed = slot.additional_settings, SLOT_SETTINGS[slot.occupant.kind]
-        if unknown := sorted(set(given) - set(allowed)):
-            kind = "an agent" if slot.occupant.kind is OccupantKind.AGENT else "an AI"
-            raise ValueError(f"{kind} slot's settings are {', '.join(allowed)}, not {unknown}")
-        if given.get("faction", "random") not in RACES:
-            raise ValueError(f"faction must be one of {', '.join(RACES)}, got {given['faction']!r}")
-        team = given.get("team", 1)
-        if isinstance(team, bool) or not isinstance(team, int) or not 1 <= team <= 12:
-            raise ValueError(f"team must be a number from 1 to 12, got {team!r}")
-        if not isinstance(given.get("label", "x"), str) or not 1 <= len(given.get("label", "x")) <= 60:
-            raise ValueError("label must be a name of 1 to 60 characters")
-        for key in ("ai_assist", "omniscient"):
-            if not isinstance(given.get(key, False), bool):
-                raise ValueError(f"{key} must be true or false")
-        if slot.occupant.kind is OccupantKind.AI:
-            level = given.get("ai_level", DEFAULT_SCENARIO["ai_difficulty"])
-            if level not in DIFFICULTIES:
-                raise ValueError(f"ai_level must be one of {', '.join(DIFFICULTIES)}, got {level!r}")
-            levels = {s.additional_settings.get("ai_level", DEFAULT_SCENARIO["ai_difficulty"]) for s in lobby.slots
-                      if s.occupant.kind is OccupantKind.AI} - {level}
-            if levels:
-                raise ValueError(f"every AI slot plays at one level, since the game has one: this lobby's is "
-                                 f"{levels.pop()}, not {level}")
+    @check_player_slot
+    def slot_rules(self, slot: PlayerSlot, lobby: Lobby) -> None:
+        """A player_id is one of the map's player numbers; ai_assist and omniscient are an agent's, and ai_level the
+        game's AI's, one level for every AI player slot, since the game has one."""
+        starts = map_players(lobby.game_settings["map"])
+        if slot.player_id not in {str(n) for n in range(starts)}:
+            raise GameError("bad_slot", f"a player slot is a player number of {lobby.game_settings['map']}, \"0\" "
+                                        f"to \"{starts - 1}\", not {slot.player_id!r}")
+        given = slot.game_settings
+        if slot.player_kind is PlayerKind.AGENT:
+            if given["ai_level"] is not None:
+                raise ValueError("ai_level is the game's AI's setting, not an agent's")
+            return
+        if given["ai_assist"] or given["omniscient"]:
+            raise ValueError("ai_assist and omniscient are an agent's settings, not the game's AI's")
+        level = given["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"]
+        levels = {s.game_settings["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"] for s in lobby.player_slots
+                  if s.player_kind is PlayerKind.AI} - {level}
+        if levels:
+            raise ValueError(f"every AI player slot plays at one level, since the game has one: this lobby's is "
+                             f"{levels.pop()}, not {level}")
+
+    @player_slot_card
+    def player_card(self, slot: PlayerSlot) -> EnvironmentCard:
+        """An agent's player slot: its MCP tools, and the urn:rts session a program plays it through (observe, step,
+        debug, note), both at the slot's address."""
+        if "_served_card" not in self.__dict__:
+            self.__dict__["_served_card"] = AgentEnvFastMCPApplication(self._build_card(), self).environment_card
+        card = self.__dict__["_served_card"]
+        session = [e for e in card.capabilities.extensions or () if e.uri in (OBSERVE, STEP, DEBUG, NOTE)]
+        return EnvironmentCard(name=f"{card.name}/{slot.player_id}",
+                               additionalInterfaces=[EnvironmentInterface(url=MCP_PATH, transport=MCP_TRANSPORT)],
+                               capabilities=EnvironmentCapabilities(operations=[], extensions=session))
+
+    @player_teams
+    def teams(self, lobby: Lobby) -> list[PlayerTeam]:
+        """Player slots with one team are allies; one without a team plays on its own."""
+        teams: dict[int, list[str]] = {}
+        for s in lobby.player_slots:
+            teams.setdefault(team_of(s), []).append(s.player_id)
+        return [PlayerTeam(team_id=str(team), player_ids=ids) for team, ids in teams.items()]
 
     @create_game
-    async def new_match(self, lobby: Lobby) -> dict:
-        """The match the closed lobby describes: its settings, and a seat per slot."""
+    async def new_match(self, lobby: Lobby) -> None:
+        """The match the closed lobby describes: its settings, and a seat per player slot."""
         scenario = scenario_of(lobby)
         async with self.lock:
             try:
                 await self._new_game(scenario)
             except WorkerError as e:
                 raise RuntimeError(f"{e.code}: {e.message}") from e
-        return {"setup": self.setup}
 
-    @extension(IDLE_EXTENSION, description="Let the game run with no orders from the agent's side, for checking a "
-                                           "setup without a model; every second counts in data/get's harness.")
-    async def idle(self, seconds: int) -> dict:
-        self.stats["extension_calls"] += 1
-        if not 1 <= seconds <= 4 * 3600:
-            raise ValueError("seconds must be 1 to 14400")
+    # ---- the match (urn:game:match/v1, served by AgentEnvGameEnv): its start gate is start_clock ----
+
+    @match_report
+    def report(self) -> MatchReport:
+        """The match as the game sees it: over once every agent's game is, or at the time limit; its clock; each
+        player slot's result and scores."""
+        over, limit = self.game_over, self.scenario["time_limit_seconds"]
+        rate = (1.0 if self.begun and not over else 0) if self.scenario["mode"] == "realtime" else None
+        return MatchReport(
+            status="failed" if self.failed else "finished" if over else "started",
+            status_detail=self.failed or (self._ending() if over else None),
+            progress=[Counter(name="game", unit="seconds", value=round(self._seconds(), 1), limit=limit, rate=rate)],
+            outcomes={str(x["slot"]): OUTCOMES[r] for x in self.seats if (r := self._result_of(x["slot"])) in OUTCOMES},
+            scores={str(x["slot"]): self._scores(x["slot"]) for x in self.seats} if self.metrics and self.obs else {})
+
+    def _ending(self) -> str:
+        """How the game ended, in words: who won, a draw, or the time limit; and whether finish played it out."""
+        won = [self._who(x) for x in self.seats if self._result_of(x["slot"]) == "victory"]
+        how = (f"{' and '.join(won)} won" if won else
+               "a draw" if any(self._result_of(x["slot"]) == "draw" for x in self.seats) else
+               f"the time limit, {render.clock(self.scenario['time_limit_seconds'])}")
+        return how + (f"; played out from {render.clock(self.played_out_from)}"
+                      if self.played_out_from is not None else "")
+
+    def _scores(self, slot: int) -> list[Score]:
+        m = self.metrics.of(slot, self.obs.get(slot) or {})
+        return [Score(name="score", value=m.get("total", 0), better="higher", unit="points"),
+                Score(name="units_killed", value=m.get("units_killed", 0), better="higher"),
+                Score(name="army", value=m.get("army", 0), better="higher")]
+
+    @play_out
+    async def run_out(self) -> None:
+        """finish: the game plays on with no more orders from its agents, which wait on the lock, to its end, the
+        time limit at most."""
         async with self.lock:
             await self._session_game()
-        await self._start()
-        async with self.lock:
+            self.played_out_from = self._seconds()
             try:
-                played = await self._run_out(seconds)
+                played = await self._run_out(self.scenario["time_limit_seconds"] - self._seconds() + 1)
             except WorkerError as e:
                 self.failed = self.failed or (e.message if e.code in DEAD or e.code == "game_failed" else None)
                 raise RuntimeError(f"{e.code}: {e.message}") from e
-            self.stats["idle_seconds"] += round(played)
-            return {"played_seconds": played, "game_time_seconds": self._seconds(), "result": self.result}
+            self.stats["finish_seconds"] += round(played)
+            self._record()
 
     async def _run_out(self, seconds: float) -> float:
         """Lets the game run with no orders for `seconds` or to its end, under the lock: stepped in chunks, or in
@@ -1011,51 +1115,6 @@ class WC3Env(AgentEnvGameEnv):
             if self.scenario["mode"] == "realtime":
                 await asyncio.sleep(1)
         return self._seconds() - start
-
-    @extension(HOLD, description="Hold the start of the game (its next first moves wait) for something outside it, "
-                                 "such as a broadcast that must be live first: name, hold (true to hold, false to "
-                                 "let go), seconds (it lapses after this many; 600 by default). A game already "
-                                 "under way is not paused.")
-    async def hold(self, name: str, hold: bool = True, seconds: int = 600) -> dict:
-        self.stats["extension_calls"] += 1
-        if not isinstance(name, str) or not 1 <= len(name) <= 64 or not 1 <= int(seconds) <= 7200:
-            raise ValueError("name is 1 to 64 characters, and seconds 1 to 7200")
-        if hold:
-            self.holds[name] = time.monotonic() + int(seconds)
-        else:
-            self.holds.pop(name, None)
-        return {"holds": self._holds(), "begun": self.begun}
-
-    @extension(FINISH, description="Settle the game once its agents have stopped playing, before it is graded: "
-                                   "play_out lets it run with no orders to its end (the time limit at most); "
-                                   "forfeit gives every agent seat without a result a defeat; as_is leaves it where "
-                                   "it stopped. Harness time, counted apart from idle (finish_seconds).")
-    async def finish(self, rule: str = "play_out") -> dict:
-        self.stats["extension_calls"] += 1
-        if rule not in FINISH_RULES:
-            raise ValueError(f"rule must be one of {', '.join(FINISH_RULES)}")
-        async with self.lock:
-            await self._session_game()
-            before = self._seconds()
-            open_seats = [{"slot": x["slot"], "agent": x["agent"]} for x in self.seats
-                          if x["computer"] is None and not self._result_of(x["slot"])]
-        if rule == "play_out" and not self.game_over:
-            await self._start()
-        async with self.lock:
-            try:
-                if rule == "forfeit" and not self.game_over:
-                    self.forfeits.update({x["slot"]: "defeat" for x in open_seats})
-                    self.result = self._result_of(self.lead)
-                    self._record()
-                elif rule == "play_out" and not self.game_over:
-                    played = await self._run_out(self.scenario["time_limit_seconds"] - self._seconds() + 1)
-                    self.stats["finish_seconds"] += round(played)
-            except WorkerError as e:
-                self.failed = self.failed or (e.message if e.code in DEAD or e.code == "game_failed" else None)
-                raise RuntimeError(f"{e.code}: {e.message}") from e
-            self.finished = {"rule": rule, "from_seconds": before, "to_seconds": self._seconds(),
-                             "open_seats": open_seats, "game_over": self.game_over}
-            return self.finished
 
     @extension(STAGE_EXTENSION,
                description="Stage the game before play, for drills: the hook's staging ops in order (spawn, level, "
@@ -1213,7 +1272,7 @@ class WC3Env(AgentEnvGameEnv):
         async with self.lock:
             await self._session_game()
             seat = self._session_seat()
-            if self._out(seat["slot"]) if seat else self.game_over:
+            if self._out(seat["slot"]) if seat else self._ended():
                 return {**self._session_state(seat), "rejected": {}, "placements": {}, "elapsed_ms": 0}
             given = {int(k): list(v or ()) for k, v in (actions or {}).items()}
             if seat is not None and set(given) - {seat["slot"]}:
@@ -1315,7 +1374,7 @@ class WC3Env(AgentEnvGameEnv):
         done once its own game is over."""
         shown = None if seat is None or seat["omniscient"] else {seat["slot"]}
         state = {"observations": {str(k): v for k, v in self.obs.items() if shown is None or k in shown},
-                 "done": self._out(seat["slot"]) if seat else self.game_over,
+                 "done": self._out(seat["slot"]) if seat else self._ended(),
                  "result": self._result_of(seat["slot"]) if seat else self.result,
                  "scenario": self.scenario, "setup": self.setup,
                  "time_limit_seconds": self.scenario["time_limit_seconds"],
@@ -1387,13 +1446,14 @@ class WC3Env(AgentEnvGameEnv):
 
     async def _live_data(self, request: Request) -> Response:
         return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since"), self.capture is not None,
-                                          self._waiting(), [] if self.begun else self._holds()),
+                                          self._waiting()),
                             headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
 
     async def _live_state(self, request: Request) -> Response:
         """Where the game stands, for a streamer deciding when to stop."""
         last = self.timeline.last if self.timeline is not None else None
-        return JSONResponse({"game_over": self.game_over, "result": self.result if self.game_over else "",
+        over = self._ended()
+        return JSONResponse({"game_over": over, "result": self.result if over else "",
                              "t": (last or {}).get("t"),
                              "client": self.capture is not None}, headers={"Cache-Control": "no-store"})
 

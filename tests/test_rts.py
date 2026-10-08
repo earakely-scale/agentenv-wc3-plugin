@@ -15,6 +15,8 @@ import urllib.request
 
 import pytest
 from agent_env.artifact import FileArtifact
+from agentenv_game import MATCH
+from agentenv_game.steps import CancelMatchTaskStep, FinishMatchTaskStep
 from agentenv_protocol import client
 from conftest import new_game
 from mcp import ClientSession
@@ -25,7 +27,7 @@ from agentenv_rts import choices, display, highlights, recording
 from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_rts.seats import Lockstep
 from agentenv_rts.session import RemoteSession, SessionError
-from agentenv_rts.steps import RTSFinishTaskStep, SaveRTSRecordingTaskStep
+from agentenv_rts.steps import SaveRTSRecordingTaskStep
 from agentenv_rts.timeline import Timeline, model_name
 from agentenv_wc3 import frames, metrics, render
 from agentenv_wc3.bridge import WorkerError
@@ -35,8 +37,8 @@ pytestmark = pytest.mark.anyio
 
 
 async def match(record, seats=None, **settings):
-    """A game as a task makes one: create_match opens the lobby, a slot per seat (one agent against the normal AI by
-    default), start_match creates the game."""
+    """A game as a task makes one: open_lobby opens the lobby, a player slot per seat (one agent against the normal AI
+    by default), close_lobby creates the game."""
     return await seat_and_start(await open_match(record, **{"seed": 2, "time_limit_seconds": 60, **settings}), seats)
 
 
@@ -420,7 +422,7 @@ SEATS = [{"agent": "a", "race": "human"}, {"agent": "b", "race": "orc"}]
 async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
     async with deployed(WC3Env()) as record:
         await match(record, SEATS, lockstep={"stall_seconds": 2})
-        a, b = RemoteSession(base(record) + "/players/a"), RemoteSession(base(record) + "/players/b")
+        a, b = RemoteSession(base(record) + "/players/0"), RemoteSession(base(record) + "/players/1")
         seen = await asyncio.to_thread(b.observe)
         assert set(seen["observations"]) == {1} and seen["you"] == 1 and [x["agent"] for x in seen["seats"]] == [
             "a", "b"]
@@ -436,7 +438,7 @@ async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
         assert again["observations"][0]["game_time_seconds"] == 3.0 and time.monotonic() - began < 1.5
         with pytest.raises(SessionError, match="only its own units"):
             await asyncio.to_thread(a.step, {1: []}, 1000)
-        async with streamable_http_client(base(record) + "/players/b/mcp") as (read, write, _), \
+        async with streamable_http_client(base(record) + "/players/1/mcp") as (read, write, _), \
                 ClientSession(read, write) as mcp:
             await mcp.initialize()
             state = (await mcp.call_tool("get_state", {})).content[0].text
@@ -449,8 +451,8 @@ async def test_two_agents_play_their_own_seats_in_lockstep(env_vars):
 async def test_a_realtime_game_starts_once_every_seat_has_moved(env_vars):
     async with deployed(WC3Env()) as record:
         await match(record, SEATS, mode="realtime")
-        a, b = RemoteSession(base(record) + "/players/a"), RemoteSession(base(record) + "/players/b")
-        async with streamable_http_client(base(record) + "/players/b/mcp") as (read, write, _), \
+        a, b = RemoteSession(base(record) + "/players/0"), RemoteSession(base(record) + "/players/1")
+        async with streamable_http_client(base(record) + "/players/1/mcp") as (read, write, _), \
                 ClientSession(read, write) as mcp:
             await mcp.initialize()
             state = (await mcp.call_tool("get_state", {})).content[0].text
@@ -469,22 +471,33 @@ async def test_a_realtime_game_starts_once_every_seat_has_moved(env_vars):
         assert await asyncio.to_thread(waiting) == []
 
 
-async def test_a_hold_keeps_the_game_from_starting_until_it_is_let_go(env_vars):
+async def test_the_match_starts_once_its_players_are_ready_and_says_so(env_vars):
     async with deployed(WC3Env()) as record:
-        await match(record)
+        await match(record, SEATS, lockstep={"stall_seconds": 2})
         url, card = record.environment_url, record.environment_card
-        await client.invoke_extension(url, card, "urn:rts:hold/v1", {"name": "broadcast", "seconds": 30})
-        session = RemoteSession(base(record))
-        first = asyncio.create_task(asyncio.to_thread(session.step, {0: []}, 1000))
-        await asyncio.sleep(1.5)
-        assert not first.done()   # the agent moved; the broadcast is not live yet
-        live = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/data.json")))
-        assert live["live"]["holds"] == ["broadcast"]
-        held = await client.invoke_extension(url, card, "urn:rts:hold/v1", {"name": "broadcast", "hold": False})
-        assert held == {"holds": [], "begun": False}
+        waiting = await client.invoke_extension(url, card, MATCH, method="get")
+        assert waiting["status"] == "not_started" and waiting["progress"] == [
+            {"name": "game", "unit": "seconds", "value": 0.0, "limit": 60}]
+        assert {p: x["status"] for p, x in waiting["player_states"].items()} == {"0": "not_ready", "1": "not_ready"}
+        a = RemoteSession(base(record) + "/players/0")
+        first = asyncio.create_task(asyncio.to_thread(a.step, {0: []}, 1000))
+        await asyncio.sleep(1.0)
+        assert not first.done()   # a moved, and waits for b
+        ready = await client.invoke_extension(url, card, MATCH, {"player_id": "1"}, method="player_ready")
+        assert ready["status"] == "started" and "status_detail" not in ready   # b starts without moving first
         assert (await first)["observations"][0]["game_time_seconds"] == 1.0
-        await client.invoke_extension(url, card, "urn:rts:hold/v1", {"name": "late"})   # under way: no pause
-        assert (await asyncio.to_thread(session.step, {0: []}, 1000))["observations"][0]["game_time_seconds"] == 2.0
+        assert (await client.invoke_extension(url, card, MATCH, method="get"))["progress"][0]["value"] == 1.0
+
+
+async def test_a_silent_player_is_started_without(env_vars):
+    async with deployed(WC3Env()) as record:
+        await match(record, SEATS, lockstep={"stall_seconds": 1})
+        a = RemoteSession(base(record) + "/players/0")
+        assert (await asyncio.to_thread(a.step, {0: []}, 1000))["observations"][0]["game_time_seconds"] == 1.0
+        started = await client.invoke_extension(record.environment_url, record.environment_card, MATCH, method="get")
+    assert (started["status"], started["status_detail"]) == ("started",
+                                                             "started without player slot 1: no first move in 1 s")
+    assert {p: x["status"] for p, x in started["player_states"].items()} == {"0": "undecided", "1": "undecided"}
 
 
 async def test_when_the_game_fails_every_seat_hears_why(env_vars):
@@ -499,7 +512,7 @@ async def test_when_the_game_fails_every_seat_hears_why(env_vars):
             return await real(cmd, **args)
 
         env.bridge.call = call
-        a, b = RemoteSession(base(record) + "/players/a"), RemoteSession(base(record) + "/players/b")
+        a, b = RemoteSession(base(record) + "/players/0"), RemoteSession(base(record) + "/players/1")
         results = await asyncio.gather(asyncio.to_thread(a.step, {0: []}, 1000),
                                        asyncio.to_thread(b.step, {1: []}, 1000), return_exceptions=True)
     assert all(isinstance(r, SessionError) and "game_failed" in str(r) and "no_game" not in str(r) for r in results)
@@ -724,37 +737,38 @@ def test_any_chat_model_answers_choice_questions_in_jevs_shape():
     assert checked["contract_valid"] is True
 
 
-async def finished(rule: str) -> tuple[dict, dict]:
-    """A 60-second game whose agent stopped after 5 s, settled by rts_finish's `rule`: the summary, and its grade."""
+async def ended(step) -> tuple[dict, dict, dict]:
+    """A 60-second game whose agent stopped after 5 s, ended by `step` (finish_match or cancel_match): the summary,
+    the run's metadata once graded, and what a move after the end gets."""
     async with deployed(WC3Env()) as record:
         await match(record)
         session = RemoteSession(base(record))
         for _ in range(5):
             await asyncio.to_thread(session.step, {0: []})
-        context = await RTSFinishTaskStep(id="finish", version=None, env_id="wc3", rule=rule).execute(
-            run_context(record))
+        context = await step(id="end", version=None, env_id="wc3").execute(run_context(record))
         context = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3").execute(context)
         summary = (await client.get_data(base(record))).parts[0].data
-    return summary, context.metadata
+        late = await asyncio.to_thread(session.step, {0: []})
+    return summary, context.metadata, late
 
 
 async def test_a_game_its_agents_left_is_played_out_to_its_end(env_vars):
-    summary, metadata = await finished("play_out")
+    summary, metadata, _ = await ended(FinishMatchTaskStep)
     assert summary["game_over"] and summary["result"] == "time_limit" and summary["game_time_seconds"] == 60
-    assert summary["harness"]["finish_seconds"] == 55 and summary["harness"]["idle_seconds"] == 0
-    assert summary["finish"] == metadata["rts_finish"]["finish"] == {
-        "rule": "play_out", "from_seconds": 5.0, "to_seconds": 60.0, "open_seats": [{"slot": 0, "agent": "wc3"}],
-        "game_over": True}
+    assert summary["harness"]["finish_seconds"] == 55
+    final = metadata["game_match"]
+    assert (final["status"], final["status_detail"]) == ("finished", "the time limit, 1:00; played out from 0:05")
+    assert final["progress"] == [{"name": "game", "unit": "seconds", "value": 60.0, "limit": 60}]
+    assert {p: x["status"] for p, x in final["player_states"].items()} == {"0": "undecided", "1": "undecided"}
+    assert [x["name"] for x in final["player_states"]["0"]["scores"]] == ["score", "units_killed", "army"]
     rows = {r["name"]: r for r in metadata["verifications"]["grade"]["results"]}
     assert rows["agent_played"]["result"] is False   # it sent no orders: finishing the game is not playing it
-    assert rows["finish"]["weight"] == 0 and "stopped before the end (last move at 4.0 s)" in rows["finish"]["evidence"]
+    assert rows["finish"]["weight"] == 0 and rows["finish"]["evidence"] == (
+        "the match finished: the time limit, 1:00; played out from 0:05; this player's last move at 4.0 s")
 
 
-async def test_a_forfeit_loses_now_and_as_is_leaves_the_game_alone(env_vars):
-    summary, _ = await finished("forfeit")
-    assert summary["game_over"] and summary["result"] == "defeat" and summary["game_time_seconds"] == 5
-    assert [(x["result"], x["forfeit"]) for x in summary["seats"]] == [("defeat", True), ("victory", False)]
-    summary, _ = await finished("as_is")
-    assert not summary["game_over"] and summary["game_time_seconds"] == 5 and summary["finish"]["rule"] == "as_is"
-    with pytest.raises(ValueError, match="rule must be one of"):
-        RTSFinishTaskStep(id="finish", version=None, env_id="wc3", rule="resign")
+async def test_cancel_match_leaves_the_game_where_it_stopped(env_vars):
+    summary, metadata, late = await ended(CancelMatchTaskStep)
+    assert not summary["game_over"] and summary["game_time_seconds"] == 5
+    assert metadata["game_match"]["status"] == "cancelled" and "status_detail" not in metadata["game_match"]
+    assert late["done"] and late["elapsed_ms"] == 0   # over for its players too: a move changes nothing
