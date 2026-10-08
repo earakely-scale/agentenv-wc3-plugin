@@ -205,7 +205,7 @@ and keeps its video as an artifact of the run:
 | Task | Who plays | Game | Measured on the real game |
 |---|---|---|---|
 | `smoke` | nobody: `finish_match` plays the game out | 2 minutes | 40 s, $0 |
-| `broadcast-smoke` | two `wc3-scripted` agents (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per player | 2 min, $0; red 0.25, blue 0.43, the same both times it ran; a 1080p broadcast of 105 s |
+| `broadcast-smoke` | two `wc3-scripted` agents (attack and raid), staged armies, a recorded broadcast in the game's own picture | 2 minutes, stepped in lockstep, graded per player | 4 min, $0; red 0.25, blue 0.43, the same every time it ran; a 1080p broadcast of about 2 minutes |
 | `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k. In `first-eval`, 6 games: 0.44 ± 0.01, $0.11 a game |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
