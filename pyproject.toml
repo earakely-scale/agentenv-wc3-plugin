@@ -17,7 +17,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # wc3env is not a dependency: the env image has it (Windows Python under Wine for the game, its sources for the
-# server's game data), and tests install it from a checkout (CONTRIBUTING.md).
+# server's game data), and tests put a checkout's sources on the path (README: Development).
 dependencies = [
     "agentenv-framework>=0.9.1260",
     "agentenv-framework-protocol>=0.1.275,<0.2",

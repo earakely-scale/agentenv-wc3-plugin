@@ -1,7 +1,7 @@
 """`agent-env wc3`: check what a Warcraft III env needs on this machine, build and register the env from your
 wc3env worker image (or on wc3env's fake game, on any machine), build and register the wc3-macro-micro and
-wc3-scripted agents, serve the env locally against the fake game, watch a running game live, and stream it to Twitch
-or X."""
+wc3-scripted agents, serve the env locally against the fake game, watch a running game live, and copy a run's match
+files and broadcast into one folder."""
 
 from __future__ import annotations
 

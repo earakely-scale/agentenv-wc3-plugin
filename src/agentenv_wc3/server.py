@@ -1,5 +1,5 @@
 """Warcraft III as an AgentEnv environment: an agent plays one side of a melee game against the game's own AI,
-through raw wc3env orders (docs/tools.md).
+through raw wc3env orders (README: How it works).
 
 The game runs in a worker process (worker.py): in the image, Windows Python under Wine driving wc3env, which
 holds the game's clock. Time only passes when the agent calls `advance`, so the agent may think as long as it
@@ -135,7 +135,7 @@ NOTE_CHARS = 400
 OVERLAY = {"x": -1.0, "y": 1.0, "seconds": 9}   # a plan shows top left in the game's picture, under its resources
 
 FILE_KINDS = (*rts_recording.KINDS, "replay")
-"""What a finished match keeps (docs/tools.md): the recording's kinds, and the game's native replay (.w3g)."""
+"""What a finished match keeps (README: Reference): the recording's kinds, and the game's native replay (.w3g)."""
 DEFAULT_FILE_KINDS = ("map_video", "html_replay", "timeline", "replay")
 STAGE_EXTENSION = "urn:wc3:stage/v1"
 STAGE_OPS = ("spawn", "level", "give", "item", "hp", "mana", "kill", "remove", "resources", "ai", "research",
@@ -143,7 +143,7 @@ STAGE_OPS = ("spawn", "level", "give", "item", "hp", "mana", "kill", "remove", "
 
 
 class Action(BaseModel):
-    """One order to one of your units, as wc3env takes it (docs/tools.md has every command's arguments)."""
+    """One order to one of your units, as wc3env takes it (wc3env's docs have every command's arguments)."""
 
     model_config = ConfigDict(extra="forbid")
     unit_id: Annotated[int, Field(description="The unit or structure that acts: an id from get_state or list_units.")]

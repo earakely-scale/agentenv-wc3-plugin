@@ -1,6 +1,6 @@
 # The Warcraft III env: this plugin's MCP server on top of your own wc3env worker image, which holds Wine, Windows
 # Python with wc3env, and your game files. No image is distributed: `agent-env wc3 setup` builds this one locally
-# from yours, and it must stay private. The activation files never enter it: the wc3_match step sends them at run
+# from yours, and it must stay private. The activation files never enter it: the add_license step sends them at run
 # time (or mount them at /run/wc3-license, as wc3env's own image takes them).
 #   Build: agent-env wc3 setup   (docker build --platform linux/amd64 --build-arg BASE=wc3-worker:local .)
 ARG BASE=wc3-worker:local
