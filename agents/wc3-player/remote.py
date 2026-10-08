@@ -3,7 +3,7 @@ runner uses it (reset, step, observations, debug, save_replay, config, close), o
 (agentenv_rts.session), and its micro transport (Jev's `timed_call`) answered by any chat model.
 
 The env already holds the game the task's close_lobby created: `reset` only observes it, and the replay is the task's
-to save (save_wc3_replay), so `save_replay` declines. wc3agent plays player 0; at a player slot (the env's replies
+to save (save_match_files), so `save_replay` declines. wc3agent plays player 0; at a player slot (the env's replies
 give its player_id) its player number and 0 trade places both ways, so player 0 is always its own.
 """
 
@@ -50,7 +50,7 @@ class RemoteGameSession:
         return self.remote.debug(op, **args)
 
     def save_replay(self, path):
-        raise RuntimeError("the task saves this game's replay (save_wc3_replay)")
+        raise RuntimeError("the task saves this game's replay (save_match_files)")
 
     def close(self) -> None:
         pass

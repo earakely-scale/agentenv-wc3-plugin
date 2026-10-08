@@ -123,10 +123,12 @@ async def test_data_get_and_new_game(env):
         await new_game(env, [{"agent": "wc3"}, {"computer": "godlike"}])
 
 
-async def test_replay_needs_a_finished_game(env):
-    await env.data_get()
-    with pytest.raises(RuntimeError, match="not over"):
-        await env.replay()
+async def test_a_cancelled_game_keeps_its_timeline_but_no_replay(env):
+    await new_game(env)
+    env.cancel_match()
+    kept = await env.list_match_files(["replay", "timeline"])
+    assert [f["kind"] for f in kept["files"]] == ["timeline"]
+    assert kept["notes"] == ["no replay: the game did not reach its end"]
 
 
 def test_render_events_fold_attacks():

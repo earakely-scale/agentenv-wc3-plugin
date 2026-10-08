@@ -1,9 +1,9 @@
-"""A finished game's recording from its Timeline: an MP4 of the map, a frame per step (Pillow draws, ffmpeg
-encodes), the spectator page with the whole game embedded, which plays in any browser, and the game's own picture
-when the env captured it (display.py), with chapters and a highlight reel (highlights.py); and the timeline itself
-as JSON (every frame: units, events, notes), to recut or analyse a game without playing it again. `files()` writes
-them to a folder the env serves; `urn:rts:recording/v1` lists them and the `save_rts_recording` step fetches each
-one into a file artifact, so a long game's video never travels inside a reply."""
+"""A finished game's recording from its Timeline, by kind: `map_video`, an MP4 of the map, a frame per step (Pillow
+draws, ffmpeg encodes); `html_replay`, the spectator page with the whole game embedded, which plays in any browser;
+`timeline`, the timeline itself as JSON (every frame: units, events, notes), to recut or analyse a game without
+playing it again; and, when the env captured the game's own picture (display.py), `client_video` with chapters and
+`highlights`, a reel cut from it (highlights.py). `files()` writes them to a folder, for the env's match files
+(agentenv_game's `@match_files`), which agentenv_game's `save_match_files` step keeps."""
 
 from __future__ import annotations
 
@@ -16,22 +16,23 @@ from pathlib import Path
 from . import highlights, live
 from .timeline import NEUTRAL, Timeline
 
-RECORDING = "urn:rts:recording/v1"
+KINDS = ("map_video", "html_replay", "timeline", "client_video", "highlights")
 TERRAIN = [(47, 74, 42), (70, 69, 47), (31, 68, 102), (18, 20, 24)]
 WIDTH = 960
 BAR = 64
 FPS = 10
 
 
-def files(timeline: Timeline, out: Path, stem: str, formats: tuple[str, ...] = ("mp4", "html", "timeline"),
+def files(timeline: Timeline, out: Path, stem: str, kinds: tuple[str, ...] = ("map_video", "html_replay", "timeline"),
           client: Path | None = None) -> tuple[list[dict], list[str]]:
-    """Writes the recording into the folder `out`: its files as `{"name", "content_type", "bytes"}`, and notes on
-    what could not be made. `client` is the game's own video: the `client` file, with the game's chapters, and what
-    `highlights` cuts its reel from. The `html` replay plays it beside the map when both are in the recording."""
+    """Writes the recording's `kinds` into the folder `out`: its files as `{"name", "kind", "content_type", "path"}`,
+    and notes on what could not be made. `client` is the game's own video: the `client_video`, with the game's
+    chapters, and what `highlights` cuts its reel from. The `html_replay` plays it beside the map when both are
+    kept."""
     out.mkdir(parents=True, exist_ok=True)
     made, notes = [], []
     video = client if client is not None and client.is_file() else None
-    if "client" in formats:
+    if "client_video" in kinds:
         if video is None:
             notes.append("no client video: the game was played without its picture (client_view)")
         else:
@@ -41,31 +42,31 @@ def files(timeline: Timeline, out: Path, stem: str, formats: tuple[str, ...] = (
             except highlights.HighlightsError as e:
                 notes.append(f"client video without chapters: {e}")
                 shutil.copyfile(video, path)
-            made.append(_made(path, "video/mp4"))
-    if "highlights" in formats:
+            made.append(_made(path, "client_video", "video/mp4"))
+    if "highlights" in kinds:
         if video is None:
             notes.append("no highlights: they are cut from the client video (client_view)")
         else:
             path = out / f"{stem}-highlights.mp4"
             try:
                 highlights.reel(timeline, video, path)
-                made.append(_made(path, "video/mp4"))
+                made.append(_made(path, "highlights", "video/mp4"))
             except highlights.HighlightsError as e:
                 path.unlink(missing_ok=True)
                 notes.append(f"no highlights: {e}")
-    if "html" in formats:
-        beside = f"{stem}-client.mp4" if video is not None and "client" in formats else None
+    if "html_replay" in kinds:
+        beside = f"{stem}-client.mp4" if video is not None and "client_video" in kinds else None
         (path := out / f"{stem}.html").write_text(live.standalone(timeline, beside), encoding="utf-8")
-        made.append(_made(path, "text/html"))
-    if "timeline" in formats:
+        made.append(_made(path, "html_replay", "text/html"))
+    if "timeline" in kinds:
         (path := out / f"{stem}-timeline.json").write_text(json.dumps(timeline.doc(), separators=(",", ":")),
                                                             encoding="utf-8")
-        made.append(_made(path, "application/json"))
-    if "mp4" in formats:
+        made.append(_made(path, "timeline", "application/json"))
+    if "map_video" in kinds:
         path = out / f"{stem}.mp4"
         try:
             mp4(timeline, path)
-            made.append(_made(path, "video/mp4"))
+            made.append(_made(path, "map_video", "video/mp4"))
         except RecordingError as e:
             path.unlink(missing_ok=True)
             notes.append(f"no MP4: {e}")
@@ -76,8 +77,8 @@ class RecordingError(RuntimeError):
     pass
 
 
-def _made(path: Path, content_type: str) -> dict:
-    return {"name": path.name, "content_type": content_type, "bytes": path.stat().st_size}
+def _made(path: Path, kind: str, content_type: str) -> dict:
+    return {"name": path.name, "kind": kind, "content_type": content_type, "path": path}
 
 
 def mp4(timeline: Timeline, path: Path) -> None:

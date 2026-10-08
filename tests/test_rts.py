@@ -1,5 +1,5 @@
 """The RTS pieces (agentenv_rts) on the WC3 env served over HTTP, on wc3env's fake game: a program playing through
-the urn:rts session, the spectator's live data and page, the recording and its task step, the game's own picture
+the urn:rts session, the spectator's live data, page and view, the match's files, the game's own picture
 (display capture, camera), and the choice-question transport any chat model answers in Jev's shape."""
 
 import asyncio
@@ -16,7 +16,7 @@ import urllib.request
 import pytest
 from agent_env.artifact import FileArtifact
 from agentenv_game import MATCH
-from agentenv_game.steps import CancelMatchTaskStep, FinishMatchTaskStep
+from agentenv_game.steps import CancelMatchTaskStep, FinishMatchTaskStep, SaveMatchFilesTaskStep
 from agentenv_protocol import client
 from conftest import new_game
 from mcp import ClientSession
@@ -27,7 +27,6 @@ from agentenv_rts import choices, display, highlights, recording
 from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_rts.lockstep import Lockstep
 from agentenv_rts.session import RemoteSession, SessionError
-from agentenv_rts.steps import SaveRTSRecordingTaskStep
 from agentenv_rts.timeline import Timeline, model_name
 from agentenv_wc3 import frames, metrics, render
 from agentenv_wc3.bridge import WorkerError
@@ -90,6 +89,14 @@ async def test_spectators_follow_the_game_live(env_vars):
         await match(record)
         page = await asyncio.to_thread(lambda: urllib.request.urlopen(base(record) + "/live").read().decode())
         assert "window.RTS_DATA = " not in page and "function draw()" in page   # live: nothing embedded
+        assert (await client.invoke_extension(base(record), record.environment_card, MATCH, method="get"))[
+            "spectator_url"] == "/spectators"
+        card = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(
+            base(record) + "/spectators/.well-known/agent-env.json")))
+        assert card["name"] == "wc3/spectators" and card["additionalInterfaces"] == [
+            {"url": "/live?view", "transport": "http"}]
+        view = await asyncio.to_thread(lambda: urllib.request.urlopen(base(record) + "/spectators/live?view").read())
+        assert view.decode() == page
         session = RemoteSession(base(record))
         for _ in range(3):
             await asyncio.to_thread(session.step, {0: []})
@@ -110,38 +117,24 @@ async def test_spectators_follow_the_game_live(env_vars):
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="the MP4 needs ffmpeg")
-async def test_the_recording_is_saved_as_file_artifacts(env_vars, local_stores):
+async def test_the_finished_matchs_files_are_saved_as_file_artifacts(env_vars, local_stores):
     async with deployed(WC3Env()) as record:
-        await match(record)
+        context = await match(record)
         session = RemoteSession(base(record))
         for _ in range(4):
             await asyncio.to_thread(session.step, {0: []})
-        context = await SaveRTSRecordingTaskStep(id="recording", version=None, env_id="wc3").execute(
-            run_context(record))
-    saved = context.metadata["recordings"]["recording"]
-    assert sorted(f["name"].rpartition(".")[2] for f in saved) == ["html", "json", "mp4"]
-    load = {f["name"].rpartition(".")[2]: FileArtifact.get(f["artifact_id"], f["version"]).load() for f in saved}
-    assert load["mp4"][4:8] == b"ftyp"
-    html = load["html"]
-    assert b"window.RTS_DATA = {" in html and b"</script>" in html
-    timeline = json.loads(load["json"])
-    assert timeline["static"]["game"] and len(timeline["frames"]) == 5 and timeline["frames"][-1]["t"] == 4.0
-
-
-async def test_each_file_of_the_recording_is_its_own_artifact(env_vars, local_stores, monkeypatch):
-    names = ["g-client.mp4", "g-highlights.mp4", "g.mp4"]
-
-    async def invoke(url, card, uri, params, timeout=None):
-        return {"files": [{"name": n, "content_type": "video/mp4", "base64": base64.b64encode(n.encode()).decode()}
-                          for n in names]}
-
-    monkeypatch.setattr(client, "invoke_extension", invoke)
-    async with deployed(WC3Env()) as record:
-        context = await SaveRTSRecordingTaskStep(id="recording", version=None, env_id="wc3",
-                                                 formats=["client", "highlights", "mp4"]).execute(run_context(record))
-    saved = context.metadata["recordings"]["recording"]
-    assert [FileArtifact.get(f["artifact_id"], f["version"]).load() for f in saved] == [n.encode() for n in names]
-    assert len({f["artifact_id"] for f in saved}) == 3 and {f["version"] for f in saved} == {1}
+        await FinishMatchTaskStep(id="finish", version=None, env_id="wc3").execute(context)
+        context = await SaveMatchFilesTaskStep(id="files", version=None, env_id="wc3").execute(context)
+        with pytest.raises(RuntimeError, match="Warcraft III keeps map_video, .* not \\['jpeg'\\]"):
+            await SaveMatchFilesTaskStep(id="bad", version=None, env_id="wc3", kinds=["jpeg"]).execute(context)
+    saved = context.metadata["match_files"]["files"]
+    assert sorted(f["kind"] for f in saved) == ["html_replay", "map_video", "timeline"]   # the fake game: no replay
+    load = {f["kind"]: FileArtifact.get(f["artifact_id"], f["version"]).load() for f in saved}
+    assert load["map_video"][4:8] == b"ftyp"
+    assert b"window.RTS_DATA = {" in load["html_replay"] and b"</script>" in load["html_replay"]
+    timeline = json.loads(load["timeline"])
+    assert timeline["static"]["game"] and timeline["frames"][-1]["t"] >= 4.0
+    assert all(f["name"].startswith("wc3-2EchoIsles-g-") for f in saved)
 
 
 async def test_client_view_on_the_fake_game_leaves_the_map_alone(env_vars, local_stores):
@@ -152,9 +145,10 @@ async def test_client_view_on_the_fake_game_leaves_the_map_alone(env_vars, local
         with pytest.raises(urllib.error.HTTPError, match="404"):
             await asyncio.to_thread(urllib.request.urlopen, base(record) + "/live/client.jpg")
         assert (await client.get_data(base(record))).parts[0].data["client_view"] is True
-        context = await SaveRTSRecordingTaskStep(id="recording", version=None, env_id="wc3",
-                                                 formats=["client"]).execute(run_context(record))
-    assert context.metadata["recordings"]["recording"] == []
+        context = await CancelMatchTaskStep(id="cancel", version=None, env_id="wc3").execute(run_context(record))
+        context = await SaveMatchFilesTaskStep(id="files", version=None, env_id="wc3",
+                                               kinds=["client_video"]).execute(context)
+    assert context.metadata["match_files"]["files"] == []
 
 
 async def test_players_tell_spectators_their_names_plans_and_costs(env_vars):
@@ -169,15 +163,10 @@ async def test_players_tell_spectators_their_names_plans_and_costs(env_vars):
         with pytest.raises(SessionError, match="kind must be"):
             await asyncio.to_thread(session.note, "gossip", "hi")
         doc = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/data.json")))
-        cast = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/casting.json")))
-        state = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(base(record) + "/live/state.json")))
     assert [p["label"] for p in doc["static"]["players"]] == ["Claude Sonnet 5.5 + Haiku 4.5", "Orc AI (normal)"]
     last = doc["frames"][-1]
     assert last["notes"] == [{"slot": 0, "kind": "plan", "text": "Mine gold, then a Barracks."}]
     assert last["players"]["0"]["agent"] == {"cost_usd": 0.42, "decisions": 12}
-    assert cast["players"][0]["label"] == "Claude Sonnet 5.5 + Haiku 4.5" and "Warcraft III" in cast["desk"]
-    assert cast["notes"][0]["text"] == "Mine gold, then a Barracks." and cast["clock"]["limit"] == 60
-    assert cast["history"] and state == {"game_over": False, "result": "", "t": 1.0, "client": False}
 
 
 REF = render.Reference({"units": {"hfoo": {"name": "Footman", "gold": 135, "lumber": 0},
@@ -274,9 +263,9 @@ async def test_the_games_picture_is_a_video_and_a_live_stream(tmp_path):
     finally:
         video = capture.stop()
     assert video.read_bytes()[4:8] == b"ftyp" and not capture.running
-    files, notes = recording.files(Timeline({"game": "g"}), tmp_path / "rec", "g", ("client",), video)
-    assert [f["name"] for f in files] == ["g-client.mp4"] and notes == []
-    assert files[0]["bytes"] == (tmp_path / "rec" / "g-client.mp4").stat().st_size > 0
+    files, notes = recording.files(Timeline({"game": "g"}), tmp_path / "rec", "g", ("client_video",), video)
+    assert [(f["name"], f["kind"]) for f in files] == [("g-client.mp4", "client_video")] and notes == []
+    assert files[0]["path"] == tmp_path / "rec" / "g-client.mp4" and files[0]["path"].stat().st_size > 0
 
 
 EXPANSION = "Claude expanded: a Town Hall at the gold mine; east = far from home, and then some"
@@ -352,7 +341,7 @@ def test_the_recording_has_chapters_a_highlight_reel_and_a_replay_beside_the_vid
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                     "testsrc=size=160x90:rate=10", "-t", "100", "-c:v", "libx264", "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p", str(video)], check=True)
-    files, notes = recording.files(played(), tmp_path, "g", ("client", "highlights", "html"), video)
+    files, notes = recording.files(played(), tmp_path, "g", ("client_video", "highlights", "html_replay"), video)
     assert [f["name"] for f in files] == ["g-client.mp4", "g-highlights.mp4", "g.html"] and notes == []
     chapters = ffprobe(tmp_path / "g-client.mp4", "-show_chapters")["chapters"]
     assert [(c["start"], c["tags"]["title"]) for c in chapters] == [
@@ -368,13 +357,13 @@ def test_the_recording_has_chapters_a_highlight_reel_and_a_replay_beside_the_vid
     assert embedded((tmp_path / "g.html").read_bytes())["video"] == "g-client.mp4"
     assert highlights.reel(played(), video, tmp_path / "short.mp4", max_seconds=30) == [(26.0, 49.0), (65.0, 72.0)]
     assert highlights.duration(tmp_path / "short.mp4") <= 30.05
-    files, notes = recording.files(played(), tmp_path / "b", "g", ("highlights", "html"), video)
+    files, notes = recording.files(played(), tmp_path / "b", "g", ("highlights", "html_replay"), video)
     assert [f["name"] for f in files] == ["g-highlights.mp4", "g.html"] and notes == []
     assert "video" not in embedded((tmp_path / "b" / "g.html").read_bytes())
     files, notes = recording.files(played(), tmp_path / "c", "g", ("highlights",))
     assert files == [] and notes == ["no highlights: they are cut from the client video (client_view)"]
     (broken := tmp_path / "broken.mp4").write_bytes(b"no video")
-    files, notes = recording.files(played(), tmp_path / "d", "g", ("client", "highlights"), broken)
+    files, notes = recording.files(played(), tmp_path / "d", "g", ("client_video", "highlights"), broken)
     assert [(f["name"], (tmp_path / "d" / f["name"]).read_bytes()) for f in files] == [("g-client.mp4", b"no video")]
     assert sorted(p.name for p in (tmp_path / "d").iterdir()) == ["g-client.mp4"]
     assert [n.partition(": ")[0] for n in notes] == ["client video without chapters", "no highlights"]
@@ -394,7 +383,7 @@ def test_the_camera_follows_the_agents_fighting():
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="the MP4 needs ffmpeg")
-async def test_a_runs_recording_is_copied_into_one_folder(env_vars, local_stores, tmp_path):
+async def test_a_runs_match_files_and_broadcast_are_copied_into_one_folder(env_vars, local_stores, tmp_path):
     from agent_env.config import get_config
     from agent_env.task.store import TASK_INSTANCES_COLLECTION
     from click.testing import CliRunner
@@ -402,16 +391,19 @@ async def test_a_runs_recording_is_copied_into_one_folder(env_vars, local_stores
     from agentenv_wc3.cli import wc3
 
     async with deployed(WC3Env()) as record:
-        await match(record)
+        context = await match(record)
         await asyncio.to_thread(RemoteSession(base(record)).step, {0: []})
-        context = await SaveRTSRecordingTaskStep(id="recording", version=None, env_id="wc3").execute(
-            run_context(record))
+        await FinishMatchTaskStep(id="finish", version=None, env_id="wc3").execute(context)
+        context = await SaveMatchFilesTaskStep(id="files", version=None, env_id="wc3").execute(context)
+    video = FileArtifact.put_bytes("i1-broadcast-stream.mp4", description="a broadcast", filename="stream.mp4",
+                                   content=b"\0\0\0\x18ftypisom")
     get_config().get_document_store().insert(TASK_INSTANCES_COLLECTION, {
         "instance_id": "wc3-smoke-abc", "task_id": "wc3-smoke", "created_at_utc": "2026-10-05 18:17 UTC",
-        "context": {"metadata": {"recordings": context.metadata["recordings"]}}})
+        "context": {"metadata": {"match_files": context.metadata["match_files"], "broadcasts": {"broadcast": {
+            "videos": [{"name": "stream.mp4", "artifact_id": video.id, "version": video.version}]}}}}})
     result = CliRunner().invoke(wc3, ["recordings", "--out", str(tmp_path / "match")])
     assert result.exit_code == 0, result.output
-    assert sorted(p.suffix for p in (tmp_path / "match").iterdir()) == [".html", ".json", ".mp4"]
+    assert sorted(p.suffix for p in (tmp_path / "match").iterdir()) == [".html", ".json", ".mp4", ".mp4"]
     assert "wc3-smoke-abc" in result.output and "Open " in result.output
     assert CliRunner().invoke(wc3, ["recordings", "nope", "--out", str(tmp_path / "x")]).exit_code != 0
 

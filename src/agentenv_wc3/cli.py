@@ -15,7 +15,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import tomllib
 import urllib.parse
 import urllib.request
@@ -24,8 +23,6 @@ from pathlib import Path
 import click
 import yaml
 from agent_env.config import get_config
-
-from agentenv_rts import broadcast
 
 from . import drills, license, sweep
 
@@ -313,7 +310,8 @@ def _live_views() -> list[tuple[str, str]]:
 @click.option("--open", "open_page", is_flag=True, help="Open the newest game's live view in the browser.")
 def watch(open_page: bool):
     """Print the live view of every Warcraft III game running in Docker, newest first: the map, every unit in view,
-    each player's resources and what happened, as the game plays (add ?stream for a 1920x1080 broadcast layout)."""
+    each player's resources and what happened, as the game plays (add ?view for the game alone, as a broadcast frames
+    it)."""
     views = _live_views()
     for url, name in views:
         click.echo(f"{url}  ({name})")
@@ -324,86 +322,13 @@ def watch(open_page: bool):
 
 
 @wc3.command()
-@click.option("--url", help="The live view to stream. Default: the newest wc3 env in Docker with a game under way; "
-                            "the command waits for one to start.")
-@click.option("--to", "destinations", multiple=True, type=click.Choice(["twitch", "x"]), default=("twitch",),
-              show_default=True,
-              help="Where the stream goes; repeat it to send one stream to both, e.g. --to twitch --to x. X takes the "
-                   "server URL and stream key of a Live Studio source; press Go Live there once the stream has "
-                   "started.")
-@click.option("--server", default="rtmp://live.twitch.tv/app", show_default=True,
-              help="Twitch's RTMP ingest server, or any other RTMP server to stream to instead; the stream key is "
-                   "appended to it.")
-@click.option("--key-secret", default=broadcast.STREAM_KEY, show_default=True,
-              help="The secret that holds that server's stream key, from agent-env's secret store ([stores.secret] in "
-                   ".agentenv/config.toml) or an environment variable of that name.")
-@click.option("--x-server-secret", default=broadcast.X_SERVER, show_default=True,
-              help="The secret that holds the server URL of X's Live Studio source.")
-@click.option("--x-key-secret", default=broadcast.X_STREAM_KEY, show_default=True,
-              help="The secret that holds the stream key of X's Live Studio source.")
-@click.option("--size", default="1920x1080", show_default=True, help="The stream's resolution.")
-@click.option("--fps", default=30, show_default=True)
-@click.option("--bitrate", default="4500k", show_default=True)
-@click.option("--linger", default=60, show_default=True, help="Seconds to keep streaming the end of the game.")
-@click.option("--cast/--no-cast", default=True, show_default=True,
-              help="Two AI casters talk over the game, voiced and captioned, through agent-env's model endpoint "
-                   "([model] in .agentenv/config.toml).")
-@click.option("--caster-model", default=broadcast.CASTER_MODEL, show_default=True,
-              help="The model that writes their lines.")
-@click.option("--title", help="The broadcast's title, on screen and in the casters' intro.")
-@click.option("--record", "record_dir", type=click.Path(file_okay=False, path_type=Path),
-              help="Also write the stream to DIR/stream-<UTC time>.mp4.")
-@click.option("--offline", is_flag=True, help="Only record (with --record): nothing goes to Twitch or X.")
-@click.option("--test", "bandwidth_test", is_flag=True,
-              help="Send to Twitch without going live (its bandwidth test): the stream shows only in Twitch Inspector.")
-def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secret: str, x_server_secret: str,
-           x_key_secret: str, size: str, fps: int, bitrate: str, linger: int, cast: bool, caster_model: str,
-           title: str | None, record_dir: Path | None, offline: bool, bandwidth_test: bool):
-    """Stream a game's live view (/live?stream) to Twitch, X or any RTMP server, or to several at once, while the
-    agent plays it, and optionally record it. A headless browser in Docker shows the page and ffmpeg sends it; the
-    stream starts with the game and ends after GAME OVER."""
-    if offline and record_dir is None:
-        raise click.UsageError("--offline only records: add --record DIR")
-    show = broadcast.Broadcast(destinations=() if offline else tuple(destinations), server=server,
-                               key_secret=key_secret, x_server_secret=x_server_secret, x_key_secret=x_key_secret,
-                               size=size, fps=fps, bitrate=bitrate, linger=linger, cast=cast,
-                               caster_model=caster_model, title=title, bandwidth_test=bandwidth_test)
-    try:
-        where, env, image = show.targets()[1], show.environment(), broadcast.image()
-        if not broadcast.image_exists(image):
-            click.echo(f"Building {image} from {broadcast.STREAMER}")
-            broadcast.build(image)
-    except broadcast.BroadcastError as e:
-        raise click.ClickException(str(e)) from e
-    if url is None:
-        click.echo("Waiting for a Warcraft III game to start (agent-env run wc3 --task ...)")
-        while (url := next((u for u, _ in _live_views() if broadcast.ready(u)), None)) is None:
-            time.sleep(5)
-    elif not broadcast.ready(url):
-        click.echo(f"Waiting for the game at {url} to start")
-        while not broadcast.ready(url):
-            time.sleep(5)
-    if record_dir is not None:
-        record_dir.mkdir(parents=True, exist_ok=True)
-        where.append(f"into {record_dir}")
-    click.echo(f"Streaming {url} {' and '.join(where)}{', with the casters' if cast else ''}; Ctrl-C ends the stream")
-    run = subprocess.Popen(show.command(url, image, record_dir), env={**os.environ, **env})
-    try:
-        code = run.wait()
-    except KeyboardInterrupt:   # docker passes Ctrl-C on: the streamer ends the stream and finishes the recording
-        code = run.wait()
-    if code:
-        raise click.ClickException(f"the stream ended with an error ({code})")
-
-
-@wc3.command()
 @click.argument("instance", required=False)
 @click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path), default=Path("recordings"),
               show_default=True, help="The folder to copy them into.")
 def recordings(instance: str | None, out_dir: Path):
-    """Copy a run's recording and replay into one folder: the game's video, its highlight reel, the map's video, the
-    HTML replay (which plays the game's video beside the map) and the .w3g. INSTANCE is the one `agent-env run`
-    printed; without it, the newest run that saved any."""
+    """Copy a run's match files and broadcast video into one folder: the game's video, its highlight reel, the map's
+    video, the HTML replay (which plays the game's video beside the map), the .w3g and the broadcast. INSTANCE is the
+    one `agent-env run` printed; without it, the newest run that saved any."""
     from agent_env.artifact import FileArtifact
     from agent_env.store.document_store import Filter, Sort
     from agent_env.store.routing import namespace_routing
@@ -416,8 +341,8 @@ def recordings(instance: str | None, out_dir: Path):
         saved = []
         for doc in found:
             metadata = (doc.get("context") or {}).get("metadata") or {}
-            saved = [f for key in ("recordings", "replays") for files in (metadata.get(key) or {}).values()
-                     for f in files]
+            saved = [*(f for files in (metadata.get("match_files") or {}).values() for f in files),
+                     *(f for b in (metadata.get("broadcasts") or {}).values() for f in b.get("videos") or ())]
             if saved:
                 break
         if not saved:

@@ -14,8 +14,7 @@ from agentenv_wc3.cli import wc3
 TASKS = Path(__file__).resolve().parents[1] / "src/agentenv_wc3/bundles/wc3/tasks"
 DRILLS = sorted(p.stem for p in TASKS.glob("drill-*.json"))
 STEP_TYPES = {"deploy_env", "deploy_agent", "add_license", "open_lobby", "add_player_slot", "close_lobby",
-              "apply_server_config", "prompt_agent", "finish_match", "rts_grade", "save_wc3_replay",
-              "save_rts_recording"}
+              "apply_server_config", "prompt_agent", "finish_match", "rts_grade", "save_match_files"}
 
 
 def definition(name: str) -> dict:
@@ -76,14 +75,13 @@ def test_fight_even_is_the_design_docs_drill():
             {"metric": "hero_alive", "op": "==", "value": True},
             {"metric": "unspent_skill_points", "op": "<=", "value": 0},
             {"metric": "units_lost", "op": "<=", "value": 4}], "verifier_id": "drill", "depends_on": ["finish"]},
-        {"id": "replay", "type": "save_wc3_replay", "env_id": "wc3", "depends_on": ["grade"]},
-        {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}]
+        {"id": "files", "type": "save_match_files", "env_id": "wc3", "depends_on": ["grade"]}]
 
 
 def test_a_computer_opponent_is_a_computer_player_slot_with_its_ai_paused_by_the_stage():
     steps = steps_of("expansion")
     assert list(steps) == ["deploy", "agent", "license", "match", "slot-wc3", "slot-ai", "start", "stage", "play",
-                           "finish", "grade", "replay", "recording"]
+                           "finish", "grade", "files"]
     assert steps["slot-wc3"]["game_settings"] == {"faction": "human"}
     assert (steps["slot-ai"]["player_kind"], steps["slot-ai"]["game_settings"]) == (
         "ai", {"faction": "orc", "ai_level": "easy"})

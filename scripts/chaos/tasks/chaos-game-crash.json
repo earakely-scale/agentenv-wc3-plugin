@@ -141,9 +141,8 @@
   },
   {
     "id": "broadcast",
-    "type": "rts_broadcast",
+    "type": "start_broadcast",
     "env_id": "wc3",
-    "cast": false,
     "title": "chaos-game-crash",
     "depends_on": [
       "stage"
@@ -184,7 +183,7 @@
   },
   {
     "id": "save-broadcast",
-    "type": "save_rts_broadcast",
+    "type": "save_broadcast",
     "env_id": "wc3",
     "broadcast": "broadcast",
     "stall_seconds": 90,
@@ -203,16 +202,8 @@
     ]
   },
   {
-    "id": "replay",
-    "type": "save_wc3_replay",
-    "env_id": "wc3",
-    "depends_on": [
-      "grade"
-    ]
-  },
-  {
-    "id": "recording",
-    "type": "save_rts_recording",
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "wc3",
     "depends_on": [
       "grade"

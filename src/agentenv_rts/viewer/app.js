@@ -3,19 +3,19 @@
 // recording embeds (window.RTS_DATA). Game-agnostic: it draws timeline.py's static map and frames. When the env
 // captures the game's own picture (live.client), that is the main view and the map becomes the minimap beside it.
 // Beside them: what the players say they are planning (notes), the feed, each player's card and the momentum graph.
-// ?stream lays the page out 1920×1080 for a broadcast (a score bug, chyrons for the big moments); &cast=URL voices
-// the casters' lines from that caster service with captions; &title= names the broadcast.
+// ?view is the game alone, full-frame, as a broadcast frames it (the env's spectator view); ?panel is the sidebar
+// alone, on a transparent page, for a broadcast's page widget.
 const $ = id => document.getElementById(id);
 const QUERY = new URLSearchParams(location.search);
-const STREAM = QUERY.has("stream");
-const CAST = (QUERY.get("cast") || "").replace(/\/$/, "");
+const VIEW = QUERY.has("view"), PANEL = QUERY.has("panel");
 const TERRAIN = ["#2f4a2a", "#46452f", "#1f4466", "#121418"];
 const NEUTRAL = "#b8b8b8";
 const S = {static: null, frames: [], idx: -1, follow: true, playing: false, terrain: null, scale: 1, client: false,
-  video: null, chyrons: [], chyronOn: false, seenUpTo: null, waiting: [], holds: []};
+  video: null, waiting: []};
 const BASE = location.pathname.replace(/\/$/, "");
 
-if (STREAM) document.body.classList.add("stream");
+for (const [on, mode] of [[VIEW, "view"], [PANEL, "panel"]])
+  if (on) { document.body.classList.add(mode); document.documentElement.classList.add(mode); }
 
 function clock(t) {
   if (t == null) return "0:00";
@@ -49,8 +49,8 @@ function terrainCanvas(t) {
 function setStatic(st) {
   S.static = st;
   S.terrain = terrainCanvas(st.terrain);
-  const b = st.bounds, w = b.max_x - b.min_x, h = b.max_y - b.min_y, side = S.client ? (STREAM ? 440 : 320)
-    : STREAM ? 1000 : 900;
+  const b = st.bounds, w = b.max_x - b.min_x, h = b.max_y - b.min_y, side = S.client ? (VIEW ? 300 : 320)
+    : VIEW ? 1600 : 900;
   S.scale = side / Math.max(w, h);
   const canvas = $("map");
   canvas.width = Math.round(w * S.scale); canvas.height = Math.round(h * S.scale);
@@ -99,7 +99,6 @@ function draw() {
   ctx.globalAlpha = 1;
   sidebar(frame);
   momentum();
-  if (STREAM) bug(frame);
   syncVideo(frame);
 }
 
@@ -114,8 +113,7 @@ function plans() {
 
 function sidebar(frame) {
   $("clock").textContent = clock(frame && frame.t);
-  const result = frame && frame.result, live = !S.embedded && !result,
-    waiting = live && (S.waiting.length || S.holds.length);
+  const result = frame && frame.result, live = !S.embedded && !result, waiting = live && S.waiting.length;
   $("badge").className = "badge " + (result ? "over" : waiting ? "waiting" : live ? "live" : "");
   $("badge").textContent = result ? result.replace(/_/g, " ").toUpperCase() : waiting ? "WAITING" : live ? "● LIVE"
     : "REPLAY";
@@ -135,9 +133,9 @@ function sidebar(frame) {
       <div><span>buildings</span>${s.structures ?? "–"}</div><div><span>score</span>${num(s.score)}</div></div>${agent}</div>`;
   }).join("");
   const lines = [];
-  for (let i = S.idx; i >= 0 && lines.length < (STREAM ? 9 : 40); i--)
+  for (let i = S.idx; i >= 0 && lines.length < (PANEL ? 10 : 40); i--)
     for (const e of (S.frames[i].events || []).slice().reverse())
-      if (lines.length < (STREAM ? 9 : 40) && (!STREAM || majorOf(e) || typeof e === "string")) lines.push([S.frames[i].t, e]);
+      if (lines.length < (PANEL ? 10 : 40) && (!PANEL || majorOf(e) || typeof e === "string")) lines.push([S.frames[i].t, e]);
   $("events").innerHTML = lines.map(([t, e]) => {
     const side = typeof e === "object" && e.side != null ? colorOf(e.side) : "transparent";
     return `<li class="${majorOf(e) ? "major" : ""}" style="--c:${side}"><time>${clock(t)}</time>${esc(textOf(e))}</li>`;
@@ -174,34 +172,6 @@ function momentum() {
     ? `${lead[0][0].label} ahead by ${Math.round((lead[0][1] - lead[1][1]) / total * 100)}% of the score` : "Level on score";
 }
 
-// ?stream: the score bug over the main view (the map, or the game's picture once there is one).
-function bug(frame) {
-  const ps = players().slice(0, 2);
-  if (ps.length < 2) return;
-  const side = p => { const s = statsOf(frame, p.slot), food = s.food ? `${s.food[0]}/${s.food[1]}` : "–";
-    return `<div class="side" style="--c:${p.color}"><b>${esc(p.label)}</b><span>${num(s.score)}</span>
-      <small>army ${num(s.army)} · food ${food}</small></div>`; };
-  $("bug").innerHTML = `${side(ps[0])}<div class="mid"><b>${clock(frame && frame.t)}</b><small>${
-    S.static.time_limit ? `of ${clock(S.static.time_limit)}` : ""}</small></div>${side(ps[1])}`;
-}
-
-// ?stream: a chyron for each big moment as it happens (not the backlog of a page opened late).
-function chyrons(fresh) {
-  if (!STREAM || S.embedded) return;
-  for (const f of fresh) for (const e of f.events || []) if (majorOf(e)) S.chyrons.push(e);
-  S.chyrons = S.chyrons.slice(-3);
-  if (!S.chyronOn) nextChyron();
-}
-function nextChyron() {
-  const e = S.chyrons.shift(), el = $("chyron");
-  if (!e) { S.chyronOn = false; el.classList.remove("on"); return; }
-  S.chyronOn = true;
-  el.style.setProperty("--c", e.side != null ? colorOf(e.side) : "#e6c83c");
-  el.innerHTML = `<b>${esc((e.kind || "").replace(/_/g, " "))}</b>${esc(e.text)}`;
-  el.classList.add("on");
-  setTimeout(() => { el.classList.remove("on"); setTimeout(nextChyron, 500); }, 5000);
-}
-
 // A recording with the game's video beside it plays the video in step with the frames (each frame's "w").
 function syncVideo(frame) {
   const v = S.video;
@@ -211,24 +181,21 @@ function syncVideo(frame) {
   if (!S.playing && !v.paused) v.pause();
 }
 
-// The game's picture becomes the main view, and ?stream's overlays (score bug, chyrons, captions) move from the map
-// onto it: the map is only the minimap now.
+// The game's picture becomes the main view, and the start notice moves from the map onto it: the map is only the
+// minimap now.
 function onClient() {
   S.client = true;
   document.body.classList.add("has-client");
-  $("client").parentElement.append($("bug"), $("chyron"), $("caption"), $("waiting"));
+  $("client").parentElement.append($("waiting"));
 }
 
-// Before the game begins: who it waits for (the game starts once every player has made its first move), or what
-// else holds its start (a broadcast going live).
+// Before the game begins: who it waits for (the game starts once every player has made its first move).
 function waitingFor() {
   const names = S.waiting.map(labelOf), el = $("waiting");
-  el.hidden = !names.length && !S.holds.length;
+  el.hidden = !names.length;
   if (names.length) {
     const who = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
     el.innerHTML = `<b>Waiting for ${esc(who)}</b><span>The game starts once every player has made its first move</span>`;
-  } else if (S.holds.length) {
-    el.innerHTML = `<b>Starting in a moment</b><span>The game waits for: ${esc(S.holds.join(", "))}</span>`;
   }
 }
 
@@ -247,13 +214,10 @@ async function poll() {
     const doc = await r.json();
     if (doc.live && doc.live.client && !S.client) showClient();
     S.waiting = (doc.live && doc.live.waiting) || [];
-    S.holds = (doc.live && doc.live.holds) || [];
-    if (!S.static || (doc.static && doc.static.game !== S.static.game)) { S.frames = []; S.seenUpTo = null; setStatic(doc.static); }
+    if (!S.static || (doc.static && doc.static.game !== S.static.game)) { S.frames = []; setStatic(doc.static); }
     else if (doc.static) S.static.players = doc.static.players;   // names a player gave itself
-    if (S.seenUpTo != null) chyrons(doc.frames.filter(f => f.t > S.seenUpTo));
-    if (doc.frames.length) S.seenUpTo = doc.frames.at(-1).t; else if (S.seenUpTo == null) S.seenUpTo = -1;
     S.frames.push(...doc.frames);
-    if (S.follow || STREAM) show(S.frames.length - 1);
+    if (S.follow || VIEW || PANEL) show(S.frames.length - 1);
     waitingFor();
     if (S.idx >= 0) sidebar(S.frames[S.idx]);
   } catch (e) { /* the env is restarting or gone: try again */ }
@@ -266,44 +230,6 @@ function tick() {
   $("play").textContent = S.playing ? "❚❚" : "▶";
   const here = S.frames[S.idx] || {}, next = S.frames[S.idx + 1] || {};
   setTimeout(tick, S.video && here.w != null && next.w != null ? Math.max(20, Math.min(1000, (next.w - here.w) * 1000)) : 100);
-}
-
-// ---- the casters (&cast=URL): their lines in order, voiced, with a caption while each plays ----
-
-const CASTERS = {pbp: ["play-by-play", "#e9c46a"], color: ["analyst", "#8fb4ff"]};
-const voice = {last: 0, queue: [], on: null, first: true};
-async function pollCast() {
-  try {
-    const r = await fetch(`${CAST}/cast.json?since=${voice.last}`, {cache: "no-store"}), doc = await r.json();
-    const lines = (doc.lines || []).filter(l => l.id > voice.last).sort((a, b) => a.id - b.id);
-    if (lines.length) voice.last = lines.at(-1).id;
-    voice.queue.push(...(voice.first ? stillOn(lines, doc.speaking_until) : lines));
-    voice.first = false;
-    speak();
-  } catch (e) { /* the caster isn't up yet: keep asking */ }
-  setTimeout(pollCast, 1000);
-}
-// A page opened mid-broadcast starts with the lines still under way by the caster's clock, not its whole backlog.
-function stillOn(lines, until) {
-  let left = (until || 0) - Date.now() / 1000, k = lines.length;
-  while (k > 0 && left > 0) left -= (lines[--k].seconds || 0) + 0.5;
-  return lines.slice(k);
-}
-function speak() {
-  if (voice.on || !voice.queue.length) return;
-  const line = voice.queue.shift(), el = $("caption"), [role, colour] = CASTERS[line.speaker] || ["", "#b6bac3"];
-  const secs = line.seconds || String(line.text).split(/\s+/).length / 2.6, start = performance.now();
-  voice.on = line;
-  el.style.setProperty("--c", colour);
-  el.innerHTML = `<div class="who"><b>${esc(line.name)}</b><span>${role}</span></div><p>${esc(line.text)}</p>`;
-  el.hidden = false;
-  let timer = setTimeout(done, (secs + 3) * 1000);   // audio that never ends
-  function done() { clearTimeout(timer); if (voice.on !== line) return; voice.on = null; el.hidden = true; setTimeout(speak, 400); }
-  function silent() { clearTimeout(timer); timer = setTimeout(done, Math.max(0, secs * 1000 - (performance.now() - start))); }
-  if (!line.audio) return silent();
-  const audio = new Audio(`${CAST}/${line.audio}`);
-  audio.onended = done; audio.onerror = silent;
-  audio.play().catch(silent);   // autoplay refused: the caption still shows for the line's length
 }
 
 $("scrub").addEventListener("input", e => { S.follow = false; $("follow").checked = false; show(+e.target.value); });
@@ -321,6 +247,5 @@ if (window.RTS_DATA) {
     v.onloadedmetadata = () => { S.video = v; onClient(); setStatic(S.static); show(S.idx); };
     $("client").replaceWith(v);
   }
-  setStatic(window.RTS_DATA.static); S.frames = window.RTS_DATA.frames || []; show(0); S.playing = !STREAM; tick();
+  setStatic(window.RTS_DATA.static); S.frames = window.RTS_DATA.frames || []; show(0); S.playing = true; tick();
 } else { poll(); tick(); }
-if (CAST) pollCast();

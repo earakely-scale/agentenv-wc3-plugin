@@ -222,16 +222,8 @@
     ]
   },
   {
-    "id": "replay",
-    "type": "save_wc3_replay",
-    "env_id": "wc3",
-    "depends_on": [
-      "grade"
-    ]
-  },
-  {
-    "id": "recording",
-    "type": "save_rts_recording",
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "wc3",
     "depends_on": [
       "grade"

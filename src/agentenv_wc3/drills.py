@@ -137,8 +137,7 @@ def convert(name: str, definition: dict) -> list[dict]:
              "depends_on": ["play", "play-opponent"] if scripted else ["play"]},
             {"id": "grade", "type": "rts_grade", "env_id": "wc3", "player_names": ["wc3"], "rubric": "checks",
              "checks": checks(definition), "verifier_id": "drill", "depends_on": ["finish"]},
-            {"id": "replay", "type": "save_wc3_replay", "env_id": "wc3", "depends_on": ["grade"]},
-            {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}]
+            {"id": "files", "type": "save_match_files", "env_id": "wc3", "depends_on": ["grade"]}]
 
 
 def import_all(definitions_dir: Path, out_dir: Path) -> list[Path]:

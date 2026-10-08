@@ -117,25 +117,18 @@
     ]
   },
   {
-    "id": "replay",
-    "type": "save_wc3_replay",
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "wc3",
-    "depends_on": [
-      "grade"
-    ]
-  },
-  {
-    "id": "recording",
-    "type": "save_rts_recording",
-    "env_id": "wc3",
-    "depends_on": [
-      "grade"
-    ],
-    "formats": [
-      "client",
+    "kinds": [
+      "client_video",
       "highlights",
-      "mp4",
-      "html"
+      "map_video",
+      "html_replay",
+      "replay"
+    ],
+    "depends_on": [
+      "grade"
     ]
   }
 ]

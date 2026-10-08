@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 import uvicorn
 import yaml
-from agent_env.artifact import FileArtifact
 from agent_env.config import reset_config
 from agent_env.env.env import DeployedEnv
 from agent_env.task.task import Task
@@ -23,8 +22,9 @@ from agentenv_game.steps import (
     CloseLobbyTaskStep,
     FinishMatchTaskStep,
     OpenLobbyTaskStep,
+    SaveMatchFilesTaskStep,
 )
-from agentenv_protocol import AgentEnvEnvironment, client, environment_card, extension
+from agentenv_protocol import AgentEnvEnvironment, client
 from agentenv_protocol.types import WELL_KNOWN_PATH
 from click.testing import CliRunner
 from conftest import ONE_AGENT, slot_request
@@ -32,7 +32,6 @@ from conftest import ONE_AGENT, slot_request
 from agentenv_rts.grade import RTSGradeTaskStep
 from agentenv_wc3.license import LICENSE_SECRETS, license_from_secrets, read_license
 from agentenv_wc3.server import WC3Env
-from agentenv_wc3.steps import REPLAY_EXTENSION, SaveWC3ReplayTaskStep
 
 pytestmark = pytest.mark.anyio
 
@@ -91,7 +90,8 @@ async def fill_and_close(context: TaskStepContext, players: list[dict] | None = 
 
 def test_the_steps_are_registered():
     registry = get_task_step_registry()
-    assert registry["save_wc3_replay"] is SaveWC3ReplayTaskStep and "wc3_license" not in registry
+    assert registry["save_match_files"] is SaveMatchFilesTaskStep and "wc3_license" not in registry
+    assert not {"save_wc3_replay", "save_rts_recording", "rts_broadcast", "save_rts_broadcast"} & set(registry)
     assert registry["open_lobby"] is OpenLobbyTaskStep and registry["add_license"] is AddLicenseTaskStep
     assert "rts_finish" not in registry and registry["finish_match"] is FinishMatchTaskStep
 
@@ -192,35 +192,19 @@ def test_the_license_comes_from_the_secret_store_first(license_dir, local_stores
         license_from_secrets(LICENSE_SECRETS)
 
 
-@environment_card(name="wc3")
-class FakeReplay(AgentEnvEnvironment):
-    @extension(REPLAY_EXTENSION, description="The replay.")
-    async def replay(self) -> dict:
-        return {"files": [{"name": "game.w3g", "content_type": "application/octet-stream",
-                           "base64": base64.b64encode(b"W3G replay").decode()}]}
-
-
-async def test_the_replay_becomes_a_file_artifact(local_stores):
-    step = SaveWC3ReplayTaskStep(id="replay", version=None, env_id="wc3")
-    async with deployed(FakeReplay()) as record:
-        context = await step.execute(run_context(record))
-    saved = context.metadata["replays"]["replay"]
-    assert [(f["name"], f["artifact_id"], f["bytes"]) for f in saved] == [("game.w3g", "smoke-replay-i1.w3g", 10)]
-    assert FileArtifact.get(saved[0]["artifact_id"], saved[0]["version"]).load() == b"W3G replay"
-
-
-async def test_a_game_without_a_replay_saves_nothing_and_says_why(env_vars, license_dir, local_stores, caplog):
+async def test_a_game_without_a_replay_keeps_its_other_files_and_says_why(env_vars, license_dir, local_stores, caplog):
     env = WC3Env()
     async with deployed(env) as record:
         context = await fill_and_close(await open_match(record, time_limit_seconds=60))
         await FinishMatchTaskStep(id="finish", version=None, env_id="wc3").execute(context)
-        context = await SaveWC3ReplayTaskStep(id="replay", version=None, env_id="wc3").execute(run_context(record))
-    assert context.metadata["replays"]["replay"] == []
-    assert any("save_wc3_replay: no replay" in m for m in caplog.messages)
+        context = await SaveMatchFilesTaskStep(id="files", version=None, env_id="wc3", kinds=["replay", "timeline"]
+                                               ).execute(context)
+    assert [f["kind"] for f in context.metadata["match_files"]["files"]] == ["timeline"]
+    assert any("save_match_files: no replay" in m for m in caplog.messages)
 
 
 @pytest.mark.parametrize("task", sorted(p.stem for p in (BUNDLE / "tasks").glob("*.json")))
-def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(local_stores, task):
+def test_every_bundle_task_loads_is_graded_and_saves_its_match_files(local_stores, task):
     import json
 
     steps = json.loads((BUNDLE / "tasks" / f"{task}.json").read_text())
@@ -229,7 +213,7 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
     Task(id=task, version=None, steps=[registry[s["type"]].from_dict(s) for s in steps])   # a DAG, in order
     by_type = {s["type"]: s for s in steps}
-    assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
+    assert by_type["save_match_files"]["depends_on"] == ["grade"]
     slots = [s for s in steps if s["type"] == "add_player_slot"]   # who plays: the lobby's slots, then the game
     assert by_type["close_lobby"]["depends_on"] == [*(s["id"] for s in slots), "license"] and len(slots) >= 2
     playing = {s["player_name"] for s in slots if s["player_kind"] == "agent"}
@@ -245,9 +229,9 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
     plays = [s for s in steps if s["type"] == "prompt_agent"]
     if task != "smoke":
         assert sorted(by_type["finish_match"]["depends_on"]) == sorted(s["id"] for s in plays)
-    if broadcast := by_type.get("rts_broadcast"):   # on air before the first move, saved once the match is over
+    if broadcast := by_type.get("start_broadcast"):   # on air before the first move, saved once the match is over
         assert all(broadcast["id"] in s["depends_on"] for s in plays)
-        assert by_type["save_rts_broadcast"]["depends_on"] == [by_type["finish_match"]["id"]]
+        assert by_type["save_broadcast"]["depends_on"] == [by_type["finish_match"]["id"]]
     if task.startswith("macro-micro"):
         agent = by_type["deploy_agent"]
         assert agent["a2a_agent_id"] == "wc3-macro-micro" and agent["env_vars"]["WC3_MICRO_MODEL"]

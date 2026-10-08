@@ -7,10 +7,11 @@ likes between steps. Orders given with `act` wait in a queue and go to the game 
 
 A program plays the same game through the `urn:rts:*` session extensions (agentenv_rts.session): raw observations
 in, raw wc3env actions out, as wc3env's own `wc3agent` plays (agents/wc3-player). In `realtime` mode the game runs on
-its own clock and a step only sends orders and observes. Spectators follow the game at `/live` (agentenv_rts.live),
-and `urn:rts:recording/v1` gives its recording once it is played. With `client_view` the game also draws itself in a
-window on the container's display: the live page shows that picture (`/live/client`), a director points the camera
-at the agent's fights and key moments (frames.Director), and the recording has the match's video
+its own clock and a step only sends orders and observes. Spectators follow the game at `/live` (agentenv_rts.live);
+its spectator view, which a broadcast frames, is `/live?view`, and a finished match keeps its files (agentenv_game's
+`@match_files`: the map's video, the HTML replay, the timeline, the native replay). With `client_view` the game
+also draws itself in a window on the container's display: the live page shows that picture (`/live/client`), a
+director points the camera at the agent's fights and key moments (frames.Director), and the match keeps its video
 (agentenv_rts.display). Spectators read a feed of what happened (frames.Feed), and what players tell them through
 `urn:rts:note/v1`: their plans (also shown in the game's picture), their names and their running costs.
 
@@ -24,6 +25,7 @@ opened plays its default game: an agent at the env's own address against the gam
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import math
 import os
@@ -46,6 +48,8 @@ from agentenv_game import (
     LicenseParts,
     Lobby,
     LobbyStatus,
+    MatchFile,
+    MatchFiles,
     MatchReport,
     PlayerKind,
     PlayerSlot,
@@ -58,11 +62,13 @@ from agentenv_game import (
     create_game,
     install_license,
     license_needs,
+    match_files,
     match_report,
     play_out,
     player_slot_card,
     player_slot_limits,
     player_teams,
+    spectator_card,
 )
 from agentenv_game.match import FINAL
 from agentenv_protocol import (
@@ -84,7 +90,7 @@ from agentenv_protocol.types import (
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
@@ -128,7 +134,9 @@ PAN_SECONDS, PAN_STEPS, PAN_MAX = 0.6, 8, 4000.0   # the camera eases over this;
 NOTE_CHARS = 400
 OVERLAY = {"x": -1.0, "y": 1.0, "seconds": 9}   # a plan shows top left in the game's picture, under its resources
 
-REPLAY_EXTENSION = "urn:wc3:replay/v1"
+FILE_KINDS = (*rts_recording.KINDS, "replay")
+"""What a finished match keeps (docs/tools.md): the recording's kinds, and the game's native replay (.w3g)."""
+DEFAULT_FILE_KINDS = ("map_video", "html_replay", "timeline", "replay")
 STAGE_EXTENSION = "urn:wc3:stage/v1"
 STAGE_OPS = ("spawn", "level", "give", "item", "hp", "mana", "kill", "remove", "resources", "ai", "research",
              "invulnerable", "alliance", "destructable")
@@ -375,7 +383,7 @@ class WC3Env(AgentEnvGameEnv):
         self.failed: str | None = None
         self.timeline: Timeline | None = None
         self.capture: rts_display.Capture | None = None
-        self.recordings: Path | None = None   # the latest game's recording, served at /live/recording/<name>
+        self.recordings: Path | None = None   # the latest match's files, which agentenv_game serves
         self.camera: tuple[float, float] | None = None
         self.director = frames.Director(self.lead)
         self.feed: frames.Feed | None = None
@@ -1038,13 +1046,17 @@ class WC3Env(AgentEnvGameEnv):
     def player_card(self, slot: PlayerSlot) -> EnvironmentCard:
         """An agent's player slot: its MCP tools, and the urn:rts session a program plays it through (observe, step,
         debug, note), both at the slot's address."""
-        if "_served_card" not in self.__dict__:
-            self.__dict__["_served_card"] = AgentEnvFastMCPApplication(self._build_card(), self).environment_card
-        card = self.__dict__["_served_card"]
+        card = self._served_card()
         session = [e for e in card.capabilities.extensions or () if e.uri in (OBSERVE, STEP, DEBUG, NOTE)]
         return EnvironmentCard(name=f"{card.name}/{slot.player_id}",
                                additionalInterfaces=[EnvironmentInterface(url=MCP_PATH, transport=MCP_TRANSPORT)],
                                capabilities=EnvironmentCapabilities(operations=[], extensions=session))
+
+    def _served_card(self) -> EnvironmentCard:
+        """The env's card as it is served, built once."""
+        if "_served" not in self.__dict__:
+            self.__dict__["_served"] = AgentEnvFastMCPApplication(self._build_card(), self).environment_card
+        return self.__dict__["_served"]
 
     @player_teams
     def teams(self, lobby: Lobby) -> list[PlayerTeam]:
@@ -1238,23 +1250,6 @@ class WC3Env(AgentEnvGameEnv):
             point = named(anchor)
         return {"x": float(point["x"] + spec.get("dx", 0)), "y": float(point["y"] + spec.get("dy", 0))}
 
-    @extension(REPLAY_EXTENSION, description="The finished game's native Warcraft III replay (.w3g), as base64 "
-                                             "files; recording stops, so call it once the game is over.")
-    async def replay(self) -> dict:
-        self.stats["extension_calls"] += 1
-        async with self.lock:
-            if not self.obs or self.bridge is None:
-                raise RuntimeError("no game has been played")
-            if not self.game_over:
-                raise RuntimeError("the game is not over: a replay ends the recording")
-            try:
-                f = await self.bridge.call("replay")
-            except WorkerError as e:
-                if e.code in DEAD:
-                    raise RuntimeError(f"{e.code}: {e.message}") from e
-                return {"files": [], "notes": [f"no replay: {e.message}"]}   # e.g. the fake game records none
-        return {"files": [{"name": f["name"], "content_type": "application/octet-stream", "base64": f["base64"]}]}
-
     # ---- the urn:rts:* session (agentenv_rts.session): a program plays through raw observations and actions ----
 
     @extension(OBSERVE, description="The game as a program plays it: at a player slot's address, its own raw wc3env "
@@ -1413,42 +1408,62 @@ class WC3Env(AgentEnvGameEnv):
                 dropped.append({"index": i, "reason": f"dropped: {e.message}"})
         return kept, dropped
 
-    # ---- spectators: the live view and the recording (agentenv_rts) ----
+    # ---- spectators: the spectator view and the match's files (agentenv_rts) ----
 
-    @extension(rts_recording.RECORDING, description="The game played so far as spectators see it: an MP4 of the "
-                                                    "map (mp4), a self-contained HTML replay (html), the timeline as "
-                                                    "JSON (timeline) and, for a match "
-                                                    "with client_view, the game's own video with chapters (client; "
-                                                    "the replay plays it beside the map) and a highlight reel cut "
-                                                    "from it (highlights). Lists the files, each to fetch from its "
-                                                    "path (/live/recording/<name>); asking for client or highlights "
-                                                    "ends the capture.")
-    async def recording(self, formats: list[str] | None = None) -> dict:
-        self.stats["extension_calls"] += 1
-        formats = tuple(formats or ("mp4", "html", "timeline"))
+    @spectator_card
+    def spectators(self) -> EnvironmentCard:
+        """The game alone, full-frame, as a broadcast frames it (/live?view): the game's own picture with the map as
+        its minimap (client_view), else the map."""
+        return EnvironmentCard(name=f"{self._served_card().name}/spectators",
+                               additionalInterfaces=[EnvironmentInterface(url="/live?view", transport="http")],
+                               capabilities=EnvironmentCapabilities(operations=[]))
+
+    @match_files
+    async def kept(self, kinds: list[str] | None) -> MatchFiles:
+        """The finished match's files, `kinds` of FILE_KINDS or DEFAULT_FILE_KINDS. client_video and highlights are
+        the game's own picture (client_view), so asking for them ends its capture."""
+        wanted = tuple(dict.fromkeys(kinds or DEFAULT_FILE_KINDS))
+        if unknown := sorted(set(wanted) - set(FILE_KINDS)):
+            raise ValueError(f"Warcraft III keeps {', '.join(FILE_KINDS)}, not {unknown}")
         async with self.lock:
             timeline = self.timeline
             if timeline is None or not timeline.frames:
-                return {"files": [], "notes": ["no game has been played"]}
-            stem = f"wc3-{Path(self.scenario['map']).stem}-{timeline.static['game']}".replace(" ", "")
+                return MatchFiles(notes=["no game has been played"])
+            stem = re.sub(r"[^A-Za-z0-9_.-]", "", f"wc3-{Path(self.scenario['map']).stem}-{timeline.static['game']}")
             client = (await asyncio.to_thread(self.capture.stop)
-                      if {"client", "highlights"} & set(formats) and self.capture is not None else None)
+                      if {"client_video", "highlights"} & set(wanted) and self.capture is not None else None)
+            replay = await self._replay() if "replay" in wanted else None
         if self.recordings is None:
-            self.recordings = Path(tempfile.mkdtemp(prefix="wc3-recording-"))
-        shutil.rmtree(self.recordings / "latest", ignore_errors=True)
-        made, notes = await asyncio.to_thread(rts_recording.files, timeline, self.recordings / "latest", stem,
-                                              formats, client)
-        return {"files": [{**f, "path": f"/live/recording/{f['name']}"} for f in made], "notes": notes}
+            self.recordings = Path(tempfile.mkdtemp(prefix="wc3-match-files-"))
+        folder = self.recordings / "latest"
+        shutil.rmtree(folder, ignore_errors=True)
+        made, notes = await asyncio.to_thread(rts_recording.files, timeline, folder, stem,
+                                              tuple(k for k in wanted if k in rts_recording.KINDS), client)
+        files = [MatchFile(name=f["name"], kind=f["kind"], content_type=f["content_type"], file=f["path"])
+                 for f in made]
+        if isinstance(replay, bytes):
+            (path := folder / f"{stem}.w3g").write_bytes(replay)
+            files.append(MatchFile(name=path.name, kind="replay", file=path))
+        elif replay is not None:
+            notes.append(replay)
+        return MatchFiles(files=files, notes=notes)
+
+    async def _replay(self) -> bytes | str:
+        """The game's native replay, or why there is none; it ends the game's own recording of itself."""
+        if self.bridge is None or not self.game_over:
+            return "no replay: the game did not reach its end"
+        try:
+            f = await self.bridge.call("replay")
+        except WorkerError as e:
+            return f"no replay: {e.message}"   # e.g. the fake game records none
+        return base64.b64decode(f["base64"])
 
     def create_app(self):
         app = super().create_app()
         app.custom_route("/live", methods=["GET"])(self._live_page)
         app.custom_route("/live/data.json", methods=["GET"])(self._live_data)
         app.custom_route("/live/client", methods=["GET"])(self._live_client)
-        app.custom_route("/live/recording/{name}", methods=["GET"])(self._live_recording)
         app.custom_route("/live/client.jpg", methods=["GET"])(self._live_client_frame)
-        app.custom_route("/live/state.json", methods=["GET"])(self._live_state)
-        app.custom_route("/live/casting.json", methods=["GET"])(self._live_casting)
         return app
 
     async def _live_page(self, request: Request) -> Response:
@@ -1458,34 +1473,6 @@ class WC3Env(AgentEnvGameEnv):
         return JSONResponse(rts_live.data(self.timeline, request.query_params.get("since"), self.capture is not None,
                                           self._waiting()),
                             headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
-
-    async def _live_state(self, request: Request) -> Response:
-        """Where the game stands, for a streamer deciding when to stop."""
-        last = self.timeline.last if self.timeline is not None else None
-        over = self._ended()
-        return JSONResponse({"game_over": over, "result": self.result if over else "",
-                             "t": (last or {}).get("t"),
-                             "client": self.capture is not None}, headers={"Cache-Control": "no-store"})
-
-    async def _live_casting(self, request: Request) -> Response:
-        return JSONResponse(rts_live.casting(self.timeline, request.query_params.get("since"), self.desk()),
-                            headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
-
-    def desk(self) -> str:
-        """The casters' brief: what game this is, who plays, and how it is won."""
-        s = self.scenario
-        teams: dict[int, list[str]] = {}
-        for x in self.players:
-            teams.setdefault(x["team"], []).append(self._who(x))
-        sides = " against ".join(" and ".join(t) for t in teams.values())
-        return (f"Warcraft III: The Frozen Throne, a real-time strategy game. Each side mines gold and cuts lumber, "
-                f"builds a base, trains workers, an army and heroes (heroes level up by killing creeps and enemies), "
-                f"and wins by destroying every building of the other side. Neutral creep camps guard the map and give "
-                f"heroes experience and items. Here {sides} on {Path(s['map']).stem}, in "
-                f"{'real time' if s['mode'] == 'realtime' else 'stepped time (the game waits while the agents think)'}"
-                f". There is a {s['time_limit_seconds'] // 60}-minute limit: if no side has won by then, the higher "
-                f"score wins the tiebreak (a win on score, not a conquest). Score counts units, buildings, heroes and "
-                f"resources gathered.")
 
     def _who(self, player: dict) -> str:
         """A player as people say it: "Claude Sonnet 5.5 (human)", "the game's normal orc AI"."""
@@ -1521,14 +1508,6 @@ class WC3Env(AgentEnvGameEnv):
         if (frame := self._client_frame()) is None:
             return Response(status_code=404)
         return Response(frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
-
-    async def _live_recording(self, request: Request) -> Response:
-        """A file of the latest recording, streamed from disk (save_rts_recording fetches each one)."""
-        name = request.path_params["name"]
-        path = self.recordings / "latest" / name if self.recordings is not None else None
-        if path is None or name != Path(name).name or not path.is_file():
-            return Response(status_code=404)
-        return FileResponse(path)
 
     async def close(self) -> None:
         await self._drop_capture()

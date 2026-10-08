@@ -14,10 +14,11 @@ score per player). Phase 4, the task-set generator, is `agent-env wc3 sweep` (RE
 4. **No special cases.** A full game, an agent-versus-agent match and a two-minute drill are the same kind of task,
    built from player slots, an optional staging step and a rubric. There is no scenario concept: wc3agent's 25
    scenarios become 25 drill tasks built from these primitives.
-5. **Game-agnostic where it can be.** `rts_grade`, `save_rts_recording`, the broadcast steps, the summary contract and
-   the scripted opponent's session live in `agentenv_rts`; the lobby, the match and their steps (`open_lobby`,
-   `add_player_slot`, `close_lobby`, `finish_match`) in agentenv-game-env; the license, the staging extension and the
-   replay are Warcraft III's.
+5. **Game-agnostic where it can be.** `rts_grade`, the recording, the summary contract and the scripted opponent's
+   session live in `agentenv_rts`; the lobby, the match, the spectator view, the match's files, the broadcast and
+   their steps (`open_lobby`, `add_player_slot`, `close_lobby`, `finish_match`, `save_match_files`,
+   `start_broadcast`, `save_broadcast`) in agentenv-game-env; the license, the staging extension and the replay are
+   Warcraft III's.
 
 ## A task's steps
 
@@ -29,9 +30,8 @@ deploy_env
      └─ add_player_slot (one per player; an agent's also waits for its deploy_agent)
          └─ close_lobby (after every player slot and the license: the game and its match are created)
              └─ stage (optional: apply_server_config → urn:wc3:stage/v1)
-                 └─ prompt_agent (one per agent, in parallel; after rts_broadcast if the task has one)
-                     └─ finish_match ─ rts_grade ─┬─ save_wc3_replay
-                                                  └─ save_rts_recording
+                 └─ prompt_agent (one per agent, in parallel; after start_broadcast if the task has one)
+                     └─ finish_match ─ rts_grade ─ save_match_files
 ```
 
 | Step | From | Status |
@@ -43,9 +43,8 @@ deploy_env
 | `prompt_agent` | agent-env | as today; the prompt carries a drill's goal |
 | `finish_match` | agentenv-game-env | plays the match out to its end once its agents have stopped |
 | `rts_grade` | plugin (`agentenv_rts`) | done; replaced `env_outcome_verifier` with `wc3-verifier` |
-| `save_wc3_replay` | plugin | as today |
-| `save_rts_recording` | plugin (`agentenv_rts`) | as today: `mp4`, `html`, `client`, `highlights` |
-| `rts_broadcast`, `save_rts_broadcast` | plugin (`agentenv_rts`) | streams or records the match: live before the prompts, its video kept after `finish_match` |
+| `save_match_files` | agentenv-game-env | keeps the match's files: `replay`, `map_video`, `html_replay`, `timeline`, and on request `client_video` and `highlights` |
+| `start_broadcast`, `save_broadcast` | agentenv-game-env | streams or records the match's spectator view (`/live?view`) under the overlay: live before the prompts, its video kept after `finish_match` |
 
 ## The game's settings: `open_lobby`'s `game_settings`
 
@@ -356,6 +355,7 @@ one-agent game's verification keeps its name (`<verifier_id>`); several agents' 
 | 4 | The task-set generator and a sweep eval; `rts_broadcast` | done; `first-eval` ran on the real game |
 | 5 | Players as the lobby's slots: `AgentEnvGameEnv` and `urn:game:lobby/v1` from agentenv-game-env, `add_player_slot`; `rts_seat_agents` and the shorthand removed | done |
 | 6 | agentenv-game-env 0.3.0: player slots by `player_id`, settings as models, each player slot's env card; the match (`urn:game:match/v1`: its start gate, `finish_match`, each player's outcome and scores) in place of `rts_finish` and the hold, finish and idle extensions; `rts_broadcast` live before the prompts, with `save_rts_broadcast` | done |
+| 7 | agentenv-game-env 0.4.0: the spectator view (`/live?view`) and the match's files (`@match_files`) in place of `urn:rts:recording/v1` and `urn:wc3:replay/v1`; `start_broadcast`, `save_broadcast` and `save_match_files` in place of the plugin's streamer, casters and steps | done |
 
 ## Decisions taken
 

@@ -31,12 +31,13 @@ by the `smoke` rubric.
 Every task plays its match out before grading it (`finish_match`: the game runs to its end once its agents have
 stopped). Each player is a player slot of the env's lobby: `open_lobby` opens it, an `add_player_slot` step fills a
 player slot per player (an agent, or the game's AI), and `close_lobby` creates the game and its match.
-`broadcast-smoke` plays two `wc3-scripted` agents against each other for two minutes with a recorded broadcast
-(`rts_broadcast`, live before the first move, and `save_rts_broadcast`), at no model cost.
+`broadcast-smoke` plays two `wc3-scripted` agents against each other for two minutes, in the game's own picture,
+with a recorded broadcast (agentenv-game-env's `start_broadcast`, live before the first move, and `save_broadcast`),
+at no model cost.
 
-Every task also saves the spectator recording (`save_rts_recording`): an MP4 of the map, a self-contained HTML
-replay and the timeline as JSON; `macro-micro-realtime` adds the game's own video, with chapters, and a highlight reel
-cut from it.
+Every task also saves the match's files (`save_match_files`): the native replay, an MP4 of the map, a self-contained
+HTML replay and the timeline as JSON; `macro-micro-realtime` adds the game's own video, with chapters, and a highlight
+reel cut from it.
 `agent-env wc3 setup --fake` builds the env on wc3env's fake game, so every task runs end to end without
 Warcraft III (units move and stop, nothing else).
 

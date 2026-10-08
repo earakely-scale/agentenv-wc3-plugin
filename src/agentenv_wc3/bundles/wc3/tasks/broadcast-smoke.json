@@ -51,7 +51,8 @@
       "map": "(2)EchoIsles.w3x",
       "seed": 3,
       "time_limit_seconds": 120,
-      "mode": "stepping"
+      "mode": "stepping",
+      "client_view": true
     },
     "depends_on": [
       "deploy"
@@ -138,10 +139,27 @@
   },
   {
     "id": "broadcast",
-    "type": "rts_broadcast",
+    "type": "start_broadcast",
     "env_id": "wc3",
-    "cast": false,
     "title": "Broadcast smoke",
+    "overlay": [
+      {
+        "widget": "score_bug"
+      },
+      {
+        "widget": "page",
+        "url": "env:/live?panel",
+        "box": [
+          1500,
+          100,
+          396,
+          800
+        ]
+      },
+      {
+        "widget": "end_card"
+      }
+    ],
     "depends_on": [
       "stage"
     ]
@@ -181,7 +199,7 @@
   },
   {
     "id": "save-broadcast",
-    "type": "save_rts_broadcast",
+    "type": "save_broadcast",
     "env_id": "wc3",
     "broadcast": "broadcast",
     "depends_on": [
@@ -199,16 +217,8 @@
     ]
   },
   {
-    "id": "replay",
-    "type": "save_wc3_replay",
-    "env_id": "wc3",
-    "depends_on": [
-      "grade"
-    ]
-  },
-  {
-    "id": "recording",
-    "type": "save_rts_recording",
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "wc3",
     "depends_on": [
       "grade"

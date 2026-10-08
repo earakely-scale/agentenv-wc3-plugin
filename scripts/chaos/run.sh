@@ -9,8 +9,8 @@ run=$!
 for _ in $(seq 1 240); do
   port=$(docker ps --format '{{.Image}} {{.Ports}} {{.CreatedAt}}' | grep mcp-server-wc3 | sort -k3 -r \
          | grep -o '127.0.0.1:[0-9]*->18765' | head -1 | cut -d- -f1)
-  t=$( [ -n "$port" ] && curl -s -m 3 "http://$port/live/state.json" \
-       | python3 -c 'import json,sys; print(json.load(sys.stdin).get("t") or 0)' 2>/dev/null)
+  t=$( [ -n "$port" ] && curl -s -m 3 "http://$port/agentenv/ext/match" \
+       | python3 -c 'import json,sys; print((json.load(sys.stdin) or {}).get("progress", [{}])[0].get("value") or 0)' 2>/dev/null)
   python3 -c "import sys; sys.exit(0 if float('${t:-0}') >= 10 else 1)" && break
   sleep 3
 done
@@ -25,7 +25,7 @@ case $action in
     env=$(docker ps --format '{{.ID}} {{.Ports}}' | grep "$port->" | cut -d' ' -f1)
     docker exec "$env" bash -c 'pkill -9 -f "Warcraft III"; pkill -9 -f wineserver'; echo "killed the game in $env" ;;
   broadcast)
-    for c in $(docker ps --format '{{.ID}} {{.Names}}' | grep rts-broadcast | cut -d' ' -f1); do
+    for c in $(docker ps --format '{{.ID}} {{.Names}}' | grep game-broadcast | cut -d' ' -f1); do
       docker kill "$c" > /dev/null && echo "killed the streamer $c"
     done ;;
   *) echo "ACTION is agent, game or broadcast" >&2; kill $run; exit 2 ;;
