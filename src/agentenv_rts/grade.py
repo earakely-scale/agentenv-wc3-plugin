@@ -1,5 +1,5 @@
 """`rts_grade`: judge a finished RTS game from the env's `data/get` summary with a rubric set in the task. Each graded
-seat gets its own verification, scored by agent-env's weighted average, so runs, evals and the hub read it as they
+player gets its own verification, scored by agent-env's weighted average, so runs, evals and the hub read it as they
 read any verifier's; a failed gate outweighs every criterion and zeroes it."""
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ METRICS = frozenset((
     "average_unspent_gold uprooted_seconds fewest_workers army_kept_percent enemy_army_destroyed_percent "
     "camp_cleared camp_cleared_time seconds structures").split())
 BY_TYPE = {"count": 0, "first_time": None, "present_seconds": 0}
-PARAMS = ("seats", "rubric", "weights", "targets", "checks", "at_time_limit", "gates", "verifier_id",
+PARAMS = ("player_names", "rubric", "weights", "targets", "checks", "at_time_limit", "gates", "verifier_id",
           "timeout_seconds")
 
 
@@ -65,39 +65,39 @@ def metric(metrics: dict, name: str):
     return metrics.get(name)
 
 
-def seats(summary: dict) -> tuple[list[dict], list[dict]]:
-    """Every seat, and the agent seats, which are graded unless the task names its seats. A summary without seats
-    (the env before them) is one agent seat against the game's AI, read from its top-level fields."""
-    if "seats" in summary:
-        return summary["seats"], [s for s in summary["seats"] if not s.get("computer")]
+def players(summary: dict) -> tuple[list[dict], list[dict]]:
+    """Every player slot, and the agents', which are graded unless the task names its players. A summary without
+    player slots (the env before them) is one agent against the game's AI, read from its top-level fields."""
+    if "player_slots" in summary:
+        return summary["player_slots"], [s for s in summary["player_slots"] if s.get("player_kind") == "agent"]
     harness = summary.get("harness") or {}
-    mine = {"agent": None, "computer": None, "team": 0, "result": summary.get("result"),
+    mine = {"player_name": None, "player_kind": "agent", "team": 0, "result": summary.get("result"),
             "orders_sent": harness.get("orders_sent", 0), "metrics": summary.get("score") or {}}
-    ai = {"agent": None, "computer": summary.get("ai_difficulty"), "team": 1,
+    ai = {"player_name": None, "player_kind": "ai", "ai_level": summary.get("ai_difficulty"), "team": 1,
           "metrics": summary.get("opponent_score") or {}}
     return [mine, ai], [mine]
 
 
 @dataclass
 class Game:
-    """The game as one graded seat sees it: opponents are the seats on another team."""
+    """The game as one graded player sees it: opponents are the players on another team."""
 
     summary: dict
-    seat: dict
+    player: dict
     enemies: list[dict]
     at_time_limit: str
     targets: dict
 
     @property
     def result(self) -> str | None:
-        return self.seat.get("result")
+        return self.player.get("result")
 
-    def metric(self, name: str, seat: dict | None = None):
-        return metric((self.seat if seat is None else seat).get("metrics") or {}, name)
+    def metric(self, name: str, player: dict | None = None):
+        return metric((self.player if player is None else player).get("metrics") or {}, name)
 
 
-def _total(seat: dict) -> float:
-    return (seat.get("metrics") or {}).get("total", 0)
+def _total(player: dict) -> float:
+    return (player.get("metrics") or {}).get("total", 0)
 
 
 def _clock(g: Game) -> str:
@@ -115,7 +115,7 @@ def reached_end(g: Game) -> dict:
 
 def win(g: Game) -> dict:
     by_score = g.at_time_limit == "score"
-    mine, best = _total(g.seat), max(map(_total, g.enemies), default=0)
+    mine, best = _total(g.player), max(map(_total, g.enemies), default=0)
     tiebreak = by_score and g.result == "time_limit" and mine > best
     criterion = "won: every enemy building destroyed" + (", or the higher score at the time limit" if by_score else "")
     return {"criterion": criterion, "result": g.result == "victory" or tiebreak,
@@ -130,8 +130,8 @@ def survive(g: Game) -> dict:
 
 
 def outscore(g: Game) -> dict:
-    mine, best = _total(g.seat), max(map(_total, g.enemies), default=0)
-    who = "the AI" if g.enemies and all(e.get("computer") for e in g.enemies) else "every opponent"
+    mine, best = _total(g.player), max(map(_total, g.enemies), default=0)
+    who = "the AI" if g.enemies and all(e.get("player_kind") == "ai" for e in g.enemies) else "every opponent"
     return {"criterion": f"outscored {who} on the game's score total", "result": mine > best,
             "score": min(1.0, mine / best) if best else float(mine > 0), "evidence": f"score {mine} vs {best}"}
 
@@ -207,13 +207,13 @@ def game_ran(g: Game) -> dict:
 
 
 def agent_played(g: Game) -> dict:
-    orders = g.seat.get("orders_sent") or 0
+    orders = g.player.get("orders_sent") or 0
     return {"criterion": "the agent played: it gave orders", "result": orders > 0, "evidence": f"{orders} orders"}
 
 
-def settled(match: dict, seat: dict) -> dict:
+def settled(match: dict, player: dict) -> dict:
     """How the match ended (finish_match's final match), for the record: no weight."""
-    last = seat.get("last_move_seconds")
+    last = player.get("last_move_seconds")
     return {"name": "finish", "criterion": "how the match ended (information only)", "result": True, "weight": 0,
             "evidence": f"the match {match.get('status')}"
             + (f": {match['status_detail']}" if match.get("status_detail") else "")
@@ -241,22 +241,22 @@ def _number(value) -> bool:
 
 
 class RTSGradeTaskStep(TaskStep):
-    """Grade the seats of a deployed RTS env's finished game: `rubric` picks the preset criteria, `weights` reweighs
+    """Grade the players of a deployed RTS env's finished game: `rubric` picks the preset criteria, `weights` reweighs
     them (0 drops one, a weight adds one from another preset), `targets` sets full credit, `checks` adds metric
     checks, `at_time_limit` decides an undecided game (the higher score wins it, a draw, or a loss) and `gates`
-    the failures that zero a seat."""
+    the failures that zero a player. `player_names` are the agents to grade; every agent by default."""
 
     type: ClassVar[str] = "rts_grade"
     entity_refs = (EntityRef.env("env_id"),)
 
-    def __init__(self, id: str, version: int | None, env_id: str, seats: list[str] | None = None,
+    def __init__(self, id: str, version: int | None, env_id: str, player_names: list[str] | None = None,
                  rubric: str = "melee", weights: dict | None = None, targets: dict | None = None,
                  checks: list[dict] | None = None, at_time_limit: str = "draw", gates: list[str] | None = None,
                  verifier_id: str | None = None, timeout_seconds: int = 300, depends_on: list | None = None,
                  fail_task_on_error: bool = True):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
         self.env_id, self.rubric, self.at_time_limit = env_id, rubric, at_time_limit
-        self.seats = list(seats) if seats is not None else None
+        self.player_names = list(player_names) if player_names is not None else None
         self.weights, self.targets = dict(weights or {}), dict(targets or {})
         self.checks = [dict(c) for c in checks or []]
         self.gates = list(gates) if gates is not None else list(GATES)
@@ -268,8 +268,9 @@ class RTSGradeTaskStep(TaskStep):
                              f"{at_time_limit!r}")
         if unknown := sorted(set(self.gates) - set(GATES)):
             raise ValueError(f"rts_grade gates must be among {', '.join(GATES)}, got {unknown}")
-        if seats is not None and (not isinstance(seats, list) or not all(isinstance(s, str) and s for s in seats)):
-            raise ValueError(f"rts_grade seats are agent names, got {seats!r}")
+        if player_names is not None and (not isinstance(player_names, list)
+                                         or not all(isinstance(s, str) and s for s in player_names)):
+            raise ValueError(f"rts_grade player_names are agent names, got {player_names!r}")
         if unknown := sorted(set(self.weights) - set(CRITERIA)):
             raise ValueError(f"rts_grade weights are for the criteria {', '.join(CRITERIA)}, got {unknown}")
         if bad := sorted(k for k, w in self.weights.items() if not _number(w)):
@@ -301,30 +302,32 @@ class RTSGradeTaskStep(TaskStep):
         return {k: w for k, w in {**RUBRICS[self.rubric], **self.weights}.items() if w}
 
     def grade(self, summary: dict, match: dict | None = None) -> dict[str, list[dict]]:
-        """The rows of each graded seat's verification, by its key: `verifier_id` alone when the game's one agent
-        seat is graded (or no agent name identifies the seat), else `<verifier_id>:<agent>`. `match` is the final
+        """The rows of each graded player's verification, by its key: `verifier_id` alone when the game's one agent is
+        graded (or no agent name identifies the player), else `<verifier_id>:<agent>`. `match` is the final
         match finish_match kept, which says how it ended."""
-        everyone, agents = seats(summary)
-        if self.seats is None:
-            graded = [(s.get("agent"), s) for s in agents]
+        everyone, agents = players(summary)
+        if self.player_names is None:
+            graded = [(s.get("player_name"), s) for s in agents]
         else:
-            graded = [(name, next((s for s in everyone if s.get("agent") == name), None)) for name in self.seats]
+            graded = [(name, next((s for s in everyone if s.get("player_name") == name), None))
+                      for name in self.player_names]
         targets = {**TARGETS, **self.targets}
         gates = [k for k in self.gates if not (self.rubric == "smoke" and k == "agent_played")]
-        out, alone = {}, self.seats is None and len(graded) == 1
-        for name, seat in graded:
+        out, alone = {}, self.player_names is None and len(graded) == 1
+        for name, player in graded:
             key = self.verifier_id if name is None or alone else f"{self.verifier_id}:{name}"
-            if seat is None:
-                out[key] = [{"name": "seat", "criterion": f"the game has a seat for {name}", "result": False,
-                             "weight": GATE_WEIGHT, "evidence": f"seats {[s.get('agent') for s in everyone]}"}]
+            if player is None:
+                out[key] = [{"name": "player_slot", "criterion": f"the game has a player slot for {name}",
+                             "result": False, "weight": GATE_WEIGHT,
+                             "evidence": f"player slots {[s.get('player_name') for s in everyone]}"}]
                 continue
-            g = Game(summary, seat, [s for s in everyone if s.get("team") != seat.get("team")], self.at_time_limit,
-                     targets)
+            g = Game(summary, player, [s for s in everyone if s.get("team") != player.get("team")],
+                     self.at_time_limit, targets)
             out[key] = [{"name": k, **CRITERIA[k](g), "weight": w} for k, w in self.criteria().items()]
             out[key] += [check(g, c) for c in self.checks]
             out[key] += [{"name": k, **GATE_CHECKS[k](g), "weight": GATE_WEIGHT} for k in gates]
             if match:
-                out[key].append(settled(match, seat))
+                out[key].append(settled(match, player))
         return out
 
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
@@ -337,7 +340,8 @@ class RTSGradeTaskStep(TaskStep):
                                              timeout=step.timeout_seconds)).parts[0].data
         except Exception as e:
             log.warning("rts_grade: env %r did not answer data/get: %r", step.env_id, e)
-            keys = [step.verifier_id] if step.seats is None else [f"{step.verifier_id}:{n}" for n in step.seats]
+            keys = ([step.verifier_id] if step.player_names is None
+                    else [f"{step.verifier_id}:{n}" for n in step.player_names])
             graded = {k: [{"name": "data_get", "criterion": "the env answered data/get", "result": False,
                            "weight": GATE_WEIGHT, "evidence": repr(e)}] for k in keys}
         else:

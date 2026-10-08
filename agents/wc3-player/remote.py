@@ -3,8 +3,8 @@ runner uses it (reset, step, observations, debug, save_replay, config, close), o
 (agentenv_rts.session), and its micro transport (Jev's `timed_call`) answered by any chat model.
 
 The env already holds the game the task's close_lobby created: `reset` only observes it, and the replay is the task's
-to save (save_wc3_replay), so `save_replay` declines. wc3agent plays slot 0; at a seat (the env's replies name its
-slot, "you") the seat's slot and slot 0 trade numbers both ways, so slot 0 is always the seat's.
+to save (save_wc3_replay), so `save_replay` declines. wc3agent plays player 0; at a player slot (the env's replies
+give its player_id) its player number and 0 trade places both ways, so player 0 is always its own.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import json
 import time
 
 from agentenv_rts import choices
-from agentenv_rts.session import RemoteSession
+from agentenv_rts.session import RemoteSession, player_number
 
 
 class RemoteGameSession:
@@ -28,14 +28,14 @@ class RemoteGameSession:
 
     def reset(self) -> dict[int, dict]:
         state = self.remote.observe()
-        self.you = state.get("you", 0)
-        self.observations, self.done = self.seat(state["observations"]), state["done"]
+        self.you = player_number(state)
+        self.observations, self.done = self.player(state["observations"]), state["done"]
         return self.observations
 
     def step(self, actions: dict[int, list], ms: int | None = None):
-        result = self.remote.step(self.seat(actions), ms if ms is not None else self.config.step_ms)
-        self.observations, self.done = self.seat(result["observations"]), result["done"]
-        rejected, placements = self.seat(result["rejected"]), self.seat(result["placements"])
+        result = self.remote.step(self.player(actions), ms if ms is not None else self.config.step_ms)
+        self.observations, self.done = self.player(result["observations"]), result["done"]
+        rejected, placements = self.player(result["rejected"]), self.player(result["placements"])
         for slot in actions:
             rejected.setdefault(slot, [])
             placements.setdefault(slot, [])
@@ -43,7 +43,7 @@ class RemoteGameSession:
                 "step_reason": "game_over" if self.done else "target"}
         return self.observations, self.done, info
 
-    def seat(self, by_slot: dict[int, object]) -> dict[int, object]:
+    def player(self, by_slot: dict[int, object]) -> dict[int, object]:
         return {0 if slot == self.you else self.you if slot == 0 else slot: v for slot, v in by_slot.items()}
 
     def debug(self, op: str, **args) -> dict:

@@ -1,7 +1,8 @@
 """The `urn:rts:*` session contract: how a program plays an RTS env through the env's extensions, as a gym-style
 session, rather than through MCP tools an LLM reads. The env keeps the game; the client steps it.
 
-- `urn:rts:observe/v1` {} → {"observations": {slot: obs}, "done", "scenario", "setup"}
+- `urn:rts:observe/v1` {} → {"observations": {slot: obs}, "done", "scenario", "setup", "player_slots", and at a player
+  slot's address its "player_id"}
 - `urn:rts:step/v1` {"actions": {slot: [action]}, "ms"} → {"observations", "done", "rejected": {slot: [...]},
   "placements": {slot: [...]}, "elapsed_ms"}
 - `urn:rts:debug/v1` {"op", "args"} → the game's debug op result; an env may refuse ops it doesn't allow
@@ -44,6 +45,11 @@ def error_message(body: bytes | str) -> str:
         return f"{error['code']}: {error['message']}" if error.get("message") else text
     except (ValueError, AttributeError, KeyError):
         return text
+
+
+def player_number(state: dict) -> int:
+    """The player number a session plays: its player slot's player_id, at the slot's address; the first at the root."""
+    return int(state.get("player_id", 0))
 
 
 def by_slot(value: dict | None) -> dict[int, object]:

@@ -1,6 +1,6 @@
 """wc3agent's scenarios as drill tasks: each definition becomes an ordinary task of player slots, a stage step
-(`urn:wc3:stage/v1`), an opponent seat and a `checks` rubric. `agent-env wc3 drills import` writes them into the bundle
-once; the bundle owns them from then on."""
+(`urn:wc3:stage/v1`), an opponent and a `checks` rubric. `agent-env wc3 drills import` writes them into the bundle once;
+the bundle owns them from then on."""
 
 from __future__ import annotations
 
@@ -130,12 +130,12 @@ def convert(name: str, definition: dict) -> list[dict]:
                   "prompt": definition["goal"], "timeout_seconds": timeout, "depends_on": [start]})
     if scripted:
         steps.append({"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
-                      "prompt_id": f"{task}-opponent", "prompt": "Play your seat with the script.",
+                      "prompt_id": f"{task}-opponent", "prompt": "Play with the script.",
                       "timeout_seconds": timeout, "depends_on": [start]})
     return [*steps,
             {"id": "finish", "type": "finish_match", "env_id": "wc3",
              "depends_on": ["play", "play-opponent"] if scripted else ["play"]},
-            {"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks",
+            {"id": "grade", "type": "rts_grade", "env_id": "wc3", "player_names": ["wc3"], "rubric": "checks",
              "checks": checks(definition), "verifier_id": "drill", "depends_on": ["finish"]},
             {"id": "replay", "type": "save_wc3_replay", "env_id": "wc3", "depends_on": ["grade"]},
             {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}]

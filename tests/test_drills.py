@@ -67,10 +67,10 @@ def test_fight_even_is_the_design_docs_drill():
         {"id": "play", "type": "prompt_agent", "agent_name": "wc3", "model": "anthropic/claude-haiku-4-5",
          "prompt_id": "drill-fight-even", "prompt": goal, "timeout_seconds": 1800, "depends_on": ["stage"]},
         {"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
-         "prompt_id": "drill-fight-even-opponent", "prompt": "Play your seat with the script.", "timeout_seconds": 1800,
+         "prompt_id": "drill-fight-even-opponent", "prompt": "Play with the script.", "timeout_seconds": 1800,
          "depends_on": ["stage"]},
         {"id": "finish", "type": "finish_match", "env_id": "wc3", "depends_on": ["play", "play-opponent"]},
-        {"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks", "checks": [
+        {"id": "grade", "type": "rts_grade", "env_id": "wc3", "player_names": ["wc3"], "rubric": "checks", "checks": [
             {"metric": "enemy_army_destroyed_percent", "op": ">=", "value": 100},
             {"metric": "army_kept_percent", "op": ">=", "value": 40},
             {"metric": "hero_alive", "op": "==", "value": True},
@@ -80,7 +80,7 @@ def test_fight_even_is_the_design_docs_drill():
         {"id": "recording", "type": "save_rts_recording", "env_id": "wc3", "depends_on": ["grade"]}]
 
 
-def test_a_computer_opponent_is_a_computer_seat_with_its_ai_paused_by_the_stage():
+def test_a_computer_opponent_is_a_computer_player_slot_with_its_ai_paused_by_the_stage():
     steps = steps_of("expansion")
     assert list(steps) == ["deploy", "agent", "license", "match", "slot-wc3", "slot-ai", "start", "stage", "play",
                            "finish", "grade", "replay", "recording"]
@@ -97,7 +97,7 @@ def test_a_computer_opponent_is_a_computer_seat_with_its_ai_paused_by_the_stage(
     assert steps["play"]["timeout_seconds"] == 3600
 
 
-def test_a_raid_is_a_scripted_agent_seat_with_its_own_prompt():
+def test_a_raid_is_a_scripted_agent_player_slot_with_its_own_prompt():
     steps = steps_of("build_towers")
     assert steps["opponent"]["a2a_agent_id"] == "wc3-scripted"
     assert steps["opponent"]["env_vars"] == {"SCRIPT": "raid", "SCRIPT_AFTER_SECONDS": "150",
@@ -146,7 +146,7 @@ def test_a_spawn_with_its_own_hp_joining_a_filled_handle_gets_a_handle_of_its_ow
         drills.convert("x", army)
 
 
-def test_an_idle_opponent_is_a_paused_computer_seat_and_unknown_definitions_are_refused():
+def test_an_idle_opponent_is_a_paused_computer_player_slot_and_unknown_definitions_are_refused():
     idle = {"title": "t", "goal": "g", "minutes": 1, "checks": [], "opponent": "idle", "race": "nightelf",
             "setup": [{"op": "resources", "gold": 100}]}
     steps = steps_of("x", idle)
@@ -191,9 +191,9 @@ def test_every_drill_is_a_consistent_task(task):
     deployed = {s["agent_name"]: s["id"] for s in steps if s["type"] == "deploy_agent"}
     prompted = {s["agent_name"] for s in steps if s["type"] == "prompt_agent"}
     slots = [s for s in steps if s["type"] == "add_player_slot"]
-    seated = {s["player_name"]: s for s in slots if s["player_kind"] == "agent"}
-    assert set(deployed) == set(seated) == prompted and match["depends_on"] == ["deploy"]
-    assert all(seated[name]["depends_on"] == ["match", deployed[name]] for name in seated)
+    playing = {s["player_name"]: s for s in slots if s["player_kind"] == "agent"}
+    assert set(deployed) == set(playing) == prompted and match["depends_on"] == ["deploy"]
+    assert all(playing[name]["depends_on"] == ["match", deployed[name]] for name in playing)
     start = next(s for s in steps if s["type"] == "close_lobby")
     assert start["depends_on"] == [*(s["id"] for s in slots), "license"]
     plays = [s for s in steps if s["type"] == "prompt_agent"]

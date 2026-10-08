@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PBP, COLOR = "pbp", "color"
-SEATS = {PBP: "play_by_play", COLOR: "analyst"}   # the speakers as a task's broadcast names them
+ROLES = {PBP: "play_by_play", COLOR: "analyst"}   # the speakers as a task's broadcast names them
 MODEL, TTS_MODEL = "anthropic/claude-haiku-4-5", "openai/gpt-4o-mini-tts"
 CASTERS = {  # speaker: name, text-to-speech voice, how that voice sounds; the defaults a task's broadcast may change
     PBP: ("Max", "ash", "An esports play-by-play caster calling a live strategy match. High energy, quick and punchy, "
@@ -1088,15 +1088,15 @@ def arguments(call: dict) -> dict:
 def casters_of(config: dict) -> dict[str, tuple[str, str, str]]:
     """The two casters as a task's broadcast sets them up (`play_by_play` and `analyst`, each {name, voice, style}),
     with the default for whatever it leaves out."""
-    return {speaker: tuple((config.get(seat) or {}).get(key, default)
+    return {speaker: tuple((config.get(role) or {}).get(key, default)
                            for key, default in zip(("name", "voice", "style"), CASTERS[speaker], strict=True))
-            for speaker, seat in SEATS.items()}
+            for speaker, role in ROLES.items()}
 
 
 def models_of(config: dict) -> dict[str, str]:
     """Each caster's model as a task's broadcast sets it: its own `model`, else the casters' `model`, else MODEL."""
-    return {speaker: (config.get(seat) or {}).get("model") or config.get("model") or MODEL
-            for speaker, seat in SEATS.items()}
+    return {speaker: (config.get(role) or {}).get("model") or config.get("model") or MODEL
+            for speaker, role in ROLES.items()}
 
 
 def renamed(text: str, casters: dict[str, tuple[str, str, str]]) -> str:

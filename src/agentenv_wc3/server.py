@@ -89,7 +89,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Respon
 from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
-from agentenv_rts.seats import Lockstep
+from agentenv_rts.lockstep import Lockstep
 from agentenv_rts.session import DEBUG, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
 
@@ -109,9 +109,9 @@ DEFAULT_WORKER_CMD = ["wine", "C:\\Python311\\python.exe", "Z:" + str(WORKER).re
 MAX_ADVANCE_SECONDS = 60
 DEFAULT_SCENARIO = {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race": "orc", "ai_difficulty": "normal",
                     "seed": None, "randomize_starts": False, "time_limit_seconds": 1200, "mode": "stepping",
-                    "allow_debug": False, "client_view": False, "labels": None, "seats": None, "step_ms": 1000,
+                    "allow_debug": False, "client_view": False, "labels": None, "players": None, "step_ms": 1000,
                     "lockstep": {"stall_seconds": 600}}
-SEAT_KEYS = ("agent", "computer", "race", "team", "slot", "ai_assist", "omniscient")
+PLAYER_KEYS = ("agent", "computer", "race", "team", "slot", "ai_assist", "omniscient")
 OUTCOMES = {"victory": "won", "defeat": "lost", "draw": "drawn"}
 AGENT_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MODES = ("stepping", "realtime")
@@ -200,6 +200,13 @@ def team_of(slot: PlayerSlot) -> int:
     return slot.game_settings["team"] or int(slot.player_id) + 1
 
 
+def player_slot(player: dict) -> dict:
+    """A game's player as the lobby names it: its player_id, kind and name, faction and team (and an AI's level)."""
+    return {"player_id": str(player["slot"]), "player_kind": "ai" if player["computer"] else "agent",
+            "player_name": player["agent"], "faction": player["race"], "team": player["team"],
+            **({"ai_level": player["computer"]} if player["computer"] else {})}
+
+
 MAKES = {"build": ("builds",), "train": ("trains", "upgrades_to", "sells_units"), "research": ("researches",)}
 
 
@@ -240,64 +247,64 @@ def check_scenario(s: dict) -> dict:
     stall = (s["lockstep"] or {}).get("stall_seconds") if isinstance(s["lockstep"], dict) else None
     if not isinstance(stall, int | float) or stall <= 0:
         raise ValueError('lockstep must be {"stall_seconds": <seconds>} with a positive number')
-    seats_of(s)
+    players_of(s)
     return s
 
 
-def seats_of(s: dict) -> list[dict]:
-    """The match's seats, each {slot, agent, computer, race, team, ai_assist, omniscient}: `seats` as given, or the
-    shorthand's two (an agent seat with no name, played at the env's root, and the game's AI)."""
-    given = s["seats"] if s["seats"] is not None else [
+def players_of(s: dict) -> list[dict]:
+    """The match's players, each {slot, agent, computer, race, team, ai_assist, omniscient}: `players` as given, or the
+    shorthand's two (an agent with no name, played at the env's root, and the game's AI)."""
+    given = s["players"] if s["players"] is not None else [
         {"race": s["race"], "team": 1, "agent": None}, {"computer": s["ai_difficulty"], "race": s["opponent_race"],
                                                         "team": 2}]
     if not isinstance(given, list) or not 1 <= len(given) <= 12:
-        raise ValueError("seats must be a list of 1 to 12 seats")
-    seats = []
-    for i, seat in enumerate(given):
-        if not isinstance(seat, dict) or (unknown := sorted(set(seat) - set(SEAT_KEYS))):
-            raise ValueError(f"seat {i}: a seat is an object with {', '.join(SEAT_KEYS)}"
-                             + (f", not {unknown}" if isinstance(seat, dict) else ""))
-        agent, computer = seat.get("agent"), seat.get("computer")
-        if (computer is None) == ("agent" not in seat) or (agent is not None and not AGENT_NAME.match(str(agent))):
-            raise ValueError(f"seat {i}: give one of agent (the deploy_agent's agent_name) or computer "
+        raise ValueError("players must be a list of 1 to 12 players")
+    players = []
+    for i, player in enumerate(given):
+        if not isinstance(player, dict) or (unknown := sorted(set(player) - set(PLAYER_KEYS))):
+            raise ValueError(f"player {i}: a player is an object with {', '.join(PLAYER_KEYS)}"
+                             + (f", not {unknown}" if isinstance(player, dict) else ""))
+        agent, computer = player.get("agent"), player.get("computer")
+        if (computer is None) == ("agent" not in player) or (agent is not None and not AGENT_NAME.match(str(agent))):
+            raise ValueError(f"player {i}: give one of agent (the deploy_agent's agent_name) or computer "
                              f"({', '.join(DIFFICULTIES)})")
         if computer is not None and computer not in DIFFICULTIES:
-            raise ValueError(f"seat {i}: computer must be one of {', '.join(DIFFICULTIES)}, got {computer!r}")
-        race = seat.get("race", "random")
+            raise ValueError(f"player {i}: computer must be one of {', '.join(DIFFICULTIES)}, got {computer!r}")
+        race = player.get("race", "random")
         if race not in RACES:
-            raise ValueError(f"seat {i}: race must be one of {', '.join(RACES)}, got {race!r}")
-        seats.append({"slot": seat.get("slot", i), "agent": agent, "computer": computer, "race": race,
-                      "team": seat.get("team", i + 1), "ai_assist": bool(seat.get("ai_assist")),
-                      "omniscient": bool(seat.get("omniscient"))})
-    slots, names = [x["slot"] for x in seats], [x["agent"] for x in seats if x["agent"]]
+            raise ValueError(f"player {i}: race must be one of {', '.join(RACES)}, got {race!r}")
+        players.append({"slot": player.get("slot", i), "agent": agent, "computer": computer, "race": race,
+                      "team": player.get("team", i + 1), "ai_assist": bool(player.get("ai_assist")),
+                      "omniscient": bool(player.get("omniscient"))})
+    slots, names = [x["slot"] for x in players], [x["agent"] for x in players if x["agent"]]
     if len(set(slots)) != len(slots) or not all(isinstance(x, int) and 0 <= x <= 11 for x in slots):
-        raise ValueError("seats need distinct slots from 0 to 11")
+        raise ValueError("players need distinct slots from 0 to 11")
     if len(set(names)) != len(names):
-        raise ValueError("an agent plays one seat")
-    if len({x["computer"] for x in seats if x["computer"]}) > 1:
-        raise ValueError("every computer seat has the same difficulty: the game has one AI level")
-    if not any(x["computer"] is None for x in seats):
-        raise ValueError("a match needs an agent seat")
-    return seats
+        raise ValueError("an agent plays one player")
+    if len({x["computer"] for x in players if x["computer"]}) > 1:
+        raise ValueError("every computer player has the same difficulty: the game has one AI level")
+    if not any(x["computer"] is None for x in players):
+        raise ValueError("a match needs an agent")
+    return players
 
 
 def scenario_of(lobby: Lobby) -> dict:
-    """The game a closed lobby describes, as the env plays it: the lobby's settings, a seat per player slot (its
+    """The game a closed lobby describes, as the env plays it: the lobby's settings, a player per player slot (its
     player_id is the game's player number), and the matchup the game's own setup and agents read (the first agent's
     race, the first AI's race and level)."""
-    seats = []
+    players = []
     for s in lobby.player_slots:
         given = s.game_settings
-        seat = {"slot": int(s.player_id), "race": given["faction"], "team": team_of(s)}
+        player = {"slot": int(s.player_id), "race": given["faction"], "team": team_of(s)}
         if s.player_kind is PlayerKind.AGENT:
-            seat.update(agent=s.player_name, ai_assist=given["ai_assist"], omniscient=given["omniscient"])
+            player.update(agent=s.player_name, ai_assist=given["ai_assist"], omniscient=given["omniscient"])
         else:
-            seat["computer"] = given["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"]
-        seats.append(seat)
-    agents, computers = [x for x in seats if "agent" in x], [x for x in seats if "computer" in x]
+            player["computer"] = given["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"]
+        players.append(player)
+    agents, computers = [x for x in players if "agent" in x], [x for x in players if "computer" in x]
     labels = {s.player_id: s.game_settings["label"] for s in lobby.player_slots if s.game_settings["label"]}
     level = computers[0]["computer"] if computers else DEFAULT_SCENARIO["ai_difficulty"]
-    return check_scenario({**DEFAULT_SCENARIO, **lobby.game_settings, "seats": seats, "labels": labels or None,
+    return check_scenario({**DEFAULT_SCENARIO, **lobby.game_settings, "players": players, "labels": labels or None,
                            "race": agents[0]["race"] if agents else "random",
                            "opponent_race": computers[0]["race"] if computers else "random", "ai_difficulty": level})
 
@@ -350,8 +357,8 @@ class WC3Env(AgentEnvGameEnv):
         self.bridge: Bridge | None = None
         self.setup: dict | None = None
         self.obs: dict[int, dict] = {}
-        self.seats = seats_of(self.scenario)
-        self.lead = self.seats[0]["slot"]
+        self.players = players_of(self.scenario)
+        self.lead = self.players[0]["slot"]
         self.queue: dict[int, list[dict]] = {}
         self.recent: dict[int, list[str]] = {}
         self.step_info: dict[int, dict] = {}
@@ -398,42 +405,42 @@ class WC3Env(AgentEnvGameEnv):
         if self.bridge is None or not self.bridge.alive:
             self.bridge = Bridge(self.worker_cmd)
             await self.bridge.start()
-        seats = seats_of(scenario)
-        players = [{"slot": x["slot"], "race": x["race"], "control": "computer" if x["computer"] else "agent"}
-                   for x in seats]
-        level = next((x["computer"] for x in seats if x["computer"]), scenario["ai_difficulty"])
-        result = await self.bridge.call("start", map=scenario["map"], players=players, step_ms=scenario["step_ms"],
+        players = players_of(scenario)
+        starting = [{"slot": x["slot"], "race": x["race"], "control": "computer" if x["computer"] else "agent"}
+                    for x in players]
+        level = next((x["computer"] for x in players if x["computer"]), scenario["ai_difficulty"])
+        result = await self.bridge.call("start", map=scenario["map"], players=starting, step_ms=scenario["step_ms"],
                                         seed=scenario["seed"], randomize_starts=scenario["randomize_starts"],
                                         ai_difficulty=DIFFICULTIES[level],
-                                        ai_agents=[x["slot"] for x in seats if x["ai_assist"]],
+                                        ai_agents=[x["slot"] for x in players if x["ai_assist"]],
                                         mode=scenario["mode"], render=scenario["client_view"],
                                         visible=scenario["client_view"],
                                         window=WINDOW if scenario["client_view"] else None)
-        self.scenario, self.setup, self.seats = scenario, result.get("setup"), seats
+        self.scenario, self.setup, self.players = scenario, result.get("setup"), players
         self.started, self.created, self.begun = asyncio.Event(), time.monotonic(), False
         self.last_move, self.played_out_from = {}, None
-        self.lead = next(x["slot"] for x in seats if x["computer"] is None)
+        self.lead = next(x["slot"] for x in players if x["computer"] is None)
         self.obs = {int(k): v for k, v in result["observations"].items()}
-        agents = [x["slot"] for x in seats if x["computer"] is None]
+        agents = [x["slot"] for x in players if x["computer"] is None]
         self.queue, self.recent = {x: [] for x in agents}, {x: [] for x in agents}
         self.orders_sent, self.step_info = {x: 0 for x in agents}, {}
         self.result, self.failed, self.done = "", None, False
         self.lockstep = (Lockstep(agents, scenario["lockstep"]["stall_seconds"], self._chunk, self._seconds,
                                   self._out)
                          if scenario["mode"] == "stepping" and len(agents) > 1 else None)
-        await self._ally(seats)
+        await self._ally(players)
         self.names = render.Names()
         for o in self.obs.values():
             self.names.see(o)
         self.stats["games"] += 1
-        labels = {**{x["slot"]: x["agent"] for x in seats if x["agent"]},
+        labels = {**{x["slot"]: x["agent"] for x in players if x["agent"]},
                   **{int(k): v for k, v in (scenario["labels"] or {}).items()}}
         self.timeline = Timeline(frames.static(f"g-{self.stats['games']}", scenario, self.setup, self.obs,
                                                self.ref, labels))
         for player in self.timeline.static["players"]:
-            player["team"] = next((x["team"] for x in seats if x["slot"] == player["slot"]), None)
+            player["team"] = next((x["team"] for x in players if x["slot"] == player["slot"]), None)
         self.feed = frames.Feed(self.ref, self.timeline.static)
-        self.metrics = metrics.Metrics(self.ref, render.map_info(scenario["map"]), [x["slot"] for x in seats])
+        self.metrics = metrics.Metrics(self.ref, render.map_info(scenario["map"]), [x["slot"] for x in players])
         self.metrics.see(self.obs)
         self.camera, self.director, self.notes, self.agents = None, frames.Director(self.lead), [], {}
         if scenario["client_view"]:
@@ -441,12 +448,12 @@ class WC3Env(AgentEnvGameEnv):
         self._record()
         log.warning("NEW GAME %s: %s, seed %s", scenario["map"], "; ".join(
             f"slot {x['slot']} {x['race']} {x['agent'] or ('AI ' + x['computer'] if x['computer'] else 'agent')} "
-            f"team {x['team']}" for x in seats), (self.setup or {}).get("match_setup"))
+            f"team {x['team']}" for x in players), (self.setup or {}).get("match_setup"))
 
-    async def _ally(self, seats: list[dict]) -> None:
-        """Seats on one team are allies (passive, helping, sharing vision): the game's melee teams."""
-        for a in seats:
-            for b in seats:
+    async def _ally(self, players: list[dict]) -> None:
+        """Players on one team are allies (passive, helping, sharing vision): the game's melee teams."""
+        for a in players:
+            for b in players:
                 if a is not b and a["team"] == b["team"]:
                     for kind in ALLIANCE:
                         await self.bridge.call("debug", op="alliance", args={"player": a["slot"], "other": b["slot"],
@@ -466,31 +473,31 @@ class WC3Env(AgentEnvGameEnv):
         if not self.obs:
             await self._new_game(self.scenario)
 
-    def _seat(self) -> dict | None:
-        """The seat the current request plays: its player slot's, at `/players/<player_id>`; None at the root."""
+    def _playing(self) -> dict | None:
+        """The player the current request plays: its player slot's, at `/players/<player_id>`; None at the root."""
         try:
             slot = self.player()
         except GameError as e:
             raise WorkerError(e.code, e.message) from e
         if slot is None:
             return None
-        seat = next((x for x in self.seats if x["slot"] == int(slot.player_id)), None)
-        if seat is None:
-            raise WorkerError("unknown_player", f"player slot {slot.player_id} plays no seat in this game")
-        return seat
+        player = next((x for x in self.players if x["slot"] == int(slot.player_id)), None)
+        if player is None:
+            raise WorkerError("unknown_player", f"player slot {slot.player_id} is not in this game")
+        return player
 
     def _slot(self) -> int:
-        """The current request's seat's slot; at the root, the first agent seat's."""
-        seat = self._seat()
-        return seat["slot"] if seat else self.lead
+        """The player number the current request plays; at the root, the first agent's."""
+        player = self._playing()
+        return player["slot"] if player else self.lead
 
     def _me(self, slot: int | None = None) -> dict:
         return self.obs[self._slot() if slot is None else slot]
 
     @property
     def game_over(self) -> bool:
-        """Over once every agent seat has a result, so in a free-for-all the last seats play on after one is out."""
-        return self.done or all(self._result_of(x["slot"]) for x in self.seats if x["computer"] is None)
+        """Over once every agent has a result, so in a free-for-all the last players play on after one is out."""
+        return self.done or all(self._result_of(x["slot"]) for x in self.players if x["computer"] is None)
 
     def _ended(self) -> bool:
         """The match is over for its players: the game ended or stopped working, or the harness ended the match
@@ -499,7 +506,7 @@ class WC3Env(AgentEnvGameEnv):
                 or ((match := self.match) is not None and match.status in FINAL))
 
     def _out(self, slot: int) -> bool:
-        """This seat's game is over: the match is, or the seat has a result."""
+        """This player's game is over: the match is, or the player has a result."""
         return self._ended() or bool(self._result_of(slot))
 
     def _seconds(self) -> float:
@@ -509,20 +516,20 @@ class WC3Env(AgentEnvGameEnv):
         return (self.obs.get(slot) or {}).get("result") or ""
 
     def _result_of(self, slot: int) -> str:
-        """The game's result for a seat, else victory once every seat on the other teams is defeated: the game
+        """The game's result for a player, else victory once every player on the other teams is defeated: the game
         lets allies win together only with the lobby's allied victory, which teams made by alliances don't have."""
         own = self._given(slot)
         if own:
             return own
-        team = next((x["team"] for x in self.seats if x["slot"] == slot), None)
-        rivals = [x["slot"] for x in self.seats if x["team"] != team]
+        team = next((x["team"] for x in self.players if x["slot"] == slot), None)
+        rivals = [x["slot"] for x in self.players if x["team"] != team]
         if rivals and all(self._given(r) == "defeat" for r in rivals):
             return "victory"
         return "time_limit" if self._seconds() >= self.scenario["time_limit_seconds"] else ""
 
     async def _play(self, slot: int, batch: list[dict], ms: int) -> dict:
-        """A seat's orders and `ms` of game time: one step, or, with several agent seats stepping, a turn of the
-        lockstep clock, which moves when they all wait. The step's refusals and sites for this seat's orders."""
+        """A player's orders and `ms` of game time: one step, or, with several agents stepping, a turn of the lockstep
+        clock, which moves when they all wait. The step's refusals and sites for this player's orders."""
         await self._ready(slot)
         self.last_move[slot] = self._seconds()
         ms = max(25, min(ms, round((self.scenario["time_limit_seconds"] - self._seconds()) * 1000) // 25 * 25))
@@ -531,7 +538,7 @@ class WC3Env(AgentEnvGameEnv):
             await self._chunk({slot: batch}, ms / 1000)
         else:
             await self.lockstep.step(slot, batch, ms / 1000)
-        if self.failed:   # another seat's step found the game dead
+        if self.failed:   # another player's step found the game dead
             raise WorkerError("game_failed", f"the game stopped working: {self.failed}")
         return self.step_info.pop(slot)
 
@@ -576,11 +583,11 @@ class WC3Env(AgentEnvGameEnv):
         return [int(p) for p, x in match.player_states.items() if x.status is PlayerStatus.NOT_READY]
 
     async def _chunk(self, batches: dict[int, list], seconds: float) -> None:
-        """One step of the game with every waiting seat's orders; its observations become the game's state."""
+        """One step of the game with every waiting player's orders; its observations become the game's state."""
         self.begun = True
         self.started.set()
         async with self.lock:
-            if self.failed:   # a seat that was waiting when the game failed hears why, not that there is no game
+            if self.failed:   # a player that was waiting when the game failed hears why, not that there is no game
                 raise WorkerError("game_failed", f"the game stopped working: {self.failed}")
             ms = max(25, round(seconds * 1000) // 25 * 25)
             try:
@@ -619,7 +626,7 @@ class WC3Env(AgentEnvGameEnv):
 
     def _observed(self, result: dict) -> None:
         """A step's observations become the game's state: whether the game says it is over, and the first agent
-        seat's result (or the time limit), which today's summary reports."""
+        player slot's result (or the time limit), which today's summary reports."""
         self.obs = {int(k): v for k, v in result["observations"].items()}
         self.done = self.done or bool(result.get("done"))
         self.result = self._result_of(self.lead)
@@ -712,9 +719,9 @@ class WC3Env(AgentEnvGameEnv):
         Lost track? Call get_state."""
         async def body():
             slot = self._slot()
-            seat = next(x for x in self.seats if x["slot"] == slot)
+            player = next(x for x in self.players if x["slot"] == slot)
             return self._briefing(slot) + "\n" + render.state(
-                self._me(slot), self.ref, me=slot, race=seat["race"], map_name=self.scenario["map"],
+                self._me(slot), self.ref, me=slot, race=player["race"], map_name=self.scenario["map"],
                 limit=self.scenario["time_limit_seconds"], queued=len(self.queue.get(slot, ())),
                 result=self._result_of(slot), events=self.recent.get(slot, []))
         return await self._run(body)
@@ -941,8 +948,8 @@ class WC3Env(AgentEnvGameEnv):
                 except WorkerError as e:
                     if e.code != "no_game":
                         self.failed = e.message
-            lead = next(x for x in self.seats if x["slot"] == self.lead)
-            rival = next((x for x in self.seats if x["team"] != lead["team"]), None)
+            lead = next(x for x in self.players if x["slot"] == self.lead)
+            rival = next((x for x in self.players if x["team"] != lead["team"]), None)
             me, ai = self.obs.get(self.lead) or {}, self.obs.get(rival["slot"]) if rival else {}
             ai = ai or {}
             units = me.get("units") or []
@@ -961,14 +968,14 @@ class WC3Env(AgentEnvGameEnv):
                 "opponent_structures": sum(bool(u.get("structure")) for u in ai.get("units") or ()),
                 "mode": self.scenario["mode"], "client_view": self.scenario["client_view"],
                 "harness": dict(self.stats), "engine_failed": self.failed is not None, "error": self.failed,
-                "seats": [{**{k: x[k] for k in ("slot", "agent", "computer", "race", "team")},
+                "player_slots": [{**player_slot(x),
                            "result": self._result_of(x["slot"]) if self.obs else "",
                            "orders_sent": self.orders_sent.get(x["slot"], 0),
                            "stalls": self.lockstep.stalls.get(x["slot"], 0) if self.lockstep else 0,
                            "last_move_seconds": self.last_move.get(x["slot"]),
                            "spend": self.agents.get(x["slot"]) or {},
                            "metrics": self.metrics.of(x["slot"], self.obs.get(x["slot"]) or {})
-                           if self.metrics is not None and self.obs else {}} for x in self.seats],
+                           if self.metrics is not None and self.obs else {}} for x in self.players],
                 "handles": {n: {"slot": h["slot"], "staged": len(h["ids"]),
                                 "alive": len(set(h["ids"]) - self.metrics.deaths)}
                             for n, h in (self.metrics.handles if self.metrics else {}).items()},
@@ -1049,7 +1056,7 @@ class WC3Env(AgentEnvGameEnv):
 
     @create_game
     async def new_match(self, lobby: Lobby) -> None:
-        """The match the closed lobby describes: its settings, and a seat per player slot."""
+        """The match the closed lobby describes: its settings, and a player per player slot."""
         scenario = scenario_of(lobby)
         async with self.lock:
             try:
@@ -1069,14 +1076,15 @@ class WC3Env(AgentEnvGameEnv):
             status="failed" if self.failed else "finished" if over else "started",
             status_detail=self.failed or (self._ending() if over else None),
             progress=[Counter(name="game", unit="seconds", value=round(self._seconds(), 1), limit=limit, rate=rate)],
-            outcomes={str(x["slot"]): OUTCOMES[r] for x in self.seats if (r := self._result_of(x["slot"])) in OUTCOMES},
-            scores={str(x["slot"]): self._scores(x["slot"]) for x in self.seats} if self.metrics and self.obs else {})
+            outcomes={str(x["slot"]): OUTCOMES[r] for x in self.players
+                      if (r := self._result_of(x["slot"])) in OUTCOMES},
+            scores={str(x["slot"]): self._scores(x["slot"]) for x in self.players} if self.metrics and self.obs else {})
 
     def _ending(self) -> str:
         """How the game ended, in words: who won, a draw, or the time limit; and whether finish played it out."""
-        won = [self._who(x) for x in self.seats if self._result_of(x["slot"]) == "victory"]
+        won = [self._who(x) for x in self.players if self._result_of(x["slot"]) == "victory"]
         how = (f"{' and '.join(won)} won" if won else
-               "a draw" if any(self._result_of(x["slot"]) == "draw" for x in self.seats) else
+               "a draw" if any(self._result_of(x["slot"]) == "draw" for x in self.players) else
                f"the time limit, {render.clock(self.scenario['time_limit_seconds'])}")
         return how + (f"; played out from {render.clock(self.played_out_from)}"
                       if self.played_out_from is not None else "")
@@ -1119,8 +1127,8 @@ class WC3Env(AgentEnvGameEnv):
     @extension(STAGE_EXTENSION,
                description="Stage the game before play, for drills: the hook's staging ops in order (spawn, level, "
                            "give, item, hp, mana, kill, remove, resources, ai, research, invulnerable, alliance, "
-                           "destructable). `player` is a seat: an agent's name, `opponent` or a slot. Places come "
-                           "from the first agent seat's start: home, enemy_home, nearest_camp, camp:<n>, "
+                           "destructable). `player` is an agent's name, `opponent` or a player number. Places come "
+                           "from the first agent's start: home, enemy_home, nearest_camp, camp:<n>, "
                            "building:<name>, toward:<place>:<distance>, with dx and dy. `as` names the units an op "
                            "makes, for later ops (`unit`) and the summary's metrics (army, hero, enemy). "
                            "warmup_seconds lets the game run first. Harness time, not the agents'.")
@@ -1183,26 +1191,26 @@ class WC3Env(AgentEnvGameEnv):
             await self.bridge.call("debug", op=kind, args=args)
 
     def _staged_player(self, ref) -> int:
-        """A stage op's player: a slot, an agent's name, or `opponent` (the first seat not on the first agent
-        seat's team); by default the first agent seat."""
-        lead = next(x for x in self.seats if x["slot"] == self.lead)
+        """A stage op's player: a player number, an agent's name, or `opponent` (the first player not on the first
+        agent's team); by default the first agent."""
+        lead = next(x for x in self.players if x["slot"] == self.lead)
         if ref is None:
             return self.lead
         if isinstance(ref, int):
             return ref
         if ref == "opponent":
-            return next(x["slot"] for x in self.seats if x["team"] != lead["team"])
-        seat = next((x for x in self.seats if x["agent"] == ref), None)
-        if seat is None:
-            raise ValueError(f"no seat {ref!r}")
-        return seat["slot"]
+            return next(x["slot"] for x in self.players if x["team"] != lead["team"])
+        player = next((x for x in self.players if x["agent"] == ref), None)
+        if player is None:
+            raise ValueError(f"no player {ref!r}")
+        return player["slot"]
 
     def _place(self, spec: dict) -> dict:
-        """A named place as x, y: wc3agent's names, from the first agent seat's start, so a drill works from
+        """A named place as x, y: wc3agent's names, from the first agent's start, so a drill works from
         either start location."""
         home = self.metrics.home(self.obs.get(self.lead) or {})
         if home is None:
-            raise ValueError("the first agent seat has no hall to find its start from")
+            raise ValueError("the first agent has no hall to find its start from")
         info = render.map_info(self.scenario["map"])
 
         def named(word: str) -> dict:
@@ -1249,21 +1257,22 @@ class WC3Env(AgentEnvGameEnv):
 
     # ---- the urn:rts:* session (agentenv_rts.session): a program plays through raw observations and actions ----
 
-    @extension(OBSERVE, description="The game as a program plays it: at a seat's address, its own raw wc3env "
-                                    "observation (every player's for an omniscient seat), `you` (its slot) and the "
-                                    "seats; at the root, every player's; whether it is over, and the scenario and "
-                                    "setup it was started with.")
+    @extension(OBSERVE, description="The game as a program plays it: at a player slot's address, its own raw wc3env "
+                                    "observation (every player's for an omniscient player slot), its `player_id` and "
+                                    "the player_slots; at the root, every player's; whether it is over, and the "
+                                    "scenario and setup it was started with.")
     async def session_observe(self) -> dict:
         self.stats["extension_calls"] += 1
         async with self.lock:
             await self._session_game()
-            return self._session_state(self._session_seat())
+            return self._session_state(self._session_player())
 
-    @extension(STEP, description="Send raw wc3env actions ({slot: [action]}; at a seat's address, its own slot's) "
-                                 "and step the game `ms` milliseconds (default 1000; with several agent seats, the "
-                                 "game moves when every seat has stepped; in realtime the game runs on its own clock "
-                                 "and this only sends and observes). Orders that no longer apply are dropped and "
-                                 "reported as rejected, like the game's own refusals, by their index in the batch.")
+    @extension(STEP, description="Send raw wc3env actions ({slot: [action]}; at a player slot's address, its own "
+                                 "player number's) and step the game `ms` milliseconds (default 1000; with several "
+                                 "agents, the game moves when every one has stepped; in realtime the game runs on its "
+                                 "own clock and this only sends and observes). Orders that no longer apply are "
+                                 "dropped and reported as rejected, like the game's own refusals, by their index in "
+                                 "the batch.")
     async def session_step(self, actions: dict | None = None, ms: int | None = None) -> dict:
         self.stats["extension_calls"] += 1
         ms = DEFAULT_STEP_MS if ms is None else int(ms)
@@ -1271,12 +1280,12 @@ class WC3Env(AgentEnvGameEnv):
             raise ValueError(f"ms must be 25 to {MAX_ADVANCE_SECONDS * 1000}")
         async with self.lock:
             await self._session_game()
-            seat = self._session_seat()
-            if self._out(seat["slot"]) if seat else self._ended():
-                return {**self._session_state(seat), "rejected": {}, "placements": {}, "elapsed_ms": 0}
+            player = self._session_player()
+            if self._out(player["slot"]) if player else self._ended():
+                return {**self._session_state(player), "rejected": {}, "placements": {}, "elapsed_ms": 0}
             given = {int(k): list(v or ()) for k, v in (actions or {}).items()}
-            if seat is not None and set(given) - {seat["slot"]}:
-                raise ValueError(f"a seat orders only its own units: slot {seat['slot']}")
+            if player is not None and set(given) - {player["slot"]}:
+                raise ValueError(f"a player slot orders only its own units: player {player['slot']}")
             sent, dropped = {}, {}
             for slot, batch in given.items():
                 if slot not in self.obs:
@@ -1285,8 +1294,9 @@ class WC3Env(AgentEnvGameEnv):
         before = self._seconds()
         ms = max(25, min(ms, round((self.scenario["time_limit_seconds"] - before) * 1000) // 25 * 25))
         try:
-            if seat is not None:
-                infos = {seat["slot"]: await self._play(seat["slot"], [a for _, a in sent.get(seat["slot"], [])], ms)}
+            if player is not None:
+                mine = player["slot"]
+                infos = {mine: await self._play(mine, [a for _, a in sent.get(mine, [])], ms)}
             else:
                 await self._ready(self.lead)
                 self.last_move[self.lead] = self._seconds()
@@ -1308,7 +1318,7 @@ class WC3Env(AgentEnvGameEnv):
                                      if 0 <= p.get("index", -1) < len(index)]
             self.stats["orders_rejected"] += len(dropped[slot])
         self.stats["session_steps"] += 1
-        return {**self._session_state(seat), "rejected": rejected, "placements": placements,
+        return {**self._session_state(player), "rejected": rejected, "placements": placements,
                 "elapsed_ms": round((self._seconds() - before) * 1000)}
 
     @extension(DEBUG, description="A wc3env debug op ({op, args}). speed, camera, overlay and render are always "
@@ -1338,12 +1348,12 @@ class WC3Env(AgentEnvGameEnv):
         async with self.lock:
             if self.timeline is None or self.feed is None:
                 raise RuntimeError("no game has started")
-            seat = self._session_seat()
-            slot = seat["slot"] if seat is not None else self.lead if slot is None else slot
+            player = self._session_player()
+            slot = player["slot"] if player is not None else self.lead if slot is None else slot
             if kind == "player" and text:
-                for player in self.timeline.static["players"]:
-                    if player["slot"] == slot:
-                        player["label"] = text
+                for shown in self.timeline.static["players"]:
+                    if shown["slot"] == slot:
+                        shown["label"] = text
                 self.feed.labels[slot] = text
             elif kind == "stats":
                 self.agents[slot] = {k: (data or {})[k] for k in ("cost_usd", "decisions", "tokens")
@@ -1363,23 +1373,23 @@ class WC3Env(AgentEnvGameEnv):
         except WorkerError as e:
             raise RuntimeError(f"{e.code}: {e.message}") from e
 
-    def _session_seat(self) -> dict | None:
+    def _session_player(self) -> dict | None:
         try:
-            return self._seat()
+            return self._playing()
         except WorkerError as e:
             raise RuntimeError(f"{e.code}: {e.message}") from e
 
-    def _session_state(self, seat: dict | None) -> dict:
-        """The game as `seat` sees it: its own observation (every one for an omniscient seat or at the root), and
+    def _session_state(self, player: dict | None) -> dict:
+        """The game as `player` sees it: its own observation (every one for an omniscient player or at the root), and
         done once its own game is over."""
-        shown = None if seat is None or seat["omniscient"] else {seat["slot"]}
+        shown = None if player is None or player["omniscient"] else {player["slot"]}
         state = {"observations": {str(k): v for k, v in self.obs.items() if shown is None or k in shown},
-                 "done": self._out(seat["slot"]) if seat else self._ended(),
-                 "result": self._result_of(seat["slot"]) if seat else self.result,
+                 "done": self._out(player["slot"]) if player else self._ended(),
+                 "result": self._result_of(player["slot"]) if player else self.result,
                  "scenario": self.scenario, "setup": self.setup,
                  "time_limit_seconds": self.scenario["time_limit_seconds"],
-                 "seats": [{k: x[k] for k in ("slot", "agent", "computer", "race", "team")} for x in self.seats]}
-        return {**state, "you": seat["slot"]} if seat else state
+                 "player_slots": [player_slot(x) for x in self.players]}
+        return {**state, "player_id": str(player["slot"])} if player else state
 
     async def _still_valid_indexed(self, slot: int, batch: list[dict]) -> tuple[list[tuple[int, dict]], list[dict]]:
         """The batch's orders that still apply, with their indexes, and the others as rejections (as `step` reports
@@ -1465,7 +1475,7 @@ class WC3Env(AgentEnvGameEnv):
         """The casters' brief: what game this is, who plays, and how it is won."""
         s = self.scenario
         teams: dict[int, list[str]] = {}
-        for x in self.seats:
+        for x in self.players:
             teams.setdefault(x["team"], []).append(self._who(x))
         sides = " against ".join(" and ".join(t) for t in teams.values())
         return (f"Warcraft III: The Frozen Throne, a real-time strategy game. Each side mines gold and cuts lumber, "
@@ -1477,21 +1487,21 @@ class WC3Env(AgentEnvGameEnv):
                 f"score wins the tiebreak (a win on score, not a conquest). Score counts units, buildings, heroes and "
                 f"resources gathered.")
 
-    def _who(self, seat: dict) -> str:
-        """A seat as people say it: "Claude Sonnet 5.5 (human)", "the game's normal orc AI"."""
-        race = seat["race"].replace("_", " ")
-        if seat["computer"]:
-            return f"the game's own {seat['computer']} {race} AI"
+    def _who(self, player: dict) -> str:
+        """A player as people say it: "Claude Sonnet 5.5 (human)", "the game's normal orc AI"."""
+        race = player["race"].replace("_", " ")
+        if player["computer"]:
+            return f"the game's own {player['computer']} {race} AI"
         label = next((p["label"] for p in (self.timeline.static["players"] if self.timeline else ())
-                      if p["slot"] == seat["slot"]), None)
-        return f"{label or seat['agent'] or 'an AI agent'} ({race})"
+                      if p["slot"] == player["slot"]), None)
+        return f"{label or player['agent'] or 'an AI agent'} ({race})"
 
     def _briefing(self, slot: int) -> str:
         """Who an agent is and how its game ends, for get_state's first lines: a prompt need not repeat the match."""
-        me = next(x for x in self.seats if x["slot"] == slot)
-        allies = [self._who(x) for x in self.seats if x["team"] == me["team"] and x is not me]
-        enemies = [self._who(x) for x in self.seats if x["team"] != me["team"]]
-        return (f"You are slot {slot}, {me['race'].replace('_', ' ')}, team {me['team']}"
+        me = next(x for x in self.players if x["slot"] == slot)
+        allies = [self._who(x) for x in self.players if x["team"] == me["team"] and x is not me]
+        enemies = [self._who(x) for x in self.players if x["team"] != me["team"]]
+        return (f"You are player slot {slot}, {me['race'].replace('_', ' ')}, team {me['team']}"
                 + (f", with {', '.join(allies)}" if allies else "")
                 + f". Against: {', '.join(enemies) or 'nobody'}. The game ends when a side has no buildings left, or "
                 f"at the {self.scenario['time_limit_seconds'] // 60}-minute limit, where the higher score is ahead."

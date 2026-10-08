@@ -42,15 +42,15 @@ call it. Claude won on score at the 10-minute limit, 30.7k to 28.5k, after killi
   The [Tasks](#tasks) table has times, costs and grades.
 - **Multiplayer rules, checked there with no model:**
   - a team wins together;
-  - a free-for-all plays to the last seat;
+  - a free-for-all plays to the last player;
   - a fixed seed replays a game step for step;
   - no game starts until every player has made its first move.
 - **Chaos-tested there**, by breaking things on purpose mid-game:
   - **An agent's container killed:** the others play on without it.
-  - **The game process killed:** every seat is told the game failed.
+  - **The game process killed:** every player is told the game failed.
   - **The broadcast's container killed:** the game is still played, graded and recorded.
   - **Activation-file secrets corrupted or missing:** refused, with a clear error.
-  - **Path traversal on recordings, bogus seats, and invalid holds and finishes:** refused.
+  - **Path traversal on recordings, bogus player slots, and invalid lobby and match calls:** refused.
   - **Two tasks at once:** both pass.
 
 Everything above the game also runs on wc3env's **fake game**, on macOS (Apple Silicon) and Linux, without
@@ -202,13 +202,13 @@ To go out live, give a stream key: `to` in the step, or `--to twitch`, `--to x` 
 | Task | Who plays | Game | Measured on the real game |
 |---|---|---|---|
 | `smoke` | nobody: `finish_match` plays the game out | 2 minutes | 40 s, $0 |
-| `broadcast-smoke` | two `wc3-scripted` seats (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per seat | 2 min, $0; red 0.25, blue 0.43, the same both times it ran; a 1080p broadcast of 105 s |
+| `broadcast-smoke` | two `wc3-scripted` agents (attack and raid), staged armies, a recorded broadcast | 2 minutes, stepped in lockstep, graded per player | 2 min, $0; red 0.25, blue 0.43, the same both times it ran; a 1080p broadcast of 105 s |
 | `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k. In `first-eval`, 6 games: 0.44 ± 0.01, $0.11 a game |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
 | `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime, with the game's picture | 11 min, ~$11 |
-| `duel-quick` | two wc3agents, Haiku 4.5 for both models, Human against Orc | 5 minutes, stepped in lockstep, graded per seat (`dense`) | 19 min, $4.70; Orc 0.41, Human 0.35 |
+| `duel-quick` | two wc3agents, Haiku 4.5 for both models, Human against Orc | 5 minutes, stepped in lockstep, graded per player (`dense`) | 19 min, $4.70; Orc 0.41, Human 0.35 |
 | `drill-*` (25) | wc3agent with Haiku 4.5, against the AI or the scripted `wc3-scripted` | wc3agent's 25 scenarios as drills: 1.5 to 10 minutes, graded by their checks | `drill-fight-even` 11 min, $2.30, 0.6; `drill-creep-easy` 10 min, $1.90, 0.67 |
 
 `agent-env run wc3 --task <task>` runs one; the costs are model spend at list prices. On the fake game,
@@ -225,7 +225,7 @@ To go out live, give a stream key: `to` in the step, or `--to twitch`, `--to x` 
   to recut or analyse a game without playing it again. `macro-micro-realtime` also saves the game's own video, with a
   chapter at each major moment, and a highlight reel of at most two minutes cut from it; its HTML replay plays the
   video beside the map when both files are in one folder.
-- **Grading:** `rts_grade` grades each agent seat. The full games use the `melee` rubric:
+- **Grading:** `rts_grade` grades each agent. The full games use the `melee` rubric:
   - a win counts three times as much as not being defeated or as outscoring the opponent;
   - an undecided game at the time limit is a draw, so outscoring the opponent earns its part, but a win needs every
     enemy building destroyed;
@@ -251,7 +251,7 @@ is built from a few steps:
 | `prompt_agent` | One per agent: the prompt, and the model it plays on. It lasts the whole game |
 | `finish_match` | From agentenv-game-env, after every play step: plays the match out to its end, with no more orders from its agents |
 | `save_rts_broadcast` | With `rts_broadcast`, after `finish_match`: keeps the broadcast's video |
-| `rts_grade` | Grades each agent seat with a rubric, weights, targets and checks |
+| `rts_grade` | Grades each agent with a rubric, weights, targets and checks |
 | `save_wc3_replay`, `save_rts_recording` | The `.w3g`, and the recording (map MP4, HTML replay, timeline JSON, the game's video, highlights) |
 
 A game runs as this DAG:
@@ -356,7 +356,7 @@ A stage step puts units at named places, relative to the first agent's start, an
    {"op": "spawn", "player": "wc3", "type": "hfoo", "n": 5, "at": "home", "dx": -1150, "as": "army"},
    {"op": "spawn", "player": "opponent", "type": "ogru", "n": 4, "at": "home", "dx": -2500, "as": "enemy"},
    {"op": "ai", "player": "opponent", "paused": true}]}}]},
-{"id": "grade", "type": "rts_grade", "env_id": "wc3", "seats": ["wc3"], "rubric": "checks", "checks": [
+{"id": "grade", "type": "rts_grade", "env_id": "wc3", "player_names": ["wc3"], "rubric": "checks", "checks": [
    {"metric": "enemy_army_destroyed_percent", "op": ">=", "value": 100},
    {"metric": "army_kept_percent", "op": ">=", "value": 40},
    {"metric": "hero_alive", "op": "==", "value": true}], "depends_on": ["play"]}
@@ -415,7 +415,7 @@ steps in full.
 - **`player`:** an agent's name, `opponent`, or a slot.
 - **Places**, measured from the first agent's start: `home`, `enemy_home`, `nearest_camp`, `camp:<n>`,
   `building:<name>` and `toward:<place>:<distance>`, each with optional `dx` and `dy`.
-- **Handles** (`as`): `army` and `hero` (a seat's own) and `enemy` (its opponents'). They feed `army_kept_percent` and
+- **Handles** (`as`): `army` and `hero` (a player's own) and `enemy` (its opponents'). They feed `army_kept_percent` and
   `enemy_army_destroyed_percent`.
 - **`warmup_seconds`:** lets the game run before the ops.
 
@@ -429,7 +429,7 @@ steps in full.
   type, `count:<type>`, `first_time:<type>` and `present_seconds:<type>`.
 - **`at_time_limit`:** how an undecided game counts: `draw`, `score` or `loss`.
 - **`gates`:** `game_ran` and `agent_played`.
-- **`seats`:** which agents to grade; every agent seat by default.
+- **`player_names`:** which agents to grade; every agent by default.
 
 **`finish_match`** (agentenv-game-env): plays a match still going once every play step has ended to its end, the time
 limit at most, with no more orders from its agents (they wait, and then find the game over). That time is the
@@ -513,7 +513,7 @@ far. Haiku 4.5 came second at 0.35 with one defeat, and GPT-5.4 mini third at 0.
 ## The wc3-llm agent
 
 `agents/wc3-llm` lets any chat model play through the env's MCP tools (`get_state`, `act`, `advance`, …). The model
-is any one agent-env's model endpoint serves that calls tools. The `vs-ai` tasks use it, and it plays any seat.
+is any one agent-env's model endpoint serves that calls tools. The `vs-ai` tasks use it, and it plays any player slot.
 - **The loop:** a plain tool loop. The model calls tools until it answers without one; if the game isn't over yet, it
   is told to keep playing.
 - **Long games fit:**
@@ -537,7 +537,7 @@ fixed policies and cadence:
 
 It plays the game the task's `close_lobby` created, through the env's `urn:rts` session (raw observations in, raw
 wc3env actions out). It plays stepped (the game waits for the models) or in realtime (the game runs on, and slow
-answers just mean fewer decisions), as the match's `mode` says. At a seat's address it plays that seat. The
+answers just mean fewer decisions), as the match's `mode` says. At a player slot's address it plays that player slot. The
 `prompt_agent` step's prompt is wc3agent's goal, which it keeps first in every macro request.
 
 | Setting | Where | Default |
@@ -563,8 +563,8 @@ wc3agent's call log, with each decision and its cost.
 
 ## The wc3-scripted agent
 
-`agents/wc3-scripted` plays a seat as wc3agent's scripted opponents do, with no model, through the env's `urn:rts`
-session. It reads the other side's units from its seat's observations, so it plays an omniscient seat.
+`agents/wc3-scripted` plays a player slot as wc3agent's scripted opponents do, with no model, through the env's
+`urn:rts` session. It reads the other side's units from its observations, so it plays an omniscient player slot.
 
 | Setting (`deploy_agent` `env_vars`) | What | Default |
 |---|---|---|
@@ -648,11 +648,11 @@ flowchart LR
 ```
 
 **Who holds the clock:** wc3env does.
-- **The start:** a game starts once every agent seat has made its first move.
+- **The start:** a match starts once every agent has made its first move.
 - **Stepping:** time passes only when the agents step, with `advance` for the tools and `urn:rts:step/v1` for a
   program. An agent may think as long as it likes between steps.
   - **Several agents** move in lockstep: the game moves once every one of them has stepped.
-  - **A seat that stops stepping** (a crash, or an agent that replied early) holds the others up once, for
+  - **An agent that stops stepping** (a crash, or an agent that replied early) holds the others up once, for
     `stall_seconds`, and the game then goes on without it.
 - **Realtime:** the game runs on its own clock, and a step only sends orders and observes.
 
@@ -680,7 +680,7 @@ flowchart LR
 
 | AgentEnv piece | Here |
 |---|---|
-| Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level), and its match, `urn:game:match/v1` (the start gate, the play-out, each player's outcome and scores); six MCP tools; `data/get` (the result, and per seat its result and wc3agent's metrics); the extensions `urn:game:license/v1`, `urn:wc3:stage/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
+| Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level), and its match, `urn:game:match/v1` (the start gate, the play-out, each player's outcome and scores); six MCP tools; `data/get` (the result, and per player slot its result and wc3agent's metrics); the extensions `urn:game:license/v1`, `urn:wc3:stage/v1` and `urn:wc3:replay/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; `urn:rts:recording/v1` (its files served at `/live/recording/<name>`); and `/live` |
 | Task steps | `save_wc3_replay`, in `steps.py`; `add_license`, `open_lobby`, `add_player_slot`, `close_lobby`, `finish_match` and `cancel_match`, from agentenv-game-env; `rts_broadcast`, `save_rts_broadcast` and `save_rts_recording`, in `agentenv_rts/steps.py`; `rts_grade`, in `agentenv_rts/grade.py` |
 | Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
@@ -695,7 +695,7 @@ flowchart LR
 | Module | What it gives a game |
 |---|---|
 | `session.py` | The `urn:rts:*` session contract: observe, step and debug extensions an env serves. `RemoteSession`, a stdlib-only gym-style client, lets an existing RTS agent play an AgentEnv env unchanged |
-| `seats.py` | `Lockstep`, one game clock for several players that moves when every one has stepped (each plays at its own address, through agentenv-game-env's routing) |
+| `lockstep.py` | `Lockstep`, one game clock for several players that moves when every one has stepped (each plays at its own address, through agentenv-game-env's routing) |
 | `timeline.py` | The spectator schema: the map once (bounds, terrain grid, trees, points of interest, players) and a compact frame per step (units, resources, events) |
 | `live.py`, `viewer/` | The live view at `/live` and `/live/data.json?since=T`, with its `?stream` layout and a self-contained HTML replay |
 | `recording.py` | The MP4 of the map from the timeline (Pillow and ffmpeg), written with the rest of the recording to a folder the env serves |
@@ -704,7 +704,7 @@ flowchart LR
 | `streamer/` | The streamer image: any env's `/live?stream` to RTMP servers and a recording, encoded once, with the casters |
 | `broadcast.py` | Running that image for one broadcast: its targets from the secret store, its casters' endpoint, its `docker run` (the `stream` command and `rts_broadcast` share it) |
 | `steps.py` | The game-agnostic steps: `rts_broadcast` and `save_rts_broadcast` (they read the env's match, `urn:game:match/v1`), and `save_rts_recording`, which streams each recording file into a file artifact |
-| `grade.py` | `rts_grade`: grades each agent seat from the env's `data/get` summary with a rubric set in the task (`melee`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets, time-limit rule and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
+| `grade.py` | `rts_grade`: grades each agent from the env's `data/get` summary with a rubric set in the task (`melee`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets, time-limit rule and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 
 A game supplies an adapter from its observations to the timeline (here `agentenv_wc3/frames.py`), serves the session
@@ -716,7 +716,7 @@ and recording extensions and `/live`, and brings its agent's policy (here `wc3ag
   over races or seeds yet.
 - **The harness's endpoints are open to agents.** An agent whose own tools can make HTTP requests (a shell, say)
   could reach the env's base address. There it could stage the game, start a new one, or see the whole map through
-  `data/get`, the root session and `/live`. The agents here don't: they reach only their seat's tools or session. A
+  `data/get`, the root session and `/live`. The agents here don't: they reach only their player slot's tools or session. A
   separate harness port, or a per-match token, would close it.
 - **Realtime and the MCP tools:** in realtime, `get_state` shows the game as of the agent's last `advance`.
 - **A dead agent holds its play step to its timeout.** agent-env's `prompt_agent` keeps polling an agent whose

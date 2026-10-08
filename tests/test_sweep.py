@@ -84,13 +84,14 @@ def fake_agent_env(tmp_path):
 
 
 def summary(cost: float | None, score: int) -> dict:
-    """A shorthand match's summary, as the real game's: the agent's seat has no agent name."""
+    """A shorthand match's summary, as the real game's: the agent's player slot has no agent name."""
     spend = {} if cost is None else {"cost_usd": cost, "decisions": 30, "tokens": 9000}
-    return {"verifications": {"wc3": {"score": 0.4}}, "rts_summary": {"wc3": {"game_time_seconds": 300, "seats": [
-        {"slot": 0, "agent": None, "computer": None, "team": 1, "result": "time_limit", "orders_sent": 40,
-         "spend": spend, "metrics": {"total": score, "units_killed": 3}},
-        {"slot": 1, "agent": None, "computer": "easy", "team": 2, "result": "time_limit", "orders_sent": 0,
-         "spend": {}, "metrics": {"total": 1000}}]}}}
+    return {"verifications": {"wc3": {"score": 0.4}}, "rts_summary": {"wc3": {
+        "game_time_seconds": 300, "player_slots": [
+        {"player_id": "0", "player_kind": "agent", "player_name": None, "team": 1, "result": "time_limit",
+         "orders_sent": 40, "spend": spend, "metrics": {"total": score, "units_killed": 3}},
+        {"player_id": "1", "player_kind": "ai", "player_name": None, "ai_level": "easy", "team": 2,
+         "result": "time_limit", "orders_sent": 0, "spend": {}, "metrics": {"total": 1000}}]}}}
 
 
 def test_the_runner_stops_before_a_game_could_take_the_spend_past_the_budget_and_resumes(generated, tmp_path,
@@ -120,12 +121,12 @@ def test_a_game_without_a_recorded_spend_counts_as_its_cap(generated, tmp_path, 
     assert "2 games, $1.00 of model spend (2 with no spend recorded, counted at the cap)." in sweep.report(out)
 
 
-def test_a_seat_named_in_seats_is_found_by_its_agent(generated, monkeypatch):
+def test_a_player_slot_named_in_player_slots_is_found_by_its_agent(generated, monkeypatch):
     out, _ = generated
     found = summary(0.2, 500)
-    seats = found["rts_summary"]["wc3"]["seats"]
-    seats[:] = [{**seats[1], "computer": None, "agent": "rival", "spend": {"cost_usd": 9.0}},
-                {**seats[0], "agent": "wc3"}]
+    players = found["rts_summary"]["wc3"]["player_slots"]
+    players[:] = [{**players[1], "player_kind": "agent", "player_name": "rival", "spend": {"cost_usd": 9.0}},
+                  {**players[0], "player_name": "wc3"}]
     monkeypatch.setattr(sweep, "metadata", lambda instance: found)
     row = sweep.outcome("t", {}, json.loads((out / "sweep.json").read_text())["agent"], "i", 1.0, 0)
     assert (row["cost_usd"], row["score"], row["opponent_score"]) == (0.2, 500, 1000)

@@ -21,22 +21,22 @@ STEPS = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").r
 ONE_AGENT = [{"agent": "wc3", "race": "human", "team": 1}, {"computer": "normal", "race": "orc", "team": 2}]
 
 
-def slot_request(index: int, seat: dict) -> SlotRequest:
-    """A seat, {agent | computer, race, team, label, ai_assist, omniscient}, as the fill of player slot `index`."""
-    given = {"faction": seat.get("race", "random"),
-             **{k: seat[k] for k in ("team", "label", "ai_assist", "omniscient") if k in seat}}
-    if "computer" in seat:
+def slot_request(index: int, player: dict) -> SlotRequest:
+    """A player, {agent | computer, race, team, label, ai_assist, omniscient}, as the fill of player slot `index`."""
+    given = {"faction": player.get("race", "random"),
+             **{k: player[k] for k in ("team", "label", "ai_assist", "omniscient") if k in player}}
+    if "computer" in player:
         return SlotRequest(player_id=str(index), player_kind="ai",
-                           game_settings={**given, "ai_level": seat["computer"]})
-    return SlotRequest(player_id=str(index), player_kind="agent", player_name=seat["agent"], game_settings=given)
+                           game_settings={**given, "ai_level": player["computer"]})
+    return SlotRequest(player_id=str(index), player_kind="agent", player_name=player["agent"], game_settings=given)
 
 
-async def new_game(env, seats: list[dict] | None = None, **settings):
+async def new_game(env, players: list[dict] | None = None, **settings):
     """A game through the env's lobby, in process: opened with `settings` (a 2-minute game unless they say), a player
-    slot per seat (one agent against the normal AI by default), closed."""
+    slot per player slot (one agent against the normal AI by default), closed."""
     env.new_lobby({"time_limit_seconds": 120, **settings})
-    for index, seat in enumerate(seats or ONE_AGENT):
-        env.fill_slot(slot_request(index, seat))
+    for index, player in enumerate(players or ONE_AGENT):
+        env.fill_slot(slot_request(index, player))
     return await env.close_lobby()
 
 

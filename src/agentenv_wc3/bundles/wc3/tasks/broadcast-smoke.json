@@ -151,7 +151,7 @@
     "type": "prompt_agent",
     "agent_name": "red",
     "prompt_id": "broadcast-smoke-red",
-    "prompt": "Play your seat with the script.",
+    "prompt": "Play with the script.",
     "timeout_seconds": 900,
     "depends_on": [
       "stage",
@@ -163,7 +163,7 @@
     "type": "prompt_agent",
     "agent_name": "blue",
     "prompt_id": "broadcast-smoke-blue",
-    "prompt": "Play your seat with the script.",
+    "prompt": "Play with the script.",
     "timeout_seconds": 900,
     "depends_on": [
       "stage",

@@ -1,4 +1,4 @@
-# The wc3-scripted agent: wc3agent's scripted opponent (attack, raid or idle) playing its seat through the env's
+# The wc3-scripted agent: wc3agent's scripted opponent (attack, raid or idle) playing its player slot through the env's
 # urn:rts session (agent.py). No model, no wc3env, no game files.
 # Build: agent-env wc3 setup --agent, or docker build -t a2a-agent-wc3-scripted -f agents/wc3-scripted/Dockerfile .
 FROM python:3.12-slim

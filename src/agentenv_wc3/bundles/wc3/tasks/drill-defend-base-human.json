@@ -166,7 +166,7 @@
     "type": "prompt_agent",
     "agent_name": "opponent",
     "prompt_id": "drill-defend-base-human-opponent",
-    "prompt": "Play your seat with the script.",
+    "prompt": "Play with the script.",
     "timeout_seconds": 1800,
     "depends_on": [
       "stage"
@@ -185,7 +185,7 @@
     "id": "grade",
     "type": "rts_grade",
     "env_id": "wc3",
-    "seats": [
+    "player_names": [
       "wc3"
     ],
     "rubric": "checks",

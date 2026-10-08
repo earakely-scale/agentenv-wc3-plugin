@@ -194,7 +194,7 @@
     "id": "grade",
     "type": "rts_grade",
     "env_id": "wc3",
-    "seats": [
+    "player_names": [
       "wc3"
     ],
     "rubric": "checks",

@@ -179,18 +179,18 @@ def metadata(instance: str) -> dict:
 
 
 def outcome(task: str, axes: dict, agent: str | None, instance: str | None, wall: float | None, code: int) -> dict:
-    """One game's row: its grade, result, scores and the spend of `agent`'s seat (the one agent seat of a match
-    without seats), from the run's stored instance. The cost is None when the run recorded none."""
+    """One game's row: its grade, result, scores and the spend of `agent`'s player slot (the one agent of a match
+    without player slots), from the run's stored instance. The cost is None when the run recorded none."""
     row = {"task": task, **axes, "instance": instance, "wall_seconds": wall, "exit": code}
     if instance is None:
         return {**row, "grade": 0.0, "cost_usd": None}
     found = metadata(instance)
     grade = next(iter((found.get("verifications") or {}).values()), {}).get("score", 0.0)
     summary = next(iter((found.get("rts_summary") or {}).values()), {})
-    seats = summary.get("seats") or []
-    me = next((x for x in seats if agent and x.get("agent") == agent), None) or next(
-        (x for x in seats if not x.get("computer")), {})
-    them = next((x for x in seats if x.get("team") != me.get("team")), {})
+    players = summary.get("player_slots") or []
+    me = next((x for x in players if agent and x.get("player_name") == agent), None) or next(
+        (x for x in players if x.get("player_kind") == "agent"), {})
+    them = next((x for x in players if x.get("team") != me.get("team")), {})
     mine, theirs, spend = me.get("metrics") or {}, them.get("metrics") or {}, me.get("spend") or {}
     return {**row, "grade": round(grade, 4), "result": me.get("result"), "score": mine.get("total"),
             "opponent_score": theirs.get("total"), "units_killed": mine.get("units_killed"),

@@ -1,5 +1,5 @@
-"""`rts_grade` on synthetic summaries (today's, without seats, and the per-seat one), against the scripts the bundle's
-tasks were graded by before it, and as a step reading a served env's data/get."""
+"""`rts_grade` on synthetic summaries (today's, without player slots, and one with them), against the scripts the
+bundle's tasks were graded by before it, and as a step reading a served env's data/get."""
 
 import pytest
 from agent_env.task_step.registry import get_task_step_registry
@@ -57,22 +57,23 @@ TODAYS = {
 }
 
 
-def seat(agent=None, computer=None, team=1, result="time_limit", orders=50, **metrics) -> dict:
-    return {"slot": 0, "agent": agent, "computer": computer, "race": "human", "team": team, "result": result,
+def player(agent=None, computer=None, team=1, result="time_limit", orders=50, **metrics) -> dict:
+    return {"player_id": "0", "player_kind": "ai" if computer else "agent", "player_name": agent, "faction": "human",
+            "team": team, **({"ai_level": computer} if computer else {}), "result": result,
             "orders_sent": orders, "stalls": 0, "metrics": metrics}
 
 
-def game(*seats, **fields) -> dict:
+def game(*players, **fields) -> dict:
     return {"game_over": True, "game_time_seconds": 600, "time_limit_seconds": 600, "engine_failed": False,
             "error": None, "harness": {"orders_sent": 0, "finish_seconds": 0, "staged_seconds": 0},
-            "seats": list(seats), **fields}
+            "player_slots": list(players), **fields}
 
 
 ALICE = {"total": 3000, "army": 2000, "units_killed": 30, "units_lost": 10, "buildings_destroyed": 2, "tier": 2,
          "expansions": 1, "hero_level": 4}
 BOB = {"total": 2000, "army": 1000, "units_killed": 10, "units_lost": 30, "buildings_destroyed": 0, "tier": 3,
        "expansions": 0, "hero_level": 5, "structures": 6}
-DUEL = game(seat("alice", **ALICE), seat("bob", team=2, **BOB))
+DUEL = game(player("alice", **ALICE), player("bob", team=2, **BOB))
 
 
 def step(**fields) -> RTSGradeTaskStep:
@@ -130,7 +131,7 @@ def test_a_level_score_at_the_limit_is_no_win():
     assert not by_name(step().grade(TODAYS["level at the limit"])["grade"])["win"]["result"]
 
 
-def test_dense_grades_every_agent_seat_against_the_other_team():
+def test_dense_grades_every_agent_player_slot_against_the_other_team():
     grades = step(rubric="dense", verifier_id="wc3", at_time_limit="score").grade(DUEL)
     assert set(grades) == {"wc3:alice", "wc3:bob"}
     alice, bob = by_name(grades["wc3:alice"]), by_name(grades["wc3:bob"])
@@ -149,9 +150,9 @@ def test_dense_grades_every_agent_seat_against_the_other_team():
     assert score(grades["wc3:alice"]) > score(grades["wc3:bob"]) > 0
 
 
-def test_allies_are_not_opponents_and_computer_seats_are_not_graded():
-    summary = game(seat("alice", total=1000), seat("bob", total=5000), seat(computer="easy", team=2, total=800),
-                   seat(computer="easy", team=2, total=900))
+def test_allies_are_not_opponents_and_computer_player_slots_are_not_graded():
+    summary = game(player("alice", total=1000), player("bob", total=5000), player(computer="easy", team=2, total=800),
+                   player(computer="easy", team=2, total=900))
     grades = step(verifier_id="wc3", at_time_limit="score").grade(summary)
     assert set(grades) == {"wc3:alice", "wc3:bob"}
     alice = by_name(grades["wc3:alice"])
@@ -159,13 +160,13 @@ def test_allies_are_not_opponents_and_computer_seats_are_not_graded():
     assert alice["outscore"]["criterion"] == "outscored the AI on the game's score total"
 
 
-def test_named_seats_are_graded_and_a_missing_one_scores_nothing():
-    grades = step(seats=["bob", "zed"]).grade(DUEL)
+def test_named_player_slots_are_graded_and_a_missing_one_scores_nothing():
+    grades = step(player_names=["bob", "zed"]).grade(DUEL)
     assert set(grades) == {"grade:bob", "grade:zed"}
-    assert score(grades["grade:zed"]) == 0 and grades["grade:zed"][0]["evidence"] == "seats ['alice', 'bob']"
+    assert score(grades["grade:zed"]) == 0 and grades["grade:zed"][0]["evidence"] == "player slots ['alice', 'bob']"
 
 
-def test_a_summary_without_seats_is_one_seat_under_the_verifier_id():
+def test_a_summary_without_player_slots_is_one_player_slot_under_the_verifier_id():
     assert set(step(verifier_id="wc3").grade(TODAY)) == {"wc3"}
     assert set(step().grade(TODAY)) == {"grade"}
 
@@ -208,10 +209,10 @@ CHECKS = [
 
 
 def test_checks_resolve_wc3agents_metric_names():
-    drill = game(seat("wc3", count={"hhou": 3}, first_time={"halt": 95}, present_seconds={"hmil": 12},
+    drill = game(player("wc3", count={"hhou": 3}, first_time={"halt": 95}, present_seconds={"hmil": 12},
                       camps_cleared=[3, 9], units_lost=2, hero_alive=True, army_kept_percent=60),
-                 seat("attacker", team=2))
-    rows = step(rubric="checks", seats=["wc3"], checks=CHECKS).grade(drill)["grade:wc3"]
+                 player("attacker", team=2))
+    rows = step(rubric="checks", player_names=["wc3"], checks=CHECKS).grade(drill)["grade:wc3"]
     assert [(r["criterion"], r["result"]) for r in rows[:len(CHECKS)]] == [
         ("count:hhou >= 2", True), ("count:hbar >= 1", False), ("first_time:halt <= 120", True),
         ("first_time:hbla <= 130", False), ("present_seconds:hmil >= 10", True), ("present_seconds:hfoo == 0", True),
@@ -227,13 +228,13 @@ def test_checks_add_to_any_rubric_and_fail_on_what_the_summary_lacks():
     assert rows["count:hhou"]["result"] is False and "win" in rows
 
 
-def test_a_failed_gate_zeroes_the_seat_and_gates_can_be_left_out():
-    beaten = game(seat("alice", result="victory", orders=0, **ALICE), seat("bob", team=2, result="defeat", **BOB))
+def test_a_failed_gate_zeroes_the_player_slot_and_gates_can_be_left_out():
+    beaten = game(player("alice", result="victory", orders=0, **ALICE), player("bob", team=2, result="defeat", **BOB))
     assert score(step().grade(beaten)["grade:alice"]) == 0 and score(step().grade(beaten)["grade:bob"]) > 0
     assert score(step(gates=["game_ran"]).grade(beaten)["grade:alice"]) == 1
     assert score(step(gates=[]).grade({**beaten, "engine_failed": True})["grade:alice"]) == 1
     assert score(step(gates=["game_ran"]).grade({**beaten, "engine_failed": True})["grade:alice"]) == 0
-    silent = game(seat("alice", orders=0, **ALICE), seat("bob", team=2, orders=0, **BOB))
+    silent = game(player("alice", orders=0, **ALICE), player("bob", team=2, orders=0, **BOB))
     assert all(score(rows) == 0 for rows in step().grade(silent).values())
 
 
@@ -247,8 +248,8 @@ def test_smoke_never_asks_that_the_agent_played():
     ({"rubric": "blitz"}, "rubric must be one of"),
     ({"at_time_limit": "overtime"}, "at_time_limit must be one of"),
     ({"gates": ["game_ran", "fun"]}, "gates must be among"),
-    ({"seats": "alice"}, "seats are agent names"),
-    ({"seats": [""]}, "seats are agent names"),
+    ({"player_names": "alice"}, "player_names are agent names"),
+    ({"player_names": [""]}, "player_names are agent names"),
     ({"weights": {"speed": 1}}, "weights are for the criteria"),
     ({"weights": {"win": "3"}}, "weights must be numbers"),
     ({"weights": {"win": True}}, "weights must be numbers"),
@@ -270,7 +271,7 @@ def test_bad_fields_are_refused_when_the_step_is_made(fields, message):
 
 
 def test_the_step_round_trips_and_is_registered(local_stores):
-    data = {"id": "grade", "type": "rts_grade", "version": None, "env_id": "wc3", "seats": ["alice"],
+    data = {"id": "grade", "type": "rts_grade", "version": None, "env_id": "wc3", "player_names": ["alice"],
             "rubric": "checks", "weights": {"win": 2}, "targets": {"tier": 2},
             "checks": [{"metric": "tier", "op": ">=", "value": 2}], "at_time_limit": "loss", "gates": ["game_ran"],
             "verifier_id": "v", "timeout_seconds": 60, "fail_task_on_error": False,
@@ -279,9 +280,9 @@ def test_the_step_round_trips_and_is_registered(local_stores):
     registered = get_task_step_registry()["rts_grade"]
     assert registered is RTSGradeTaskStep and registered.from_dict(data).to_dict() == data
     defaults = RTSGradeTaskStep.from_dict({"id": "grade", "type": "rts_grade", "env_id": "wc3"}).to_dict()
-    assert {k: defaults[k] for k in ("seats", "rubric", "at_time_limit", "gates", "verifier_id",
+    assert {k: defaults[k] for k in ("player_names", "rubric", "at_time_limit", "gates", "verifier_id",
                                      "fail_task_on_error")} == {
-        "seats": None, "rubric": "melee", "at_time_limit": "draw", "gates": ["game_ran", "agent_played"],
+        "player_names": None, "rubric": "melee", "at_time_limit": "draw", "gates": ["game_ran", "agent_played"],
         "verifier_id": "grade", "fail_task_on_error": True}
 
 
@@ -301,7 +302,7 @@ async def test_the_step_grades_what_data_get_reports_with_the_runs_overrides():
     async with deployed(FakeSummary(DUEL)) as record:
         context = await grade.execute(run_context(record))
         overridden = run_context(record)
-        overridden.metadata["user_overrides"] = {"step_params": {"grade": {"rubric": "dense", "seats": ["bob"]}}}
+        overridden.metadata["user_overrides"] = {"step_params": {"grade": {"rubric": "dense", "player_names": ["bob"]}}}
         overridden = await grade.execute(overridden)
     verifications = context.metadata["verifications"]
     assert set(verifications) == {"wc3:alice", "wc3:bob"}
@@ -309,7 +310,7 @@ async def test_the_step_grades_what_data_get_reports_with_the_runs_overrides():
                                           "score": score(grade.grade(DUEL)["wc3:alice"])}
     assert set(overridden.metadata["verifications"]) == {"wc3:bob"}
     assert "army_ratio" in by_name(overridden.metadata["verifications"]["wc3:bob"]["results"])
-    assert grade.rubric == "melee" and grade.seats is None
+    assert grade.rubric == "melee" and grade.player_names is None
 
 
 async def test_todays_env_is_graded_under_the_verifier_id_alone():
@@ -327,7 +328,7 @@ async def test_an_env_that_does_not_answer_data_get_scores_nothing(monkeypatch):
     monkeypatch.setattr(client, "get_data", refuse)
     async with deployed(FakeSummary(DUEL)) as record:
         context = await step(verifier_id="wc3").execute(run_context(record))
-        named = await step(verifier_id="wc3", seats=["alice", "bob"]).execute(run_context(record))
+        named = await step(verifier_id="wc3", player_names=["alice", "bob"]).execute(run_context(record))
     [row] = context.metadata["verifications"]["wc3"]["results"]
     assert row["weight"] == -100 and row["result"] is False and "refused" in row["evidence"]
     assert context.metadata["verifications"]["wc3"]["score"] == 0

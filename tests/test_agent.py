@@ -1,5 +1,6 @@
 """The wc3-macro-micro agent (agents/wc3-player): wc3env's wc3agent plays the env on the fake game through the
-urn:rts session, and a seat of a stand-in env, its macro and micro models answered by a stand-in OpenAI-compatible
+urn:rts session, and a player slot of a stand-in env, its macro and micro models answered by a stand-in
+OpenAI-compatible
 endpoint."""
 
 import asyncio
@@ -14,7 +15,7 @@ from pathlib import Path
 import pytest
 from agentenv_protocol import client
 from agentenv_protocol.a2a_agent import TaskOutcome, TaskRequest, TextPart
-from test_steps import deployed, open_match, seat_and_start
+from test_steps import deployed, fill_and_close, open_match
 
 from agentenv_rts import choices
 from agentenv_rts.session import DEBUG, NOTE, OBSERVE, STEP
@@ -79,7 +80,7 @@ async def test_wc3agent_plays_the_game_through_the_rts_session(env_vars, tmp_pat
                **({"WC3_MAX_GAME_SECONDS": "4"} if mode == "realtime" else {})}
     monkeypatch.setattr(agent.os, "environ", dict(agent.os.environ))
     async with deployed(WC3Env()) as record:
-        await seat_and_start(await open_match(record, time_limit_seconds=60, mode=mode))
+        await fill_and_close(await open_match(record, time_limit_seconds=60, mode=mode))
         config = agent.WC3Config(model="anthropic/claude-sonnet-5-5")
         servers = {"wc3": {"url": record.mcp_url}}
         summary = await asyncio.to_thread(agent.play_game, config, servers, environ, tmp_path / "session")
@@ -97,9 +98,9 @@ async def test_wc3agent_plays_the_game_through_the_rts_session(env_vars, tmp_pat
     assert result.native_trajectory is not None
 
 
-class Seat:
-    """A stand-in env serving one seat as the seat contract has it: every request comes in under /players/wc3, the seat
-    is slot 1 (wc3env's fake world, with a peon beside the orc hall) and sees only its own observation, and three
+class SlotEnv:
+    """A stand-in env serving one player slot as an env serves it: every request comes in under /players/1, the player
+    is player 1 (wc3env's fake world, with a peon beside the orc hall) and sees only its own observation, and three
     seconds in one of the other side's peasants dies."""
 
     ENDPOINTS = {OBSERVE: "/rts/observe", STEP: "/rts/step", DEBUG: "/rts/debug", NOTE: "/rts/note"}
@@ -109,18 +110,18 @@ class Seat:
         self.world.units[2001] = {**self.world.units[1001], "unit_id": 2001, "type_id": "opeo", "owner": 1,
                                   "x": 5000.0, "y": -2800.0}
         self.paths, self.steps, self.notes = [], [], []
-        seat = self
+        env = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                seat.paths.append(self.path)
+                env.paths.append(self.path)
                 self.reply({"capabilities": {"extensions": [{"uri": uri, "params": {"endpoint": endpoint}}
-                                                            for uri, endpoint in Seat.ENDPOINTS.items()]}})
+                                                            for uri, endpoint in SlotEnv.ENDPOINTS.items()]}})
 
             def do_POST(self):
-                seat.paths.append(self.path)
-                self.reply(seat.answer(self.path.rsplit("/", 1)[-1],
-                                       json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+                env.paths.append(self.path)
+                self.reply(env.answer(self.path.rsplit("/", 1)[-1],
+                                      json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
 
             def reply(self, value):
                 data = json.dumps(value).encode()
@@ -134,7 +135,7 @@ class Seat:
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.url = f"http://127.0.0.1:{self.server.server_port}/players/wc3/mcp"
+        self.url = f"http://127.0.0.1:{self.server.server_port}/players/1/mcp"
 
     def answer(self, name: str, body: dict) -> dict:
         if name == "note":
@@ -155,31 +156,33 @@ class Seat:
         if dying:
             obs["events"] = [{"kind": "death", "unit_id": 1001, "type_id": "hpea", "owner": 0}]
         done = obs["game_time_seconds"] >= self.seconds
-        return {"observations": {"1": obs}, "you": 1, "done": done, "result": "time_limit" if done else None,
-                "seats": [{"slot": 0, "agent": "other", "computer": None, "race": "human", "team": 1},
-                          {"slot": 1, "agent": "wc3", "computer": None, "race": "orc", "team": 2}],
+        return {"observations": {"1": obs}, "player_id": "1", "done": done, "result": "time_limit" if done else None,
+                "player_slots": [{"player_id": "0", "player_kind": "agent", "player_name": "other", "faction": "human",
+                                  "team": 1},
+                                 {"player_id": "1", "player_kind": "agent", "player_name": "wc3", "faction": "orc",
+                                  "team": 2}],
                 "scenario": {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race": "orc",
                              "ai_difficulty": "easy", "time_limit_seconds": self.seconds, "mode": "stepping"},
                 "setup": {}, "time_limit_seconds": self.seconds}
 
 
-async def test_wc3agent_plays_its_seat_with_the_prompt_as_its_goal(monkeypatch):
+async def test_wc3agent_plays_its_player_slot_with_the_prompt_as_its_goal(monkeypatch):
     agent = player()
-    models, seat = Models(plan="Plan: scout the enemy start.\n\nmove peon1 at 0 0"), Seat()
+    models, slot = Models(plan="Plan: scout the enemy start.\n\nmove peon1 at 0 0"), SlotEnv()
     goal = "Scout the enemy base with your peon."
     monkeypatch.setattr(agent.os, "environ", {**agent.os.environ, "LITELLM_BASE_URL": models.url,
                                               "LITELLM_API_KEY": "sk-test", "WC3_MICRO_MODEL": "off",
                                               "WC3_GOAL": "prompt"})
     request = TaskRequest(task_id="t", context_id="c", parts=(TextPart(text=goal),),
                           config=agent.WC3Config(model="anthropic/claude-sonnet-5-5"),
-                          mcp_servers={"wc3": {"url": seat.url}})
+                          mcp_servers={"wc3": {"url": slot.url}})
     result = await agent.WC3Player().run(request)
     assert result.outcome is TaskOutcome.SUCCEEDED, result.error
-    assert seat.paths and all(p.startswith("/players/wc3/") for p in seat.paths)
-    assert seat.steps and all(set(actions) == {"1"} for actions in seat.steps)
-    moved = [a for actions in seat.steps for a in actions["1"] if a["command"] == "move"]
+    assert slot.paths and all(p.startswith("/players/1/") for p in slot.paths)
+    assert slot.steps and all(set(actions) == {"1"} for actions in slot.steps)
+    moved = [a for actions in slot.steps for a in actions["1"] if a["command"] == "move"]
     assert moved and moved[0]["unit_id"] == 2001 and moved[0]["arguments"]["x"] == 0
-    assert seat.notes and {n["slot"] for n in seat.notes} == {1}
+    assert slot.notes and {n["slot"] for n in slot.notes} == {1}
     assert all(f"THIS GAME IS A TEST OF ONE THING. {goal}" in m for m in models.macro)
     assert any(re.search(r"enemy peasant\d+ died", m) for m in models.macro)
     assert not any(re.search(r"your peasant\d+ died", m) for m in models.macro)

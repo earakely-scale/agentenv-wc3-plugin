@@ -1,5 +1,5 @@
 """The wc3-scripted agent (agents/wc3-scripted): its orders on synthetic observations, and its loop against a
-stand-in session at its seat."""
+stand-in session at its player slot."""
 
 import importlib.util
 import sys
@@ -26,14 +26,15 @@ def unit(uid, type_id, x, y, structure=False):
 MINE = [unit(10, "ogru", 0, 0), unit(11, "ohun", 10, 0), unit(12, "opeo", 0, 0), unit(13, "ogre", 0, 0, True)]
 THEIRS = [unit(20, "hfoo", 100, 200), unit(21, "hrif", 300, 400), unit(22, "hpea", -1000, -1000),
           unit(23, "hpea", -3000, -1000), unit(24, "htow", -5000, 3000, True), unit(25, "hbar", 0, 3000, True)]
-SEATS = [{"slot": 0, "agent": "wc3", "computer": None, "race": "human", "team": 1},
-         {"slot": 1, "agent": "attacker", "computer": None, "race": "orc", "team": 2}]
+SLOTS = [{"player_id": "0", "player_kind": "agent", "player_name": "wc3", "faction": "human", "team": 1},
+         {"player_id": "1", "player_kind": "agent", "player_name": "attacker", "faction": "orc", "team": 2}]
 
 
 def state(t, mine=MINE, theirs=THEIRS, **extra):
-    """What the attacker's omniscient seat (slot 1) observes at game time `t`."""
+    """What the attacker's omniscient player slot (player 1) observes at game time `t`."""
     return {"observations": {0: {"game_time_seconds": t, "units": theirs}, 1: {"game_time_seconds": t, "units": mine}},
-            "you": 1, "seats": SEATS, "done": False, "result": None, "scenario": {"mode": "stepping"}, **extra}
+            "player_id": "1", "player_slots": SLOTS, "done": False, "result": None, "scenario": {"mode": "stepping"},
+            **extra}
 
 
 def targets(orders):
@@ -73,10 +74,10 @@ def test_an_order_round_moves_at_most_64_units():
     assert len(orders) == 64 and [o["unit_id"] for o in orders] == list(range(100, 164))
 
 
-def test_the_enemy_is_every_seat_on_another_team():
+def test_the_enemy_is_every_player_slot_on_another_team():
     agent = scripted()
-    ally = {"slot": 2, "agent": None, "computer": "easy", "race": "orc", "team": 2}
-    three = state(0, seats=[*SEATS, ally])
+    ally = {"player_id": "2", "player_kind": "ai", "player_name": None, "faction": "orc", "team": 2, "ai_level": "easy"}
+    three = state(0, player_slots=[*SLOTS, ally])
     three["observations"][2] = {"game_time_seconds": 0, "units": [unit(30, "ogru", 9000, 9000)]}
     assert targets(agent.Script("attack").actions(three)) == {(200, 300)}
     alone = {"observations": {0: {"game_time_seconds": 0, "units": MINE}, 1: {"game_time_seconds": 0, "units": THEIRS}}}
@@ -93,7 +94,7 @@ def test_its_settings():
 
 
 class Session:
-    """A stand-in RemoteSession at the attacker's seat: a second of game time a step, over at `seconds`."""
+    """A stand-in RemoteSession at the attacker's player slot: a second of game time a step, over at `seconds`."""
 
     def __init__(self, root, headers=None, mode="stepping", seconds=12):
         self.root, self.mode, self.seconds, self.t, self.steps = root, mode, seconds, 0, []
@@ -112,7 +113,7 @@ class Session:
 
 
 @pytest.mark.parametrize("mode", ["stepping", "realtime"])
-async def test_it_plays_its_seat_to_the_end(monkeypatch, mode):
+async def test_it_plays_its_player_slot_to_the_end(monkeypatch, mode):
     agent = scripted()
     sessions, sleeps = [], []
 
@@ -123,11 +124,11 @@ async def test_it_plays_its_seat_to_the_end(monkeypatch, mode):
     monkeypatch.setattr(agent, "RemoteSession", connect)
     monkeypatch.setattr(agent.time, "sleep", sleeps.append)
     monkeypatch.setenv("SCRIPT", "attack")
-    request = TaskRequest(task_id="t", context_id="c", parts=(TextPart(text="Play your seat."),), config=AgentConfig(),
-                          mcp_servers={"wc3": {"url": "http://env:18765/seats/attacker/mcp"}})
+    request = TaskRequest(task_id="t", context_id="c", parts=(TextPart(text="Play with the script."),),
+                          config=AgentConfig(), mcp_servers={"wc3": {"url": "http://env:18765/players/1/mcp"}})
     result = await agent.WC3Scripted().run(request)
     [session] = sessions
-    assert result.outcome is TaskOutcome.SUCCEEDED and session.root == "http://env:18765/seats/attacker"
+    assert result.outcome is TaskOutcome.SUCCEEDED and session.root == "http://env:18765/players/1"
     assert len(session.steps) == 12 and {ms for _, ms in session.steps} == {1000}
     assert all(set(actions) == {1} for actions, _ in session.steps)
     assert [i for i, (actions, _) in enumerate(session.steps) if actions[1]] == [0, 5, 10]
@@ -141,6 +142,6 @@ async def test_a_bad_script_fails_the_run(monkeypatch):
     agent = scripted()
     monkeypatch.setenv("SCRIPT", "rush")
     request = TaskRequest(task_id="t", context_id="c", parts=(), config=AgentConfig(),
-                          mcp_servers={"wc3": {"url": "http://env:18765/seats/attacker/mcp"}})
+                          mcp_servers={"wc3": {"url": "http://env:18765/players/1/mcp"}})
     result = await agent.WC3Scripted().run(request)
     assert result.outcome is TaskOutcome.FAILED and result.error.code == "bad_script"

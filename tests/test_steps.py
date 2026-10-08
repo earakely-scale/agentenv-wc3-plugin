@@ -65,9 +65,9 @@ def run_context(record: DeployedEnv) -> TaskStepContext:
     return TaskStepContext(deployed_envs=[record], metadata={"task_id": "smoke"}, instance_id="i1")
 
 
-def slot_of(index: int, seat: dict) -> AddPlayerSlotTaskStep:
-    """A seat as a task's add_player_slot step (the agent connects on its own here)."""
-    fill = slot_request(index, seat)
+def slot_of(index: int, player: dict) -> AddPlayerSlotTaskStep:
+    """A player slot as a task's add_player_slot step (the agent connects on its own here)."""
+    fill = slot_request(index, player)
     return AddPlayerSlotTaskStep(id=f"slot-{index}", version=None, env_id="wc3", player_id=fill.player_id,
                                  player_kind=fill.player_kind, player_name=fill.player_name,
                                  game_settings=fill.game_settings, register=False)
@@ -81,11 +81,11 @@ async def open_match(record: DeployedEnv, **settings) -> TaskStepContext:
     return await OpenLobbyTaskStep(id="match", version=None, env_id="wc3", game_settings=settings).execute(context)
 
 
-async def seat_and_start(context: TaskStepContext, seats: list[dict] | None = None) -> TaskStepContext:
+async def fill_and_close(context: TaskStepContext, players: list[dict] | None = None) -> TaskStepContext:
     """The players in their player slots and the game created, as a task's add_player_slot and close_lobby steps
     do."""
-    for index, seat in enumerate(seats or ONE_AGENT):
-        await slot_of(index, seat).execute(context)
+    for index, player in enumerate(players or ONE_AGENT):
+        await slot_of(index, player).execute(context)
     return await CloseLobbyTaskStep(id="start", version=None, env_id="wc3").execute(context)
 
 
@@ -102,7 +102,7 @@ async def test_a_match_finish_plays_out_passes_the_smoke_rubric(env_vars, licens
         context = await open_match(record, seed=4, time_limit_seconds=90)
         assert context.metadata["game_lobby"]["game_settings"]["seed"] == 4
         assert context.metadata["game_lobby"]["game_settings"]["time_limit_seconds"] == 90
-        await seat_and_start(context, [{"agent": "player", "race": "human"}, {"computer": "normal", "race": "orc"}])
+        await fill_and_close(context, [{"agent": "player", "race": "human"}, {"computer": "normal", "race": "orc"}])
         assert context.metadata["game_lobby"]["status"] == "closed"
         await FinishMatchTaskStep(id="finish", version=None, env_id="wc3").execute(context)
         match = context.metadata["game_match"]
@@ -125,7 +125,7 @@ async def test_the_fake_game_needs_no_activation_files_and_reads_no_secrets(env_
     async with deployed(WC3Env()) as record:
         status = await client.invoke_extension(record.environment_url, record.environment_card, LICENSE, method="get")
         assert status == {"missing": [], "installed": []}
-        context = await seat_and_start(await open_match(record, time_limit_seconds=120))
+        context = await fill_and_close(await open_match(record, time_limit_seconds=120))
     assert context.metadata["game_license"] == {"installed": []}
     assert context.metadata["game_lobby"]["game_settings"]["time_limit_seconds"] == 120
 
@@ -144,7 +144,7 @@ async def test_the_real_game_lacks_its_activation_files_until_add_license_gives_
                                                                         ("tft.w3k", "file", "warcraft3")]
         context = await OpenLobbyTaskStep(id="match", version=None, env_id="wc3").execute(run_context(record))
         with pytest.raises(RuntimeError, match="lobby close: not_licensed: the game lacks file roc.w3k .*import"):
-            await seat_and_start(context)   # without add_license, the lobby doesn't close
+            await fill_and_close(context)   # without add_license, the lobby doesn't close
         with pytest.raises(RuntimeError, match="secret store has no 'WC3_ROC_W3K' \\(file roc.w3k"):
             await step.execute(context)
         monkeypatch.setenv("WC3_ROC_W3K", base64.b64encode(b"roc key").decode())
@@ -212,7 +212,7 @@ async def test_the_replay_becomes_a_file_artifact(local_stores):
 async def test_a_game_without_a_replay_saves_nothing_and_says_why(env_vars, license_dir, local_stores, caplog):
     env = WC3Env()
     async with deployed(env) as record:
-        context = await seat_and_start(await open_match(record, time_limit_seconds=60))
+        context = await fill_and_close(await open_match(record, time_limit_seconds=60))
         await FinishMatchTaskStep(id="finish", version=None, env_id="wc3").execute(context)
         context = await SaveWC3ReplayTaskStep(id="replay", version=None, env_id="wc3").execute(run_context(record))
     assert context.metadata["replays"]["replay"] == []
@@ -232,10 +232,10 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_replay_and_recording(lo
     assert by_type["save_rts_recording"]["depends_on"] == by_type["save_wc3_replay"]["depends_on"]
     slots = [s for s in steps if s["type"] == "add_player_slot"]   # who plays: the lobby's slots, then the game
     assert by_type["close_lobby"]["depends_on"] == [*(s["id"] for s in slots), "license"] and len(slots) >= 2
-    seated = {s["player_name"] for s in slots if s["player_kind"] == "agent"}
-    assert {s["agent_name"] for s in steps if s["type"] == "prompt_agent"} <= seated
+    playing = {s["player_name"] for s in slots if s["player_kind"] == "agent"}
+    assert {s["agent_name"] for s in steps if s["type"] == "prompt_agent"} <= playing
     assert all(s["env_ids"] == [] for s in steps if s["type"] == "deploy_agent")
-    assert all(not ({"match", "seat"} & set(s["depends_on"])) for s in steps if s["type"] == "prompt_agent")
+    assert all(not ({"match", "player slot"} & set(s["depends_on"])) for s in steps if s["type"] == "prompt_agent")
     grade = by_type["rts_grade"]
     expected = (("smoke", "smoke") if task == "smoke" else ("checks", "drill") if task.startswith("drill-")
                 else ("dense", "duel") if task.startswith("duel") else ("dense", task) if task.startswith("broadcast")

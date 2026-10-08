@@ -1,5 +1,5 @@
 Warcraft III (wc3env): agents play melee games on Echo Isles against the game's own AI or each other, and short
-drills, through the env's MCP tools or raw wc3env orders. Each game is graded per seat, and its replay and recording
+drills, through the env's MCP tools or raw wc3env orders. Each game is graded per player, and its replay and recording
 are saved.
 
 Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once), gives it your activation files
@@ -47,7 +47,7 @@ match on Echo Isles (seed 1), a stage step (`apply_server_config` with `urn:wc3:
 units at named places (`home`, `toward:nearest_camp:900`, `camp:9`, ...) under handles (`army`, `hero`, `enemy`, which
 the summary's `army_kept_percent` and `enemy_army_destroyed_percent` read), the drill's goal as the prompt, and
 `rts_grade` with the scenario's own checks (`rubric: checks`). The opponent is the game's AI, paused by the stage in
-all but the full game, or `wc3-scripted`, an agent seat that attack-moves at your army (`attack`) or at your workers,
+all but the full game, or `wc3-scripted`, an agent that attack-moves at your army (`attack`) or at your workers,
 else your hall (`raid`). `wc3-macro-micro` plays your side, Haiku 4.5 for both models.
 
 | Task | Skill | Minutes | Opponent | Dropped |

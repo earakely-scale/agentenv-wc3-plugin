@@ -42,7 +42,7 @@ from agentenv_protocol.a2a_agent import (
 )
 from remote import RemoteGameSession, chat_micro
 
-from agentenv_rts.session import RemoteSession, SessionError
+from agentenv_rts.session import RemoteSession, SessionError, player_number
 from agentenv_rts.timeline import model_name
 
 log = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ def telling(run_log, remote: RemoteSession, slot: int):
 
 
 def playing(agent_class, goal: str, slot: int):
-    """wc3agent's Agent with the task's goal when the run gives none, and its seat's player id: observations carry
+    """wc3agent's Agent with the task's goal when the run gives none, and its player number: observations carry
     the game's own ids, and wc3agent's macro memory takes its own to be 0."""
     def agent(*args, **kwargs):
         made = agent_class(*args, **{**kwargs, "goal": kwargs.get("goal") or goal})
@@ -151,7 +151,7 @@ def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Pa
     server = next(iter(servers.values()))
     remote = RemoteSession(server["url"].rstrip("/").removesuffix("/mcp"), headers=server.get("headers"))
     state = remote.observe()
-    you = state.get("you", 0)
+    you = player_number(state)
     scenario, me = state["scenario"], state["observations"][you]
     base_url, key = endpoint(environ)
     cost.RATES.update(RATES)

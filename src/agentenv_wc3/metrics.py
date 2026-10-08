@@ -1,6 +1,6 @@
-"""Each seat's measures over a game, for grading (agentenv_rts.grade), under wc3agent's metric names so its scenario
+"""Each player's measures over a game, for grading (agentenv_rts.grade), under wc3agent's metric names so its scenario
 checks carry over unchanged. They come from every observation the env takes and from the units a stage step names
-(handles: `army` and `hero` are the seat's staged army, `enemy` its staged opponents). The definitions follow
+(handles: `army` and `hero` are the player's staged army, `enemy` its staged opponents). The definitions follow
 wc3agent's Scenario.metric; a unit's strength here is its cost times its health, where wc3agent rates its combat."""
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def strength(units: list[dict], ref: render.Reference) -> float:
 
 
 class Metrics:
-    """Per seat: samples of its state every observation, the events it saw, first sightings, camps cleared, and the
+    """Per player: samples of its state every observation, the events it saw, first sightings, camps cleared, and the
     handles' units, so `of(slot)` can say any metric at the end."""
 
     def __init__(self, ref: render.Reference, info: dict, slots: list[int]):
@@ -116,7 +116,7 @@ class Metrics:
         return next((round(e["t"], 1) for e in self.events[slot] if e.get("kind") == kind and test(e)), None)
 
     def of(self, slot: int, obs: dict) -> dict:
-        """Every metric for a seat, from its last observation before the game ended (once it has ended the game
+        """Every metric for a player, from its last observation before the game ended (once it has ended the game
         lists none of its units, as wc3agent's score() notes)."""
         obs = self.live.get(slot) or obs
         units = obs.get("units") or []

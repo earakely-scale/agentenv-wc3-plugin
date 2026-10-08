@@ -154,7 +154,7 @@
     "type": "prompt_agent",
     "agent_name": "red",
     "prompt_id": "chaos-game-crash-red",
-    "prompt": "Play your seat with the script.",
+    "prompt": "Play with the script.",
     "timeout_seconds": 300,
     "depends_on": [
       "stage",
@@ -166,7 +166,7 @@
     "type": "prompt_agent",
     "agent_name": "blue",
     "prompt_id": "chaos-game-crash-blue",
-    "prompt": "Play your seat with the script.",
+    "prompt": "Play with the script.",
     "timeout_seconds": 300,
     "depends_on": [
       "stage",
