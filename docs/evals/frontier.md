@@ -13,12 +13,12 @@ the outcome (a win 1, a draw at the time limit 0.5, a loss 0).
 | Sonnet 5.5 vs normal, seed 2 | v36 | draw | 30 min | $1.23 | 141 | 40.5k vs 101.4k |
 | Opus 5.5 vs normal, seed 2 | v36 | loss | 27.5 min | $3.14 | 197 | 42.7k vs 95.3k |
 
-Six games, $12.02: four overnight, before the env's fixes, and two on the final env. **Neither model beats the normal AI**: each drew one game of two against it and lost the other,
-and both lost to insane. They are a league above the low-cost models of the [ladder](ladder.md), though:
+Six games, $12.02: four overnight, before the env's fixes, and two on the final env. **Neither model beats the
+normal AI**: each drew one game of two against it and lost the other, and both lost to insane. They are a league above the low-cost models of the [ladder](ladder.md), though:
 - **They spend.** Sonnet held 45 to 70 food of 72 to 84 through the middle of its seed-2 game, with 200 to 400 gold
   in the bank where Haiku banked 7,000.
 - **They use the env's feedback.** On env v36 Sonnet was told 9 times why an order never started (mostly gold, once
-  that it lacked a Lumber Mill and a Castle) and revived its hero 6 times from the dead-hero listing; Opus was
+  that it lacked a Lumber Mill and a Castle) and sent 6 revive orders for the heroes the env listed dead; Opus was
   told 17 times, 15 of them for gold. 3% of their orders were refused.
 - **They lose the late game.** Opus's army matched the AI's in value until 18 minutes, Sonnet's trailed from 12;
   then the AI pulled away. Opus was wiped out at 27.5 minutes, and Sonnet was down to 7 units at the limit.
