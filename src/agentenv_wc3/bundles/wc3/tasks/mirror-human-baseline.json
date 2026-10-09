@@ -51,7 +51,6 @@
     "game_settings": {
       "map": "(2)EchoIsles.w3x",
       "seed": 1,
-      "randomize_starts": true,
       "time_limit_seconds": 150,
       "mode": "stepping",
       "decide_ratio": 0.4

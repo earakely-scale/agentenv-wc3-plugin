@@ -843,11 +843,12 @@ def test_a_replay_comes_with_the_startup_options_that_play_it_back():
                                "startup": {"ai_difficulty": 1}}
 
 
-async def test_two_formations_from_one_seed_are_mirror_images_across_the_middle(env_vars):
+@pytest.mark.parametrize(("seed", "swapped"), [(8, False), (7, True)])
+async def test_two_formations_from_one_seed_are_mirror_images_trading_places_on_an_odd_seed(env_vars, seed, swapped):
     env = WC3Env()
     try:
         await new_game(env, [{"agent": "wc3", "race": "human"}, {"agent": "rival", "race": "orc"}],
-                       time_limit_seconds=120, seed=7)
+                       time_limit_seconds=120, seed=seed)
         real, spawned, levels = env.bridge.call, [], []
 
         async def call(cmd, **args):
@@ -879,7 +880,11 @@ async def test_two_formations_from_one_seed_are_mirror_images_across_the_middle(
         ahead_b = (b["x"] - middle[0]) * along[0] + (b["y"] - middle[1]) * along[1]
         side_a = -(a["x"] - middle[0]) * along[1] + (a["y"] - middle[1]) * along[0]
         side_b = -(b["x"] - middle[0]) * along[1] + (b["y"] - middle[1]) * along[0]
-        assert ahead_a == pytest.approx(-ahead_b) and side_a == pytest.approx(side_b) and ahead_a < -650
+        assert ahead_a == pytest.approx(-ahead_b) and side_a == pytest.approx(side_b)
+        assert (ahead_a > 650) if swapped else (ahead_a < -650)
+    hero, foot = mine[0], mine[1]
+    behind = ((hero["x"] - foot["x"]) * along[0] + (hero["y"] - foot["y"]) * along[1]) * (-1 if swapped else 1)
+    assert behind < -100
     assert sorted(round(-(a["x"] - middle[0]) * along[1] + (a["y"] - middle[1]) * along[0]) // 50
                   for a in mine if a["type_id"] == "hfoo") != [0, 0, 0]
 

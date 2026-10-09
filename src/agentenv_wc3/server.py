@@ -1310,27 +1310,32 @@ class WC3Env(AgentEnvGameEnv):
 
     async def _formation(self, op: dict, handles: dict[str, list[int]]) -> None:
         """wc3agent's duel layout: `army` [[type, n, depth, level?], ...] in rows `depth` behind a front `gap` from the
-        middle of the starts, toward the player's own, each row spread `spacing` apart and every unit nudged up to
-        `jitter` by `seed` (the match's by default), so two formations with one seed are mirror images."""
+        middle of the starts, toward the player's own (`swapped`: toward the other's, the armies trading places), each
+        row spread `spacing` apart and every unit nudged up to `jitter` by `seed`, so two formations with one seed are
+        mirror images. Mirror images across the middle stand on different ground of a point-symmetric map, whichever
+        start each player has, so as wc3agent alternates its duels, `swapped` defaults to an odd seed's (the match's
+        by default): a sweep over seeds gives each side each ground."""
         player = self._staged_player(op.get("player"))
         home, along, length = self._line()
         gap, spacing, jitter = float(op.get("gap", 750)), float(op.get("spacing", 100)), float(op.get("jitter", 40))
         own = self.metrics.home(self.obs.get(player) or {}) or home
         side = 1.0 if own is home else -1.0   # +1: this player's start is the first agent's, its enemy further along
+        seed = op.get("seed", self.scenario["seed"] or 0)
+        facing = -side if op.get("swapped", seed % 2 == 1) else side   # +1: the enemy's army lies further along
         across = {"x": -along["y"], "y": along["x"]}
-        front = length / 2 - side * gap
+        front = length / 2 - facing * gap
         rows: dict[float, list[tuple[str, int | None]]] = {}
         for entry in op["army"]:
             raw, n, depth, *level = entry
             rows.setdefault(float(depth), []).extend([(raw, level[0] if level else None)] * int(n))
-        nudge = random.Random(op.get("seed", self.scenario["seed"] or 0))
+        nudge = random.Random(seed)
         nudges = {(depth, k): (nudge.uniform(-jitter, jitter), nudge.uniform(-jitter, jitter))
                   for depth, units in rows.items() for k in range(len(units))}
         made = []
         for depth, units in rows.items():
             for k, (raw, level) in enumerate(units):
                 ahead, sideways = nudges[(depth, k)]
-                t = front - side * (depth - ahead)
+                t = front - facing * (depth - ahead)
                 spread = (k - (len(units) - 1) / 2) * spacing + sideways
                 at = {"x": home["x"] + t * along["x"] + spread * across["x"],
                       "y": home["y"] + t * along["y"] + spread * across["y"]}

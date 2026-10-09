@@ -242,7 +242,7 @@ def test_the_bundles_mirror_duels_are_what_the_generator_writes_and_each_is_wc3a
     assert (EVALS / "duels.toml").read_text() == duels.evals()["duels.toml"]
     by_id = {s["id"]: s for s in made["mirror-orc"]}
     settings = by_id["match"]["game_settings"]
-    assert (settings["decide_ratio"], settings["time_limit_seconds"], settings["randomize_starts"]) == (0.4, 150, True)
+    assert (settings["decide_ratio"], settings["time_limit_seconds"], settings["seed"]) == (0.4, 150, 1)
     assert by_id["slot-wc3"]["game_settings"] == {"faction": "orc", "autocast": True}
     assert by_id["slot-opponent"]["game_settings"] == {"faction": "orc", "autocast": True, "omniscient": True}
     assert by_id["agent"]["a2a_agent_id"] == "wc3-llm" and by_id["opponent"]["env_vars"]["SCRIPT_EVERY_SECONDS"] == "3"

@@ -4,7 +4,8 @@ full mana and the same skills, both player slots casting on their own. The oppon
 `wc3-scripted` attack-moves its army at the other one every few seconds. The match is decided once one army is down
 to 0.4 of the other's strength, and is a draw after 150 seconds. `mirror-<race>` puts a model (wc3-llm) against it;
 `mirror-<race>-baseline` puts the scripted fighter on both sides, Warcraft against Warcraft, the duel's floor.
-The match's seed nudges every unit, so sweeping seeds varies the fight while both armies stay mirror images."""
+The match's seed nudges every unit and, odd or even, puts each army on either side of the middle, so sweeping seeds
+varies the fight and gives each player each ground while both armies stay mirror images."""
 
 from __future__ import annotations
 
@@ -109,7 +110,7 @@ def task(race: str, ref: Reference, baseline: bool = False) -> list[dict]:
         scripted("opponent"),
         {"id": "license", "type": "add_license", "env_id": "wc3", "files": LICENSE_SECRETS, "depends_on": ["deploy"]},
         {"id": "match", "type": "open_lobby", "env_id": "wc3",
-         "game_settings": {"map": MAP, "seed": 1, "randomize_starts": True, "time_limit_seconds": SECONDS,
+         "game_settings": {"map": MAP, "seed": 1, "time_limit_seconds": SECONDS,
                            "mode": "stepping", "decide_ratio": DECIDED}, "depends_on": ["deploy"]},
         {"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3", "player_id": "0", "player_kind": "agent",
          "player_name": "wc3", "game_settings": {**settings, "omniscient": True} if baseline else settings,
