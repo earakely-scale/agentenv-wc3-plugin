@@ -27,8 +27,9 @@ AI agents play Warcraft III: The Frozen Throne through [wc3env](https://github.c
 Every game is graded, saved as a native `.w3g` replay and recorded. You can watch it live in the game's own picture,
 with the agents' plans beside it, and broadcast it to Twitch or X, or only record the broadcast.
 
-Three v1 task sets, and every run of them by five models, are on the Hugging Face Hub as
-[earakely-scale/wc3env-AgentEnv](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv): see
+Three v1 task sets, and every run of them by five models, are on the Hugging Face Hub as the dataset
+[earakely-scale/wc3env-AgentEnv](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv). The
+[Space](https://huggingface.co/spaces/earakely-scale/wc3env-AgentEnv) replays every run in the browser; see
 [On the Hugging Face Hub](#on-the-hugging-face-hub).
 
 This repository is an environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com), built on
@@ -475,7 +476,10 @@ outcome with the game's score. On outcomes:
 ## On the Hugging Face Hub
 
 The dataset [earakely-scale/wc3env-AgentEnv](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv) holds three
-v1 task sets as bundles, and every run of them from 2026-10-09:
+v1 task sets as bundles, and every run of them from 2026-10-09. The Space
+[earakely-scale/wc3env-AgentEnv](https://huggingface.co/spaces/earakely-scale/wc3env-AgentEnv) replays every run in
+the browser. Both are in the collection
+[wc3env on AgentEnv](https://huggingface.co/collections/earakely-scale/wc3env-on-agentenv-6ac924a8810f02942599a5a4).
 
 | Bundle | Tasks | Runs | Tables |
 |---|---|---:|---|
@@ -486,7 +490,15 @@ v1 task sets as bundles, and every run of them from 2026-10-09:
 - **WC3's tables:** each run's outcome, score, checks and cost.
 - **agentenv-hf's** (`<bundle>_tasks`, `<bundle>_episodes`): each task's steps and each run's record and chat
   transcript. A run has the same `episode_id` in both kinds.
-- **Not in it:** game files, activation files, replays and video.
+- **Each run's files,** under its `episode_id`:
+  - its HTML replay (`replays/`);
+  - its timeline as JSON (`timelines/`);
+  - the game's `.w3g` replay with its startup options (`w3g/`);
+  - from env v34, `wc3-llm`'s untrimmed transcript (`transcripts/`).
+
+  The 24 Warcraft-against-Warcraft duels have theirs too.
+- **Not in it:** game files, activation files and the game's own picture. The `.w3g` replays need your own game to
+  watch.
 
 Each release tags the dataset with the plugin's version. The plugin depends on
 [agentenv-hf](https://github.com/earakely-scale/agentenv-hf-plugin), which adds `agent-env hf run` and
@@ -494,8 +506,8 @@ Each release tags the dataset with the plugin's version. The plugin depends on
 task straight from the Hub:
 
 ```bash
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.2.0 --task drill-opening --model anthropic/claude-haiku-4-5
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.2.0 --bundle wc3-v1-ladder \
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.3.0 --task drill-opening --model anthropic/claude-haiku-4-5
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.3.0 --bundle wc3-v1-ladder \
     --task ladder-echoisles-vs-easy-orc-s1 --model anthropic/claude-haiku-4-5
 ```
 
@@ -503,18 +515,31 @@ agent-env hf run earakely-scale/wc3env-AgentEnv@v0.2.0 --bundle wc3-v1-ladder \
 `wc3-llm`'s default, Haiku 4.5. `hf run` checks that this plugin is installed and the env and agents are set up before
 it plays.
 
-**Building the dataset.** `scripts/hub_dataset.py` builds the dataset from the sweeps' folders and the agent-env store
-they wrote to, on the host that ran them, and pushes it from a machine with a Hub login. Each sweep's runs are filed
-under their v1 task by the task's axes, since a sweep's task names carry the model. Before anything is written, every
-file is checked for keys (agentenv-hf's check) and for this machine's paths and hosts.
+**Building the dataset and the Space.** `scripts/hub_dataset.py` has a step for each of these. Each sweep's runs are
+filed under their v1 task by the task's axes, since a sweep's task names carry the model.
+
+1. **`build`** runs on the host that ran the sweeps, since it reads their folders and the agent-env store they wrote
+   to. Before anything is written, every file is checked for keys (agentenv-hf's check) and for this machine's paths
+   and hosts.
+2. **`media`** cuts the card's clip and the Space's thumbnail from the duel in `assets/hero.mp4`, with ffmpeg and
+   Pillow.
+3. **`space`** writes the Space: the page in `hub/space/` and `runs.json`. The Space loads each replay from the
+   dataset at the tag `runs.json` pins, so it holds no game data of its own.
+4. **`push`** sends a folder to the Hub, from a machine with a Hub login, as one commit, and tags it.
 
 ```bash
 python scripts/hub_dataset.py build --runs ~/runs --out build/hub/dataset   # prints each table's rows
-python scripts/hub_dataset.py push build/hub/dataset --tag v0.2.0 --message "v0.2.0: ..."
+python scripts/hub_dataset.py media build/hub/dataset
+python scripts/hub_dataset.py space build/hub/dataset --out build/hub/space
+python scripts/hub_dataset.py push build/hub/dataset --tag v0.3.0 --message "v0.3.0: ..."
+python scripts/hub_dataset.py push build/hub/space --type space --message "v0.3.0: ..."
 ```
 
-To release, bump `version` in `pyproject.toml` and every `v0.2.0` pin in this section and in
-`hub/dataset/README.md`. Tag the plugin on GitHub before you push the dataset, because the card's needs pin that tag.
+To release:
+1. Bump `version` in `pyproject.toml`, and every `v0.3.0` pin in this section and in `hub/dataset/README.md`.
+2. Tag the plugin on GitHub first, because the card's needs pin that tag.
+3. Push the dataset with its tag.
+4. Push the Space, which loads replays from that tag.
 
 ## The agents
 

@@ -5,13 +5,15 @@ import importlib.util
 import io
 import json
 import re
+import types
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from agent_env.bundle.parse import BundleKind, parse_bundle
-from huggingface_hub import DatasetCard
+from huggingface_hub import DatasetCard, SpaceCard
+from PIL import Image, ImageDraw
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "hub_dataset.py"
 DRILL = {"drill:wc3": {"score": 0.5, "results": [
@@ -94,9 +96,11 @@ def test_the_card_pins_the_plugin_and_lists_every_config_with_one_default(hub):
     assert {f"{f}_{t}" for f in ("ladder", "drills", "duels") for t in ("tasks", "episodes")} <= set(names)
     assert data.agentenv["default"] == "wc3-v1-drills"
     assert data.agentenv["bundles"] == {v1.bundle: {"plugins": [plugin], "setup": hub.SETUP} for v1 in hub.BUNDLES}
-    pins = re.findall(r"agentenv-wc3-plugin(?:@|/tree/|/blob/)(v[\d.]+)", hub.CARD.read_text())
-    assert pins and set(pins) == {f"v{hub.VERSION}"}
-    for text in (hub.CARD.read_text(), (hub.ROOT / "README.md").read_text()):
+    card = hub.CARD.read_text()
+    pins = re.findall(r"agentenv-wc3-plugin(?:@|/tree/|/blob/)(v[\d.]+)", card)
+    pins += re.findall(r"wc3env-AgentEnv/resolve/(v[\d.]+)/", card) + re.findall(r'rev = "[^"]+", "(v[\d.]+)"', card)
+    assert len(pins) > 5 and set(pins) == {f"v{hub.VERSION}"}
+    for text in (card, (hub.ROOT / "README.md").read_text()):
         assert set(re.findall(r"wc3env-AgentEnv@(v[\d.]+)", text)) == {f"v{hub.VERSION}"}
 
 
@@ -108,3 +112,93 @@ def test_the_check_stops_a_path_or_host_of_this_machine_in_any_file(hub):
     pq.write_table(pa.Table.from_pylist([{"error": "connect to proxy.example.scale.com failed"}]), sink)
     with pytest.raises(ValueError, match="scale.com"):
         hub.check({"episodes/x.parquet": sink.getvalue()})
+
+
+def test_a_runs_files_are_kept_under_its_episode_id_and_its_row_names_them(hub, monkeypatch):
+    saved = [{"kind": kind, "name": name, "artifact_id": name, "version": 1} for kind, name in (
+        ("html_replay", "wc3-g-1.html"), ("timeline", "wc3-g-1-timeline.json"), ("map_video", "wc3-g-1.mp4"),
+        ("replay", "wc3-g-1.w3g"), ("replay", "wc3-g-1.w3g.json"),
+        ("agent_files", "wc3-g-1-p0-wc3-llm-transcript.json"))]
+    record = types.SimpleNamespace(context={"metadata": {"match_files": {"files": saved}}})
+    monkeypatch.setattr(hub, "find_task_instance", lambda instance: record)
+    monkeypatch.setattr(hub.FileArtifact, "get", lambda artifact_id, version: types.SimpleNamespace(
+        load=lambda: artifact_id.encode()))
+    files, columns = hub.run_files("@local/~/runs/x/t-abc", "wc3-v1-duels/t-abc")
+    assert files == {"replays/wc3-v1-duels/t-abc.html": b"wc3-g-1.html",
+                     "timelines/wc3-v1-duels/t-abc.json": b"wc3-g-1-timeline.json",
+                     "w3g/wc3-v1-duels/t-abc.w3g": b"wc3-g-1.w3g",
+                     "w3g/wc3-v1-duels/t-abc.w3g.json": b"wc3-g-1.w3g.json",
+                     "transcripts/wc3-v1-duels/t-abc.json": b"wc3-g-1-p0-wc3-llm-transcript.json"}
+    assert columns == {"replay": "replays/wc3-v1-duels/t-abc.html", "timeline": "timelines/wc3-v1-duels/t-abc.json",
+                       "w3g": "w3g/wc3-v1-duels/t-abc.w3g", "transcript": "transcripts/wc3-v1-duels/t-abc.json"}
+
+
+def write_parquet(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(rows), path)
+
+
+def test_the_space_lists_every_run_in_order_and_loads_replays_from_the_dataset_tag(hub, tmp_path, monkeypatch):
+    data = tmp_path / "dataset"
+    files = {"replay": "replays/x.html", "timeline": "timelines/x.json", "w3g": "w3g/x.w3g", "transcript": None}
+    base = {"outcome": "loss", "reward": 0.0, "score_share": 0.3, "game_seconds": 60.0, "turns": 10, "cost_usd": 0.1,
+            "orders": 9, "orders_refused": 1, "units_killed": 0, **files}
+    ladder = {"map": "Echo Isles", "race": "human", "seed": 1, "opponent_race": "orc"}
+    write_parquet(data / "tasks/ladder.parquet", [{"task": "ladder-insane", "opponent_ai": "insane", **ladder},
+                                                   {"task": "ladder-easy", "opponent_ai": "easy", **ladder}])
+    write_parquet(data / "episodes/ladder.parquet", [
+        {"episode_id": "l/1", "task": "ladder-insane", "model": "openai/gpt-5.4-mini", **base},
+        {"episode_id": "l/2", "task": "ladder-easy", "model": "anthropic/claude-haiku-4-5", **base}])
+    write_parquet(data / "tasks/drills.parquet", [{"task": "drill-opening", "map": "Echo Isles", "race": "human",
+                                                   "seed": 1, "opponent_ai": None, "opponent_race": None,
+                                                   "opponent_script": "attack"}])
+    write_parquet(data / "episodes/drills.parquet", [
+        {"episode_id": "d/1", "task": "drill-opening", "model": "openai/gpt-5.4-mini", "skill": "economy",
+         "checks_met": 1, "num_checks": 2, "passed": False,
+         "checks": json.dumps([{"check": "workers >= 11", "met": True, "measured": 14.0}]), **base}])
+    write_parquet(data / "tasks/duels.parquet", [{"task": "mirror-orc-s1", "map": "Echo Isles", "race": "orc",
+                                                  "seed": 1}])
+    write_parquet(data / "episodes/duels.parquet", [{"episode_id": "u/1", "task": "mirror-orc-s1",
+                                                     "model": "fireworks_ai/deepseek-v4p1-flash", **base}])
+    write_parquet(data / "references/duels.parquet", [{"episode_id": "duels-references/r1", "task": None,
+                                                       "race": "orc", "seed": 5, **base}])
+    (data / "assets").mkdir()
+    Image.new("RGB", (8, 8)).save(data / "assets/thumbnail.jpg")
+    monkeypatch.setattr(hub, "FEATURED", (("u/1", "a duel"),))
+    hub.space(data, tmp_path / "space", "v9.9.9")
+    listed = json.loads((tmp_path / "space/runs.json").read_text())
+    assert (listed["dataset"], listed["revision"]) == (hub.REPO, "v9.9.9")
+    assert listed["featured"] == [{"id": "u/1", "why": "a duel"}]
+    runs = listed["runs"]
+    assert [r["id"] for r in runs] == ["l/2", "l/1", "d/1", "u/1", "duels-references/r1"]
+    assert (runs[0]["model"], runs[0]["opponent"]) == ("Claude Haiku 4.5", "the easy Orc AI")
+    assert (runs[2]["opponent"], runs[2]["checks"][0]["met"]) == ("a scripted attacker", True)
+    assert runs[2]["replay"] == "replays/x.html"
+    assert (runs[4]["model"], runs[4]["task"]) == (hub.SCRIPTED, "mirror-orc-s5")
+    assert {p.name for p in (tmp_path / "space").iterdir()} >= {"index.html", "app.js", "app.css", "README.md",
+                                                                "runs.json", "thumbnail.jpg"}
+    monkeypatch.setattr(hub, "FEATURED", (("gone/1", "missing"),))
+    with pytest.raises(ValueError, match="gone/1"):
+        hub.space(data, tmp_path / "space", "v9.9.9")
+
+
+def test_the_space_is_a_static_page_of_the_dataset(hub):
+    data = SpaceCard((hub.SPACE / "README.md").read_text()).data
+    assert (data.sdk, data.datasets) == ("static", [hub.REPO])
+    page = (hub.SPACE / "index.html").read_text()
+    assert 'src="app.js"' in page and 'href="app.css"' in page
+    assert "resolve/${DATA.revision}/" in (hub.SPACE / "app.js").read_text()
+
+
+def test_the_clip_is_cut_to_where_the_game_moves_under_its_title_bar(hub):
+    frames = []
+    for i in range(10):
+        frame = Image.new("RGB", (960, hub.BAR + 600), (40, 70, 40))
+        ImageDraw.Draw(frame).rectangle((0, 0, 960, hub.BAR), fill=(20, 20, 20))
+        ImageDraw.Draw(frame).ellipse((700 + i * 10, hub.BAR + 100, 710 + i * 10, hub.BAR + 110), fill=(255, 0, 0))
+        frames.append(frame)
+    left, top, right, bottom = hub.action(frames)
+    assert left <= 700 and right >= 800 and top <= 100 <= bottom
+    assert abs((right - left) * 9 - (bottom - top) * 16) <= 16 and right <= 960 and bottom <= 600
+    shot = hub.shot(frames[5], (left, top, right, bottom))
+    assert shot.size == (800, (hub.BAR + 540) * 800 // 960)

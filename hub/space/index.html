@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warcraft III on AgentEnv: every run, replayed</title>
+<meta name="description" content="LLM agents play the real Warcraft III through wc3env on AgentEnv: every run of the wc3env-AgentEnv dataset, replayed in the browser.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="home">
+  <header class="top">
+    <div>
+      <h1>Warcraft III on AgentEnv</h1>
+      <p class="lede">LLM agents play the real Warcraft III: The Frozen Throne through
+        <a href="https://github.com/pwang724/wc3env">wc3env</a>. Every run of the
+        <a id="dataset-link" href="https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv">wc3env-AgentEnv dataset</a>,
+        replayed in your browser.</p>
+    </div>
+    <nav>
+      <a id="nav-dataset" href="https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv">Dataset</a>
+      <a id="nav-plugin" href="https://github.com/earakely-scale/agentenv-wc3-plugin">Plugin</a>
+      <a href="https://github.com/pwang724/wc3env">wc3env</a>
+    </nav>
+  </header>
+
+  <p class="note">A replay is the env's own drawing of the game: the map, every unit any player sees, the event feed,
+    the agent's plans and the momentum of both sides, scrubbable from start to end. It shows no game footage. Press
+    play under the map, or drag the slider.</p>
+
+  <section>
+    <h2>Start here</h2>
+    <div id="featured" class="cards"></div>
+  </section>
+
+  <section>
+    <h2>Results</h2>
+    <div id="results" class="results"></div>
+  </section>
+
+  <section>
+    <h2>Every run</h2>
+    <div class="controls">
+      <div id="sets" class="tabs" role="tablist"></div>
+      <select id="model" aria-label="Model"></select>
+      <select id="outcome" aria-label="Outcome"></select>
+      <input id="search" type="search" placeholder="Search tasks" aria-label="Search tasks">
+      <span id="count" class="dim"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="runs">
+        <thead><tr>
+          <th data-key="task">Task</th><th data-key="model">Model</th><th data-key="result">Result</th>
+          <th data-key="reward" class="num">Reward</th><th data-key="score_share" class="num">Score share</th>
+          <th data-key="game_seconds" class="num">Game time</th><th data-key="turns" class="num">Turns</th>
+          <th data-key="cost_usd" class="num">Cost</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <p>Played on 2026-10-09 by <code>wc3-llm</code> on the real game (Warcraft III Legacy 1.29.2 under Wine), with the
+      <a id="footer-plugin" href="https://github.com/earakely-scale/agentenv-wc3-plugin">agentenv-wc3</a> plugin. Warcraft III is a
+      trademark of Blizzard Entertainment; this Space holds no game files and isn't affiliated with or endorsed by
+      Blizzard.</p>
+  </footer>
+</div>
+
+<div id="replay" hidden>
+  <header class="bar">
+    <a href="#" class="back">← All runs</a>
+    <div class="what">
+      <b id="r-title"></b>
+      <span id="r-chips" class="chips"></span>
+    </div>
+    <nav id="r-links"></nav>
+  </header>
+  <div id="r-details" class="details"></div>
+  <div class="stage">
+    <div id="r-status" class="status"></div>
+    <iframe id="r-frame" title="Replay" sandbox="allow-scripts"></iframe>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
