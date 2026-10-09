@@ -27,6 +27,10 @@ AI agents play Warcraft III: The Frozen Throne through [wc3env](https://github.c
 Every game is graded, saved as a native `.w3g` replay and recorded. You can watch it live in the game's own picture,
 with the agents' plans beside it, and broadcast it to Twitch or X, or only record the broadcast.
 
+Three v1 task sets, and every run of them by five models, are on the Hugging Face Hub as
+[earakely-scale/wc3env-AgentEnv](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv): see
+[On the Hugging Face Hub](#on-the-hugging-face-hub).
+
 This repository is an environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com), built on
 [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env), which gives a game env its lobby, match,
 license and broadcast. Its RTS-generic half, `agentenv_rts`, is meant for the next real-time strategy game too.
@@ -467,6 +471,50 @@ outcome with the game's score. On outcomes:
 - **[vs-normal](docs/evals/vs-normal.md):** three of those models for 12 minutes against the normal Orc AI, 12 games
   for $1.45. DeepSeek V4.1 Flash 0 / 4 / 0 (0.50 points), Haiku 4.5 0 / 3 / 1 (0.38), GPT-5.4 mini 0 / 2 / 2 (0.25).
   No model has won a game yet, which is why the ladder plays 30-minute games.
+
+## On the Hugging Face Hub
+
+The dataset [earakely-scale/wc3env-AgentEnv](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv) holds three
+v1 task sets as bundles, and every run of them from 2026-10-09:
+
+| Bundle | Tasks | Runs | Tables |
+|---|---|---:|---|
+| `wc3-v1-drills` | the 25 drills, an eval per skill | 75 | `drills_tasks`, `drills_episodes` |
+| `wc3-v1-ladder` | Human against the easy, normal and insane Orc AI × Echo Isles and Terenas Stand × seeds 1 and 2, 30-minute games | 38 | `ladder_tasks`, `ladder_episodes` |
+| `wc3-v1-duels` | the mirror duels, four races × seeds 1 to 4 | 26 | `duels_tasks`, `duels_episodes`, `duels_references` |
+
+- **WC3's tables:** each run's outcome, score, checks and cost.
+- **agentenv-hf's** (`<bundle>_tasks`, `<bundle>_episodes`): each task's steps and each run's record and chat
+  transcript. A run has the same `episode_id` in both kinds.
+- **Not in it:** game files, activation files, replays and video.
+
+Each release tags the dataset with the plugin's version. The plugin depends on
+[agentenv-hf](https://github.com/earakely-scale/agentenv-hf-plugin), which adds `agent-env hf run` and
+`agent-env hf publish`. After the setup in [Play the real game](#play-the-real-game-x86-64-linux), play a bundle's
+task straight from the Hub:
+
+```bash
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.2.0 --task drill-opening --model anthropic/claude-haiku-4-5
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.2.0 --bundle wc3-v1-ladder \
+    --task ladder-echoisles-vs-easy-orc-s1 --model anthropic/claude-haiku-4-5
+```
+
+`hf run` plays `wc3-v1-drills` unless `--bundle` names another. A bundle's task leaves the model to `--model`, or to
+`wc3-llm`'s default, Haiku 4.5. `hf run` checks that this plugin is installed and the env and agents are set up before
+it plays.
+
+**Building the dataset.** `scripts/hub_dataset.py` builds the dataset from the sweeps' folders and the agent-env store
+they wrote to, on the host that ran them, and pushes it from a machine with a Hub login. Each sweep's runs are filed
+under their v1 task by the task's axes, since a sweep's task names carry the model. Before anything is written, every
+file is checked for keys (agentenv-hf's check) and for this machine's paths and hosts.
+
+```bash
+python scripts/hub_dataset.py build --runs ~/runs --out build/hub/dataset   # prints each table's rows
+python scripts/hub_dataset.py push build/hub/dataset --tag v0.2.0 --message "v0.2.0: ..."
+```
+
+To release, bump `version` in `pyproject.toml` and every `v0.2.0` pin in this section and in
+`hub/dataset/README.md`. Tag the plugin on GitHub before you push the dataset, because the card's needs pin that tag.
 
 ## The agents
 

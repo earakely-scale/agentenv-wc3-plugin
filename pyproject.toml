@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentenv-wc3"
-version = "0.1.0"
+version = "0.2.0"
 description = "Warcraft III as an AgentEnv environment: an LLM agent plays a melee game through wc3env's raw orders."
 readme = "README.md"
 license = "Apache-2.0"
@@ -19,9 +19,10 @@ classifiers = [
 # wc3env is not a dependency: the env image has it (Windows Python under Wine for the game, its sources for the
 # server's game data), and tests put a checkout's sources on the path (README: Development).
 dependencies = [
-    "agentenv-framework>=0.9.1260",
+    "agentenv-framework>=0.9.1298",
     "agentenv-framework-protocol>=0.1.275,<0.2",
     "agentenv-game-env @ https://github.com/earakely-scale/agentenv-game-env/archive/eb7c94fca6c16f19eb4f8bb5443c4bde6d2aace6.tar.gz",
+    "agentenv-hf @ https://github.com/earakely-scale/agentenv-hf-plugin/archive/refs/tags/v0.3.0.tar.gz",
     "httpx>=0.27,<1",
     "mcp>=1.25,<2",
     "pydantic>=2,<3",
