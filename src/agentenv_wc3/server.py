@@ -30,6 +30,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import shlex
 import shutil
@@ -97,6 +98,8 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
+from agentenv_rts.grade import OPS, known_metric
+from agentenv_rts.grade import metric as metric_of
 from agentenv_rts.lockstep import Lockstep
 from agentenv_rts.session import DEBUG, FILE, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
@@ -118,9 +121,10 @@ MAX_ADVANCE_SECONDS = 60
 DEFAULT_SCENARIO = {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race": "orc", "ai_difficulty": "normal",
                     "seed": None, "randomize_starts": False, "time_limit_seconds": 1200, "mode": "stepping",
                     "allow_debug": False, "client_view": False, "labels": None, "players": None, "step_ms": 1000,
-                    "lockstep": {"stall_seconds": 600}}
+                    "lockstep": {"stall_seconds": 600}, "finish": None, "decide_ratio": None}
 PLAYER_KEYS = ("agent", "computer", "race", "team", "slot", "ai_assist", "omniscient", "autocast")
 OUTCOMES = {"victory": "won", "defeat": "lost", "draw": "drawn"}
+FINISHED = "finished"   # every agent's result when the match's finish condition held: a drill's goal was met
 AGENT_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MODES = ("stepping", "realtime")
 ALLIANCE = (0, 1, 2, 3, 4, 5)   # passive, help request and response, shared experience, spells and vision
@@ -147,7 +151,9 @@ startup options that play it back (.w3g.json), and the files its players left (u
 DEFAULT_FILE_KINDS = ("map_video", "html_replay", "timeline", "replay", "agent_files")
 STAGE_EXTENSION = "urn:wc3:stage/v1"
 STAGE_OPS = ("spawn", "level", "give", "item", "hp", "mana", "kill", "remove", "resources", "ai", "research",
-             "invulnerable", "alliance", "destructable")
+             "invulnerable", "alliance", "destructable", "formation", "learn", "autocast", "clear")
+LEARN_ROUNDS = 12   # a hero spends one skill point a round, as a player clicks them
+STAGE_STEP_MS = 25   # how long a staging step lets pass: the game takes orders only as it runs
 
 
 class Action(BaseModel):
@@ -171,6 +177,18 @@ class LockstepSettings(BaseModel):
     agents stepping, at each turn."""
 
 
+class FinishSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", use_attribute_docstrings=True)
+    metric: str
+    """The first agent's metric, by rts_grade's names (camp_cleared, items_picked_up, enemy_base_seen_time, ...)."""
+    op: Literal[tuple(OPS)] | None = None
+    """With value, how the metric compares; without, it holds once it is truthy (true, a count, a time), as
+    wc3agent's do."""
+    value: Any = None
+    after_seconds: int | float = Field(0, ge=0, le=600)
+    """Game seconds the match runs on once it holds, as wc3agent's finish_after_seconds (loot dropping)."""
+
+
 class MatchSettings(BaseModel):
     """A match's settings, the lobby's game_settings; its players are the lobby's player slots."""
 
@@ -192,6 +210,12 @@ class MatchSettings(BaseModel):
     step_ms: int = Field(DEFAULT_STEP_MS, ge=25, le=MAX_ADVANCE_SECONDS * 1000)
     """The game time one step of the engine plays."""
     lockstep: LockstepSettings = LockstepSettings()
+    finish: FinishSettings | None = None
+    """End the match once the first agent's metric holds, as wc3agent ends a scenario: a drill's goal met. Every
+    agent's result is then `finished`, which rts_grade counts a draw."""
+    decide_ratio: float | None = Field(None, gt=0, lt=1)
+    """End a staged fight once one side's army (the stage's handles `army` and `enemy`) is down to this share of
+    the other's strength, as wc3agent decides a duel (0.4): that side lost, the other won."""
 
 
 class SlotSettings(BaseModel):
@@ -266,6 +290,13 @@ def check_scenario(s: dict) -> dict:
     stall = (s["lockstep"] or {}).get("stall_seconds") if isinstance(s["lockstep"], dict) else None
     if not isinstance(stall, int | float) or stall <= 0:
         raise ValueError('lockstep must be {"stall_seconds": <seconds>} with a positive number')
+    if s["finish"] is not None:
+        s["finish"] = FinishSettings(**s["finish"]).model_dump()
+        if not known_metric(s["finish"]["metric"]):
+            raise ValueError(f"finish metric {s['finish']['metric']!r} is not one the summary reports")
+    if s["decide_ratio"] is not None and not (isinstance(s["decide_ratio"], int | float)
+                                              and 0 < s["decide_ratio"] < 1):
+        raise ValueError("decide_ratio must be a share between 0 and 1, e.g. 0.4")
     players_of(s)
     return s
 
@@ -402,6 +433,8 @@ class WC3Env(AgentEnvGameEnv):
         self.notes: list[dict] = []
         self.agents: dict[int, dict] = {}
         self.agent_files: dict[int, dict[str, tuple[bytes, str]]] = {}   # slot → name → (content, content type)
+        self.decided: dict[int, str] = {}   # each agent's result once the match's own end (finish, decide_ratio) came
+        self.finish_at: float | None = None
         self.stats = {"games": 0, "tool_calls": 0, "invalid_calls": 0, "advances": 0, "orders_sent": 0,
                       "orders_rejected": 0, "extension_calls": 0, "session_steps": 0, "staged_seconds": 0,
                       "finish_seconds": 0}
@@ -471,7 +504,7 @@ class WC3Env(AgentEnvGameEnv):
         self.metrics = metrics.Metrics(self.ref, render.map_info(scenario["map"]), [x["slot"] for x in players])
         self.metrics.see(self.obs)
         self.camera, self.director, self.notes, self.agents = None, frames.Director(self.lead), [], {}
-        self.agent_files = {}
+        self.agent_files, self.decided, self.finish_at = {}, {}, None
         if scenario["client_view"]:
             await self._start_capture()
         self._record()
@@ -545,9 +578,10 @@ class WC3Env(AgentEnvGameEnv):
         return (self.obs.get(slot) or {}).get("result") or ""
 
     def _result_of(self, slot: int) -> str:
-        """The game's result for a player, else victory once every player on the other teams is defeated: the game
-        lets allies win together only with the lobby's allied victory, which teams made by alliances don't have."""
-        own = self._given(slot)
+        """The game's result for a player; else the match's own end's (finish, decide_ratio); else victory once every
+        player on the other teams is defeated: the game lets allies win together only with the lobby's allied
+        victory, which teams made by alliances don't have."""
+        own = self._given(slot) or self.decided.get(slot)
         if own:
             return own
         team = next((x["team"] for x in self.players if x["slot"] == slot), None)
@@ -658,9 +692,32 @@ class WC3Env(AgentEnvGameEnv):
         player slot's result (or the time limit), which today's summary reports."""
         self.obs = {int(k): v for k, v in result["observations"].items()}
         self.done = self.done or bool(result.get("done"))
-        self.result = self._result_of(self.lead)
         if self.metrics is not None:
             self.metrics.see(self.obs)
+            self._judge()
+        self.result = self._result_of(self.lead)
+
+    def _judge(self) -> None:
+        """The match's own ends, once play has begun: `decide_ratio`, a staged fight one side has lost; `finish`,
+        the first agent's goal met (and its after_seconds passed)."""
+        if self.decided or not self.begun:
+            return
+        agents = [x for x in self.players if x["computer"] is None]
+        if ratio := self.scenario.get("decide_ratio"):
+            ours, theirs = self.metrics.standing("army"), self.metrics.standing("enemy")
+            if ours is not None and theirs is not None and (ours < ratio * theirs or theirs < ratio * ours):
+                team, won = next(x["team"] for x in self.players if x["slot"] == self.lead), theirs < ratio * ours
+                self.decided = {x["slot"]: "victory" if (x["team"] == team) == won else "defeat" for x in agents}
+                return
+        if finish := self.scenario.get("finish"):
+            if self.finish_at is None:
+                measured = metric_of(self.metrics.of(self.lead, self.obs.get(self.lead) or {}), finish["metric"])
+                held = (bool(measured) if finish["op"] is None else
+                        measured is not None and OPS[finish["op"]](measured, finish["value"]))
+                if held:
+                    self.finish_at = self._seconds() + finish["after_seconds"]
+            if self.finish_at is not None and self._seconds() >= self.finish_at:
+                self.decided = {x["slot"]: FINISHED for x in agents}
 
     async def _start_capture(self) -> None:
         """The game's picture, from its window on the container's display, for the live page and the recording."""
@@ -1119,6 +1176,7 @@ class WC3Env(AgentEnvGameEnv):
         won = [self._who(x) for x in self.players if self._result_of(x["slot"]) == "victory"]
         how = (f"{' and '.join(won)} won" if won else
                "a draw" if any(self._result_of(x["slot"]) == "draw" for x in self.players) else
+               f"its finish condition, {render.clock(self.finish_at)}" if self.decided else
                f"the time limit, {render.clock(self.scenario['time_limit_seconds'])}")
         return how + (f"; played out from {render.clock(self.played_out_from)}"
                       if self.played_out_from is not None else "")
@@ -1159,13 +1217,17 @@ class WC3Env(AgentEnvGameEnv):
         return self._seconds() - start
 
     @extension(STAGE_EXTENSION,
-               description="Stage the game before play, for drills: the hook's staging ops in order (spawn, level, "
-                           "give, item, hp, mana, kill, remove, resources, ai, research, invulnerable, alliance, "
-                           "destructable). `player` is an agent's name, `opponent` or a player number. Places come "
-                           "from the first agent's start: home, enemy_home, nearest_camp, camp:<n>, "
-                           "building:<name>, toward:<place>:<distance>, with dx and dy. `as` names the units an op "
-                           "makes, for later ops (`unit`) and the summary's metrics (army, hero, enemy). "
-                           "warmup_seconds lets the game run first. Harness time, not the agents'.")
+               description="Stage the game before play, for drills and duels: the hook's staging ops in order "
+                           "(spawn, level, give, item, hp, mana, kill, remove, resources, ai, research, "
+                           "invulnerable, alliance, destructable), and the env's own: formation (an army in rows "
+                           "facing the other start, mirrored for either player by a seed: wc3agent's duel layout), "
+                           "learn (heroes spend their skill points, the same way for every player), autocast "
+                           "(every autocast ability on) and clear (remove the creeps any player sees). `player` is "
+                           "an agent's name, `opponent` or a player number. Places come from the first agent's "
+                           "start: home, enemy_home, middle, nearest_camp, camp:<n>, building:<name>, "
+                           "toward:<place>:<distance>, with dx and dy. `as` names the units an op makes, for later "
+                           "ops (`unit`) and the summary's metrics (army, hero, enemy). warmup_seconds lets the game "
+                           "run first. Harness time, not the agents'.")
     async def stage(self, ops: list[dict], warmup_seconds: int = 0) -> dict:
         self.stats["extension_calls"] += 1
         if not isinstance(ops, list) or not 0 <= int(warmup_seconds) <= 600:
@@ -1213,6 +1275,18 @@ class WC3Env(AgentEnvGameEnv):
                 await self.bridge.call("debug", op=kind, args={"unit_id": uid, **extra})
         elif kind == "item":
             await self.bridge.call("debug", op="item", args={"type_id": op["type"], **self._place(op)})
+        elif kind == "formation":
+            await self._formation(op, handles)
+        elif kind == "learn":
+            await self._learn(units)
+        elif kind == "autocast":
+            await self._autocast(units)
+        elif kind == "clear":
+            self._observed(await self.bridge.call("observe"))
+            creeps = {e["unit_id"] for o in self.obs.values() for e in o.get("visible_enemies") or ()
+                      if e.get("owner") in render.NEUTRAL_HOSTILE}
+            for uid in sorted(creeps):
+                await self.bridge.call("debug", op="remove", args={"unit_id": uid})
         else:
             args = {k: v for k, v in op.items() if k not in ("op", "player", "other", "type")}
             if "type" in op:
@@ -1223,6 +1297,84 @@ class WC3Env(AgentEnvGameEnv):
             if "other" in op:
                 args["other"] = self._staged_player(op["other"])
             await self.bridge.call("debug", op=kind, args=args)
+
+    def _line(self) -> tuple[dict, dict, float]:
+        """The line between the two starts: the first agent's start, the unit vector toward the other, its length."""
+        home = self.metrics.home(self.obs.get(self.lead) or {})
+        if home is None:
+            raise ValueError("the first agent has no hall to find its start from")
+        other = next(s for s in self.metrics.starts if s is not home)
+        length = math.dist((home["x"], home["y"]), (other["x"], other["y"])) or 1.0
+        return home, {"x": (other["x"] - home["x"]) / length, "y": (other["y"] - home["y"]) / length}, length
+
+    async def _formation(self, op: dict, handles: dict[str, list[int]]) -> None:
+        """wc3agent's duel layout: `army` [[type, n, depth, level?], ...] in rows `depth` behind a front `gap` from the
+        middle of the starts, toward the player's own, each row spread `spacing` apart and every unit nudged up to
+        `jitter` by `seed` (the match's by default), so two formations with one seed are mirror images."""
+        player = self._staged_player(op.get("player"))
+        home, along, length = self._line()
+        gap, spacing, jitter = float(op.get("gap", 750)), float(op.get("spacing", 100)), float(op.get("jitter", 40))
+        own = self.metrics.home(self.obs.get(player) or {}) or home
+        side = 1.0 if own is home else -1.0   # +1: this player's start is the first agent's, its enemy further along
+        across = {"x": -along["y"], "y": along["x"]}
+        front = length / 2 - side * gap
+        rows: dict[float, list[tuple[str, int | None]]] = {}
+        for entry in op["army"]:
+            raw, n, depth, *level = entry
+            rows.setdefault(float(depth), []).extend([(raw, level[0] if level else None)] * int(n))
+        nudge = random.Random(op.get("seed", self.scenario["seed"] or 0))
+        nudges = {(depth, k): (nudge.uniform(-jitter, jitter), nudge.uniform(-jitter, jitter))
+                  for depth, units in rows.items() for k in range(len(units))}
+        made = []
+        for depth, units in rows.items():
+            for k, (raw, level) in enumerate(units):
+                ahead, sideways = nudges[(depth, k)]
+                t = front - side * (depth - ahead)
+                spread = (k - (len(units) - 1) / 2) * spacing + sideways
+                at = {"x": home["x"] + t * along["x"] + spread * across["x"],
+                      "y": home["y"] + t * along["y"] + spread * across["y"]}
+                uid, = (await self.bridge.call("debug", op="spawn", args={"type_id": raw, "player": player, "n": 1,
+                                                                           **at})).get("unit_ids") or [None]
+                if uid is None:
+                    raise ValueError(f"the game spawned no {raw}")
+                if level:
+                    await self.bridge.call("debug", op="level", args={"unit_id": uid, "level": int(level)})
+                made.append(uid)
+        if name := op.get("as"):
+            handles.setdefault(name, []).extend(made)
+            self.metrics.stage(name, player, made)
+
+    async def _staging_step(self, actions: dict[int, list]) -> None:
+        """Orders the harness gives for players while it stages: the game takes them as it runs a moment."""
+        self._observed(await self.bridge.call("step", actions={str(k): v for k, v in actions.items()},
+                                              ms=STAGE_STEP_MS))
+
+    async def _learn(self, units: list[int]) -> None:
+        """Heroes spend every skill point the same way, whoever owns them: each point on the deepest skill open now,
+        a tie to the first the hero lists (wc3agent's skill_to_learn without its per-hero builds)."""
+        self._observed(await self.bridge.call("observe"))
+        for _ in range(LEARN_ROUNDS):
+            orders: dict[int, list] = {}
+            for slot, obs in self.obs.items():
+                for hero in (u for u in obs.get("units") or () if u.get("hero") and u["unit_id"] in units):
+                    if raw := render.skill_to_learn(hero, self.ref):
+                        orders.setdefault(slot, []).append({"unit_id": hero["unit_id"], "command": "learn",
+                                                            "arguments": {"ability_id": raw}})
+            if not orders:
+                return
+            await self._staging_step(orders)
+
+    async def _autocast(self, units: list[int]) -> None:
+        """Every autocast ability of these units on, as Warcraft has a computer player's."""
+        self._observed(await self.bridge.call("observe"))
+        orders: dict[int, list] = {}
+        for slot, obs in self.obs.items():
+            for u in (u for u in obs.get("units") or () if u["unit_id"] in units and u.get("hp", 0) > 0):
+                for name in render.autocast_orders(u, self.ref):
+                    orders.setdefault(slot, []).append({"unit_id": u["unit_id"], "command": "cast",
+                                                        "arguments": {"order": name}})
+        if orders:
+            await self._staging_step(orders)
 
     def _staged_player(self, ref) -> int:
         """A stage op's player: a player number, an agent's name, or `opponent` (the first player not on the first
@@ -1250,6 +1402,9 @@ class WC3Env(AgentEnvGameEnv):
         def named(word: str) -> dict:
             if word == "home":
                 return home
+            if word == "middle":
+                other = next(s for s in self.metrics.starts if s is not home)
+                return {"x": (home["x"] + other["x"]) / 2, "y": (home["y"] + other["y"]) / 2}
             if word == "enemy_home":
                 return next(s for s in self.metrics.starts if s is not home)
             if word == "nearest_camp":

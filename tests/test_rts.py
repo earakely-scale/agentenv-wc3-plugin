@@ -6,6 +6,7 @@ import asyncio
 import base64
 import http.server
 import json
+import math
 import shutil
 import subprocess
 import threading
@@ -646,7 +647,9 @@ async def test_staging_places_units_by_name_and_names_them(env_vars):
 
 def test_metrics_measure_a_player_slot_over_the_game():
     ref = render.Reference({"units": {"hpea": {"name": "Peasant", "builds": ["htow"], "gold": 75},
-                                      "hfoo": {"name": "Footman", "gold": 135}, "ogru": {"name": "Grunt", "gold": 200},
+                                      "hfoo": {"name": "Footman", "gold": 135, "hp": 420, "armor": 2.0,
+                                               "damage": [12.0, 13.0], "base_attack_period": 1.35},
+                                      "ogru": {"name": "Grunt", "gold": 200},
                                       "htow": {"name": "Town Hall", "structure": True, "food_made": 12},
                                       "hkee": {"name": "Keep", "structure": True, "food_made": 12}}})
     m = metrics.Metrics(ref, {"creep_camps": [{"x": 3000, "y": 0}], "start_locations": [{"x": 0, "y": 0},
@@ -668,7 +671,7 @@ def test_metrics_measure_a_player_slot_over_the_game():
     got = m.of(0, obs(20.0, []))
     assert (got["idle_worker_seconds"], got["supply_blocked_seconds"], got["workers"]) == (20.0, 10.0, 1)
     assert got["first_time"]["hfoo"] == 0.0 and got["count"]["hkee"] == 1 and got["tier"] == 2
-    assert got["camp_cleared"] is True and got["camps_cleared"] == [1] and got["army_kept_percent"] == 50
+    assert got["camp_cleared"] is True and got["camps_cleared"] == [1] and got["army_kept_percent"] == 71
     assert got["total"] == 900 and got["hero_alive"] is False and got["units_lost"] == 0
 
 
@@ -837,3 +840,114 @@ def test_a_replay_comes_with_the_startup_options_that_play_it_back():
     worker.session = Saved()
     assert worker.replay() == {"name": "game.w3g", "base64": base64.b64encode(b"W3G").decode(),
                                "startup": {"ai_difficulty": 1}}
+
+
+async def test_two_formations_from_one_seed_are_mirror_images_across_the_middle(env_vars):
+    env = WC3Env()
+    try:
+        await new_game(env, [{"agent": "wc3", "race": "human"}, {"agent": "rival", "race": "orc"}],
+                       time_limit_seconds=120, seed=7)
+        real, spawned, levels = env.bridge.call, [], []
+
+        async def call(cmd, **args):
+            if cmd != "debug":
+                return await real(cmd, **args)
+            if args["op"] == "spawn":
+                spawned.append(args["args"])
+                return {"unit_ids": [len(spawned)]}
+            if args["op"] == "level":
+                levels.append(args["args"])
+            return {}
+
+        env.bridge.call = call
+        army = [["Hamg", 1, 150, 5], ["hfoo", 3, 0], ["hrif", 2, 280]]
+        result = await env.stage(ops=[{"op": "formation", "player": "wc3", "army": army, "as": "army"},
+                                      {"op": "formation", "player": "rival", "army": army, "as": "enemy"}])
+    finally:
+        await env.close()
+    assert result["handles"] == {"army": 6, "enemy": 6} and levels == [{"unit_id": 1, "level": 5},
+                                                                      {"unit_id": 7, "level": 5}]
+    home, other = env.metrics.starts[0], env.metrics.starts[1]
+    middle = ((home["x"] + other["x"]) / 2, (home["y"] + other["y"]) / 2)
+    length = math.dist((home["x"], home["y"]), (other["x"], other["y"]))
+    along = ((other["x"] - home["x"]) / length, (other["y"] - home["y"]) / length)
+    mine, theirs = spawned[:6], spawned[6:]
+    for a, b in zip(mine, theirs, strict=True):
+        assert a["type_id"] == b["type_id"] and (a["player"], b["player"]) == (0, 1)
+        ahead_a = (a["x"] - middle[0]) * along[0] + (a["y"] - middle[1]) * along[1]
+        ahead_b = (b["x"] - middle[0]) * along[0] + (b["y"] - middle[1]) * along[1]
+        side_a = -(a["x"] - middle[0]) * along[1] + (a["y"] - middle[1]) * along[0]
+        side_b = -(b["x"] - middle[0]) * along[1] + (b["y"] - middle[1]) * along[0]
+        assert ahead_a == pytest.approx(-ahead_b) and side_a == pytest.approx(side_b) and ahead_a < -650
+    assert sorted(round(-(a["x"] - middle[0]) * along[1] + (a["y"] - middle[1]) * along[0]) // 50
+                  for a in mine if a["type_id"] == "hfoo") != [0, 0, 0]
+
+
+def test_heroes_spend_their_points_on_the_deepest_skill_open_now():
+    ref = render.Reference.load()
+    hero = {"type_id": "Hamg", "level": 5, "hero": True, "abilities": []}
+    taken = []
+    for _ in range(6):
+        raw = render.skill_to_learn(hero, ref)
+        if raw is None:
+            break
+        taken.append(raw)
+        levels = {a["ability_id"]: a["level"] for a in hero["abilities"]}
+        levels[raw] = levels.get(raw, 0) + 1
+        hero["abilities"] = [{"ability_id": k, "level": v} for k, v in levels.items()]
+    assert taken == ["AHbz", "AHbz", "AHbz", "AHab", "AHab"]
+    assert render.skill_to_learn({"type_id": "Hamg", "level": 1, "abilities": [{"ability_id": "AHbz", "level": 1}]},
+                                 ref) is None
+    assert render.autocast_orders({"abilities": [{"ability_id": "Ahea"}, {"ability_id": "AHbz"}]}, ref)
+
+
+async def test_a_staged_fight_is_decided_once_one_army_is_down_to_its_share_of_the_other(env_vars):
+    env = WC3Env()
+    try:
+        await new_game(env, [{"agent": "wc3", "race": "human"}, {"agent": "rival", "race": "orc"}],
+                       time_limit_seconds=150, decide_ratio=0.4)
+        foot = {"type_id": "hfoo", "hp": 420, "max_hp": 420, "x": 0, "y": 0}
+        env.metrics.stage("army", 0, [1, 2])
+        env.metrics.stage("enemy", 1, [3, 4])
+        env.begun = True
+
+        def seen(enemy_hp):
+            return {"observations": {"0": {"game_time_seconds": 20.0, "units": [{**foot, "unit_id": 1},
+                                                                               {**foot, "unit_id": 2}]},
+                                     "1": {"game_time_seconds": 20.0, "units": [{**foot, "unit_id": 3, "hp": enemy_hp},
+                                                                               {**foot, "unit_id": 4, "hp": 0}]}}}
+
+        env._observed(seen(400))
+        assert not env.decided
+        env._observed(seen(30))
+        assert env.decided == {0: "victory", 1: "defeat"} and env.game_over and env._result_of(1) == "defeat"
+        assert env._ending().startswith("wc3") and " won" in env._ending()
+    finally:
+        await env.close()
+
+
+async def test_a_drill_ends_once_its_finish_condition_holds_and_its_after_seconds_pass(env_vars):
+    env = WC3Env()
+    try:
+        await new_game(env, time_limit_seconds=300,
+                       finish={"metric": "items_picked_up", "op": ">=", "value": 1, "after_seconds": 15})
+        env.begun = True
+        start = env.obs[0]["game_time_seconds"]
+
+        def seen(t, events=()):
+            return {"observations": {str(k): {**v, "game_time_seconds": start + t, "events": list(events)}
+                                     for k, v in env.obs.items()}}
+
+        env._observed(seen(10, [{"kind": "item_pickup", "unit_id": 1, "type_id": "phea"}]))
+        assert env.finish_at == pytest.approx(start + 25) and not env.decided
+        env._observed(seen(20))
+        assert not env.decided
+        env._observed(seen(26))
+        assert env.decided == {0: "finished"} and env.game_over and env.result == "finished"
+        assert env._ending().startswith("its finish condition")
+    finally:
+        await env.close()
+    with pytest.raises(ValueError, match="not one the summary reports"):
+        check_scenario({**env.scenario, "finish": {"metric": "fun"}})
+    with pytest.raises(ValueError, match="decide_ratio"):
+        check_scenario({**env.scenario, "decide_ratio": 1.5})

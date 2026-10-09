@@ -1,7 +1,8 @@
 """Each player's measures over a game, for grading (agentenv_rts.grade), under wc3agent's metric names so its scenario
 checks carry over unchanged. They come from every observation the env takes and from the units a stage step names
 (handles: `army` and `hero` are the player's staged army, `enemy` its staged opponents). The definitions follow
-wc3agent's Scenario.metric; a unit's strength here is its cost times its health, where wc3agent rates its combat."""
+wc3agent's Scenario.metric, and a unit's strength is wc3agent's (game/strength.py), so its checks' thresholds keep
+their meaning."""
 
 from __future__ import annotations
 
@@ -14,14 +15,40 @@ CAMP_REACH, CAMP_CLEAR = 450.0, 900.0   # a unit this close to a camp, and no cr
 ALL_HALLS = HALLS[0] | HALLS[1] | HALLS[2]
 
 
+ARMOR_FACTOR = 0.06   # each point of armor adds 6% effective health
+COMMON_ATTACKS = ("normal", "pierce", "magic", "siege")
+HERO_SPELLS = (1.5, 0.15)   # wc3agent's guess at what a hero's spells add: x1.5 at level 1, 0.15 more a level
+
+
+def hero_numbers(facts: dict, level: int) -> tuple[float, float, float]:
+    """A hero's hit points, armor and bonus damage at `level`, from its attributes and their growth."""
+    a, gained = facts["attributes"], max(level, 1) - 1
+    points = {k: a[k] + a[k + "_per_level"] * gained for k in ("str", "agi", "int")}
+    return (facts["hp"] + 25 * a["str_per_level"] * gained, facts["armor"] - 2 + 0.3 * points["agi"],
+            a[a["primary"] + "_per_level"] * gained if a.get("primary") else 0.0)
+
+
+def unit_strength(facts: dict, multipliers: dict, hp: float | None = None, level: int = 0) -> float:
+    """wc3agent's fighting value of one unit: sqrt(effective hit points x damage per second), its effective health
+    from armor and how its armor class takes the common attacks; a hero's from its attributes, times its spells."""
+    damage, period = facts.get("damage") or [0, 0], facts.get("base_attack_period") or 0
+    if not any(damage) or period <= 0 or facts.get("structure"):
+        return 0.0
+    health, armor, bonus = facts["hp"], facts.get("armor") or 0.0, 0.0
+    if facts.get("hero") and facts.get("attributes"):
+        health, armor, bonus = hero_numbers(facts, level)
+    health = health if hp is None else hp
+    taken = [multipliers[a].get(facts.get("base_armor_class"), 1.0) for a in COMMON_ATTACKS if a in multipliers]
+    toughness = len(taken) / sum(taken) if taken and sum(taken) else 1.0
+    value = math.sqrt(max(0.0, health * (1 + ARMOR_FACTOR * max(armor, 0)) * toughness
+                          * (sum(damage) / 2 + bonus) / period))
+    return value * (HERO_SPELLS[0] + HERO_SPELLS[1] * (max(level, 1) - 1)) if facts.get("hero") else value
+
+
 def strength(units: list[dict], ref: render.Reference) -> float:
-    """What units are worth as they stand: their cost scaled by their health; heroes count their level."""
-    total = 0.0
-    for u in units:
-        facts = ref.units.get(u["type_id"]) or {}
-        cost = (facts.get("gold") or 0) + (facts.get("lumber") or 0) + 100 * (u.get("level") or 0)
-        total += cost * (u.get("hp", 0) / u["max_hp"] if u.get("max_hp") else 1.0)
-    return total
+    """What units are worth in a fight as they stand: wounded ones less, heroes by their level."""
+    return sum(unit_strength(ref.units[u["type_id"]], ref.damage_multipliers, u.get("hp"), u.get("level") or 0)
+               for u in units if u["type_id"] in ref.units)
 
 
 class Metrics:
@@ -98,6 +125,14 @@ class Metrics:
     def stage(self, name: str, slot: int, ids: list[int]) -> None:
         handle = self.handles.setdefault(name, {"slot": slot, "ids": [], "strength": None})
         handle["ids"] += [i for i in ids if i not in handle["ids"]]
+
+    def standing(self, name: str) -> float | None:
+        """The strength of a handle's units still alive, from its player's latest observation; None without it."""
+        handle = self.handles.get(name)
+        if handle is None:
+            return None
+        units = (self.live.get(handle["slot"]) or {}).get("units") or ()
+        return strength([u for u in units if u["unit_id"] in handle["ids"] and u.get("hp", 0) > 0], self.ref)
 
     def home(self, obs: dict) -> dict | None:
         hall = next((u for u in obs.get("units") or () if u.get("structure")), None)

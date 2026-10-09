@@ -261,8 +261,8 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_match_files(local_store
     grade = by_type["rts_grade"]
     expected = (("smoke", "smoke") if task == "smoke" else ("checks", "drill") if task.startswith("drill-")
                 else ("dense", "duel") if task.startswith("duel") else ("dense", task) if task.startswith("broadcast")
-                else ("outcome", "wc3"))
-    assert grade["id"] == "grade" and (grade["rubric"], grade["verifier_id"]) == expected
+                else ("outcome", "duel") if task.startswith("mirror-") else ("outcome", "wc3"))
+    assert grade["id"] == "grade" and (grade.get("rubric", "outcome"), grade["verifier_id"]) == expected
     assert by_type["finish_match"]["id"] in grade["depends_on"]   # every match is played out before it is graded
     plays = [s for s in steps if s["type"] == "prompt_agent"]
     if task != "smoke":

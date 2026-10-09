@@ -1,0 +1,6 @@
+tasks = [
+  "mirror-human",
+  "mirror-orc",
+  "mirror-undead",
+  "mirror-nightelf",
+]

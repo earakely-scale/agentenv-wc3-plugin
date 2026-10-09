@@ -85,7 +85,7 @@ def test_smoke_is_smoke_verifier(case):
 
 
 @pytest.mark.parametrize(("case", "points", "evidence"), [
-    ("victory", 1, "won: every enemy defeated"), ("defeat", 0, "lost: defeated"),
+    ("victory", 1, "won: every enemy defeated, or the staged fight decided"), ("defeat", 0, "lost: defeated"),
     ("the game's own draw", 0.5, "a draw: the game's own tie"),
     ("behind at the limit", 0.5, "a draw: nobody won by the time limit"),
     ("ahead at the limit", 0.5, "a draw: nobody won by the time limit"),

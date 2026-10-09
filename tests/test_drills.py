@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 from wc3agent.scenarios.scenario import DEFINITIONS
 
-from agentenv_wc3 import drills, prompts
+from agentenv_wc3 import drills, duels, prompts, render
 from agentenv_wc3.cli import wc3
 
 TASKS = Path(__file__).resolve().parents[1] / "src/agentenv_wc3/bundles/wc3/tasks"
@@ -231,3 +231,37 @@ def test_a_drill_tells_the_agent_how_to_play_its_own_race():
     assert play["prompt"].startswith(definition("build_supply_nightelf")["goal"] + "\n\nGame time is frozen")
     assert '{"type_id": "Wisp"}' in play["prompt"] and '{"type_id": "Moon Well"' in play["prompt"]
     assert play["prompt"].endswith("Keep playing until advance reports GAME OVER, then reply with the result.")
+
+
+def test_the_bundles_mirror_duels_are_what_the_generator_writes_and_each_is_wc3agents_duel():
+    ref = render.Reference.load()
+    made = duels.tasks(ref)
+    assert sorted(made) == sorted(p.stem for p in TASKS.glob("mirror-*.json")) and len(made) == 8
+    for name, steps in made.items():
+        assert json.loads((TASKS / f"{name}.json").read_text()) == steps, name
+    assert (EVALS / "duels.toml").read_text() == duels.evals()["duels.toml"]
+    by_id = {s["id"]: s for s in made["mirror-orc"]}
+    settings = by_id["match"]["game_settings"]
+    assert (settings["decide_ratio"], settings["time_limit_seconds"], settings["randomize_starts"]) == (0.4, 150, True)
+    assert by_id["slot-wc3"]["game_settings"] == {"faction": "orc", "autocast": True}
+    assert by_id["slot-opponent"]["game_settings"] == {"faction": "orc", "autocast": True, "omniscient": True}
+    assert by_id["agent"]["a2a_agent_id"] == "wc3-llm" and by_id["opponent"]["env_vars"]["SCRIPT_EVERY_SECONDS"] == "3"
+    ops = by_id["stage"]["directives"][0]["args"]["ops"]
+    assert [o["op"] for o in ops[:2]] == ["formation", "formation"] and ops[0]["army"] == ops[1]["army"]
+    assert ops[0]["army"][:2] == [["Ofar", 1, 150, 5], ["Otch", 1, 150, 3]]
+    assert {o["type"] for o in ops if o["op"] == "research"} == {raw for raw, _ in duels.upgrades("orc", ref)}
+    assert [o["op"] for o in ops[-7:]] == ["learn", "learn", "autocast", "autocast", "mana", "mana", "clear"]
+    assert "40% of the other's strength" in by_id["play"]["prompt"] and by_id["grade"]["verifier_id"] == "duel"
+    baseline = {s["id"]: s for s in made["mirror-orc-baseline"]}
+    assert baseline["agent"]["a2a_agent_id"] == "wc3-scripted" and "model" not in baseline["play"]
+    for race, army in duels.ARMIES.items():
+        assert all(ref.units[raw]["hero"] == raw[0].isupper() for raw, _, _ in army), race
+        assert duels.upgrades(race, ref), race
+
+
+def test_a_drill_ends_where_wc3agents_scenario_ends():
+    creep = steps_of("creep_easy")["match"]["game_settings"]
+    assert creep["finish"] == {"metric": "camp_cleared", "after_seconds": 15}
+    loot = steps_of("loot")["match"]["game_settings"]["finish"]
+    assert loot == {"metric": "items_picked_up", "op": ">=", "value": 4, "after_seconds": 15}
+    assert "finish" not in steps_of("fight_even")["match"]["game_settings"]

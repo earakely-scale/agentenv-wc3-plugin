@@ -13,7 +13,9 @@ from pathlib import Path
 WORKERS = {"hpea", "opeo", "uaco", "ewsp"}
 GOLD_MINE = "ngol"
 COMMAND_ORDERS = {"harvest", "repair", "move", "attack", "stop", "smart"}   # orders with a command of their own
-RESULTS = {"victory": "VICTORY", "defeat": "DEFEAT", "draw": "DRAW", "time_limit": "TIME LIMIT"}
+RESULTS = {"victory": "VICTORY", "defeat": "DEFEAT", "draw": "DRAW", "time_limit": "TIME LIMIT",
+           "finished": "FINISHED (the drill's goal was met)"}
+NEUTRAL_HOSTILE = {12}   # the creeps' player
 
 
 class Reference:
@@ -24,6 +26,7 @@ class Reference:
         self.upgrades = data.get("upgrades", {})
         self.items = data.get("items", {})
         self.abilities = data.get("abilities", {})
+        self.damage_multipliers = data.get("damage_multipliers", {})   # attack type -> armor class -> factor
 
     @classmethod
     def load(cls, path: Path | None = None) -> Reference:
@@ -150,6 +153,34 @@ def order_text(order: dict | None, ref: Reference) -> str:
     target = f" → {order['target_id']}" if order.get("target_id") else (
         f" → ({order['x']:.0f},{order['y']:.0f})" if order.get("x") is not None else "")
     return name + target
+
+
+def skill_to_learn(hero: dict, ref: Reference) -> str | None:
+    """The skill a hero spends its next point on: the deepest it can learn now, a tie to the first it lists; None
+    with no point left (its level less the levels learned) or nothing open. A skill's next level needs hero level
+    required_level + level_skip (the game's 2 when the data says 0) per level learned."""
+    options = (ref.units.get(hero["type_id"]) or {}).get("potential_hero_abilities") or []
+    learned = {a["ability_id"]: a.get("level", 0) for a in hero.get("abilities") or () if a["ability_id"] in options}
+    level = hero.get("level") or 0
+    if level <= sum(learned.values()):
+        return None
+
+    def open_now(raw: str) -> bool:
+        ability, have = ref.abilities.get(raw) or {}, learned.get(raw, 0)
+        return (have < (ability.get("max_level") or 3)
+                and level >= (ability.get("required_level") or 1) + (ability.get("level_skip") or 2) * have)
+
+    ready = [raw for raw in options if open_now(raw)]
+    return max(ready, key=lambda raw: (learned.get(raw, 0), -options.index(raw)), default=None)
+
+
+def autocast_orders(u: dict, ref: Reference) -> list[str]:
+    """The orders that switch on each of a unit's autocast abilities (heal, slow, curse, inner fire, ...)."""
+    names = []
+    for a in u.get("abilities") or ():
+        level = ((ref.abilities.get(a["ability_id"]) or {}).get("levels") or {}).get("1") or {}
+        names += [o["name"] for o in level.get("orders") or () if o.get("kind") == "enable_autocast"]
+    return names
 
 
 def inventories(obs: dict) -> dict[int, list[dict]]:

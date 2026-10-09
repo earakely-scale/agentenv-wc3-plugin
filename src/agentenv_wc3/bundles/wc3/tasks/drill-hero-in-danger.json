@@ -49,7 +49,13 @@
       "map": "(2)EchoIsles.w3x",
       "seed": 1,
       "time_limit_seconds": 90,
-      "mode": "stepping"
+      "mode": "stepping",
+      "finish": {
+        "metric": "hero_alive",
+        "op": "==",
+        "value": false,
+        "after_seconds": 0
+      }
     },
     "depends_on": [
       "deploy"

@@ -34,7 +34,13 @@
       "map": "(2)EchoIsles.w3x",
       "seed": 1,
       "time_limit_seconds": 90,
-      "mode": "stepping"
+      "mode": "stepping",
+      "finish": {
+        "metric": "items_picked_up",
+        "op": ">=",
+        "value": 4,
+        "after_seconds": 15
+      }
     },
     "depends_on": [
       "deploy"

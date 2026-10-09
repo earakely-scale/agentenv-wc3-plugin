@@ -29,7 +29,7 @@ from .drills import SKILLS, TASKS, skill
 from .prompts import HOW_TO_PLAY, PLAY_TO_THE_END, RACES, SUPPLY, WORKER
 
 DIFFICULTIES = ("easy", "normal", "insane")
-OUTCOMES = {"victory": "win", "draw": "draw", "time_limit": "draw", "defeat": "loss"}
+OUTCOMES = {"victory": "win", "draw": "draw", "time_limit": "draw", "finished": "draw", "defeat": "loss"}
 BEATEN = 0.75   # a level is beaten when at least three in four of its games are won
 PROMPT = (
     "You play Warcraft III: The Frozen Throne as {race} on {map}, a {players}-player map, against the game's own "
@@ -77,8 +77,10 @@ class Spec:
         templates = spec.templates()
         if not templates:
             raise ValueError(f"no bundled task matches the template {spec.template!r}")
-        if spec.prompt and (drills := [t for t in templates if skill(t)]):
-            raise ValueError(f"drills keep their own prompts ({', '.join(drills)}): set prompt = \"\"")
+        if spec.prompt and (own_prompts := [t for t, steps in templates.items()
+                                            if skill(t) or own(steps, spec.player_step)["opponent"] is None]):
+            raise ValueError(f"drills and duels keep their own prompts ({', '.join(own_prompts)}): set prompt = "
+                             "\"\"")
         return spec
 
     def templates(self) -> dict[str, list[dict]]:
@@ -334,9 +336,11 @@ def games_report(rows: list[dict], cap: float) -> list[str]:
         lines.append(f"| {m} | {len(mine)} | {mean_points} | {won_drawn_lost(mine, ' / ')} | {len(mine) - len(played)} "
                      f"| {'–' if ratio is None else f'{ratio:.0%}'} | {versus} | ${paid:.3f} | {capped} "
                      f"| {turns:.0f} |")
-    lines += ["", "Won-drawn-lost against each AI level, and the highest level beaten (three in four games won):", "",
-              "| Model | " + " | ".join(levels) + " | Highest level beaten |", "|---|" + "---|" * (len(levels) + 1)]
-    for m in ranked:
+    if levels:
+        lines += ["", "Won-drawn-lost against each AI level, and the highest level beaten (three in four games won):",
+                  "", "| Model | " + " | ".join(levels) + " | Highest level beaten |",
+                  "|---|" + "---|" * (len(levels) + 1)]
+    for m in ranked if levels else ():
         by_level = {d: [r for r in rows if r["model"] == m and (r.get("opponent") or {}).get("computer") == d]
                     for d in levels}
         lines.append(f"| {m} | " + " | ".join(won_drawn_lost(by_level[d]) for d in levels) + f" | {beaten(by_level)} |")

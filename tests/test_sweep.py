@@ -235,8 +235,11 @@ def test_a_drills_sweep_keeps_each_drills_own_race_board_and_prompt(tmp_path):
     assert by_id["play"]["model"] == "m2" and by_id["agent"]["env_vars"] == {"WC3_MAX_COST_USD": "0.5"}
     assert by_id["stage"] == next(s for s in original if s["id"] == "stage")
     (tmp_path / "prompted.toml").write_text(DRILLS.replace('prompt = ""', ""))
-    with pytest.raises(ValueError, match="drills keep their own prompts"):
+    with pytest.raises(ValueError, match="drills and duels keep their own prompts"):
         sweep.Spec.load(tmp_path / "prompted.toml")
+    (tmp_path / "duels.toml").write_text(DRILLS.replace("drill-*", "mirror-*").replace('prompt = ""', ""))
+    with pytest.raises(ValueError, match="drills and duels keep their own prompts"):
+        sweep.Spec.load(tmp_path / "duels.toml")
     (tmp_path / "none.toml").write_text(DRILLS.replace("drill-*", "nothing-*"))
     with pytest.raises(ValueError, match="no bundled task matches"):
         sweep.Spec.load(tmp_path / "none.toml")

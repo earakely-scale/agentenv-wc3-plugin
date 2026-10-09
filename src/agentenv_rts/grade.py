@@ -27,9 +27,10 @@ RUBRICS = {
     "checks": {},
     "smoke": {"ran_to_limit": 1, "played_out": 1},
 }
-POINTS = {"victory": 1.0, "draw": 0.5, "time_limit": 0.5, "defeat": 0.0}
-OUTCOMES = {"victory": "won: every enemy defeated", "draw": "a draw: the game's own tie",
-            "time_limit": "a draw: nobody won by the time limit", "defeat": "lost: defeated"}
+POINTS = {"victory": 1.0, "draw": 0.5, "time_limit": 0.5, "finished": 0.5, "defeat": 0.0}
+OUTCOMES = {"victory": "won: every enemy defeated, or the staged fight decided", "draw": "a draw: the game's own tie",
+            "time_limit": "a draw: nobody won by the time limit",
+            "finished": "a draw: the match's finish condition held", "defeat": "lost: defeated"}
 TARGETS = {"army_ratio": 1.0, "buildings_destroyed": 5, "tier": 3, "expansions": 1, "hero_level": 5}
 GATES = ("game_ran", "agent_played")
 VOID_MATCH = {"cancelled": "the match was cancelled", "failed": "the match failed"}

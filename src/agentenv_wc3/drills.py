@@ -105,9 +105,19 @@ def checks(definition: dict) -> list[dict]:
     return [{**c, "metric": timed} if c.get("metric") == "seconds" and timed else c for c in definition["checks"]]
 
 
+def finish(definition: dict) -> dict | None:
+    """The scenario's finish condition as the match's `finish`: a metric that holds (truthy), or {metric, op,
+    value}; it ends the match `finish_after_seconds` later, when wc3agent ends the scenario."""
+    given = definition.get("finish")
+    if given is None:
+        return None
+    condition = {"metric": given} if isinstance(given, str) else dict(given)
+    return {**condition, "after_seconds": definition.get("finish_after_seconds", 0)}
+
+
 def convert(name: str, definition: dict) -> list[dict]:
-    """The drill task's steps for wc3agent's scenario `name`. Its `finish` and `finish_after_seconds` are dropped:
-    drills play to their time limit, and the summary's first-time metrics record when a goal was met."""
+    """The drill task's steps for wc3agent's scenario `name`: it ends where wc3agent's scenario ends, at its time
+    limit or once its finish condition holds (and finish_after_seconds pass)."""
     if unknown := sorted(set(definition) - KEYS):
         raise ValueError(f"{name}: unknown fields {unknown}")
     opponent, race = definition.get("opponent", "computer"), definition.get("race", "human")
@@ -130,9 +140,10 @@ def convert(name: str, definition: dict) -> list[dict]:
                                    "SCRIPT_EVERY_SECONDS": "5"}, "depends_on": ["deploy"]})
     steps.append({"id": "license", "type": "add_license", "env_id": "wc3", "files": LICENSE_SECRETS,
                   "depends_on": ["deploy"]})
+    ends = {"finish": f} if (f := finish(definition)) else {}
     steps.append({"id": "match", "type": "open_lobby", "env_id": "wc3",
                   "game_settings": {"map": MAP, "seed": 1, "time_limit_seconds": seconds + warmup,
-                                    "mode": "stepping"}, "depends_on": ["deploy"]})
+                                    "mode": "stepping", **ends}, "depends_on": ["deploy"]})
     steps.append({"id": "slot-wc3", "type": "add_player_slot", "env_id": "wc3", "player_id": "0",
                   "player_kind": "agent", "player_name": "wc3", "game_settings": {"faction": RACES[race]},
                   "depends_on": ["match", "agent"]})
