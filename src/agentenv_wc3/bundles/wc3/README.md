@@ -1,5 +1,5 @@
-Warcraft III (wc3env): agents play melee games on Echo Isles against the game's own AI or each other, and short
-drills, through the env's MCP tools or raw wc3env orders. Each game is graded per player, and its replay and recording
+Warcraft III (wc3env): agents play melee games on Echo Isles against the game's own AI or each other, short
+drills, and mirror duels, through the env's MCP tools or raw wc3env orders. Each game is graded per player, and its replay and recording
 are saved.
 
 Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once), gives it your activation files
@@ -68,7 +68,7 @@ with neither a task nor an eval plays every drill once. To compare models on the
 | hero-and-items | `hero-revive`, `loot`, `shopping` |
 | full-game | `full-game-easy` |
 
-| Task | What it asks | Minutes | Opponent | Dropped |
+| Task | What it asks | Minutes | Opponent | Ends early |
 |---|---|---|---|---|
 | `drill-build-production` | Second Barracks and a Blacksmith | 4 | computer, paused | |
 | `drill-build-repair` | Repairing a battered base | 2.5 | computer, paused | |
@@ -77,36 +77,55 @@ with neither a task nor an eval plays every drill once. To compare models on the
 | `drill-build-supply-orc` | Burrows before the food cap (Orc) | 3 | computer, paused | |
 | `drill-build-supply-undead` | Ziggurats before the food cap (Undead) | 3 | computer, paused | |
 | `drill-build-towers` | Towers before the raid | 4.5 | `wc3-scripted`: raid after 150 s | |
-| `drill-creep-easy` | Creeping the nearest weak camp | 2.5 | computer, paused | finish at `camp_cleared`, then 15 s |
-| `drill-creep-hard` | Creeping a strong camp | 3.5 | computer, paused | finish at `camp_cleared:camp:9`, then 15 s |
+| `drill-creep-easy` | Creeping the nearest weak camp | 2.5 | computer, paused | at `camp_cleared`, then 15 s |
+| `drill-creep-hard` | Creeping a strong camp | 3.5 | computer, paused | at `camp_cleared:camp:9`, then 15 s |
 | `drill-defend-base` | Defending the base from a raid | 2.5 | `wc3-scripted`: attack | |
 | `drill-defend-base-human` | Defending with Militia (Human) | 2.5 | `wc3-scripted`: raid | |
 | `drill-defend-base-nightelf` | Defending with Ancients (Night Elf) | 2.5 | `wc3-scripted`: raid | |
 | `drill-defend-base-orc` | Defending with Burrows (Orc) | 2.5 | `wc3-scripted`: raid | |
 | `drill-defend-base-undead` | Defending under Spirit Towers (Undead) | 2.5 | `wc3-scripted`: raid | |
-| `drill-expansion` | Taking a second gold mine | 5 | computer, paused | finish at `expansion_started_time` |
+| `drill-expansion` | Taking a second gold mine | 5 | computer, paused | at `expansion_started_time` |
 | `drill-fight-even` | Even fight | 2.5 | `wc3-scripted`: attack | |
 | `drill-fight-outnumbered` | Outnumbered: save the army | 2 | `wc3-scripted`: attack | |
 | `drill-full-game-easy` | Ten minutes against the easy computer | 10 | easy computer | |
-| `drill-hero-in-danger` | A hero about to die | 1.5 | `wc3-scripted`: attack | finish at `hero_alive == false` |
+| `drill-hero-in-danger` | A hero about to die | 1.5 | `wc3-scripted`: attack | at `hero_alive == false` |
 | `drill-hero-revive` | Reviving a fallen hero | 3 | computer, paused | |
-| `drill-loot` | Picking up items and tomes | 1.5 | computer, paused | finish at `items_picked_up >= 4`, then 15 s |
+| `drill-loot` | Picking up items and tomes | 1.5 | computer, paused | at `items_picked_up >= 4`, then 15 s |
 | `drill-opening` | Opening build | 4 | computer, paused | |
-| `drill-scouting` | Finding the enemy base | 3 | computer, paused | finish at `enemy_base_seen_time` |
-| `drill-shopping` | Buying items | 2, after a 460 s warm-up | computer, paused | finish at `items_bought >= 3` |
+| `drill-scouting` | Finding the enemy base | 3 | computer, paused | at `enemy_base_seen_time` |
+| `drill-shopping` | Buying items | 2, after a 460 s warm-up | computer, paused | at `items_bought >= 3` |
 | `drill-spend-and-tech` | Spending a big bank and teching | 4 | computer, paused | |
 
 Run one with `agent-env run wc3 --task drill-fight-even`. Every drill needs `wc3-llm` (`agent-env wc3 setup
 --agent`); the ones against `wc3-scripted` need that agent registered too. A drill's time limit is its minutes plus
 any warm-up: `drill-shopping` lets 460 game seconds pass first so the shops stock up.
 
-**Dropped: the early finish.** wc3agent ended a scenario once its `finish` condition held (and, with
-`finish_after_seconds`, a little later, so loot could drop). Drills play to their time limit instead, one stop rule
-for every task, and the summary's first-time metrics record when a goal was met, so the checks lose nothing. wc3agent's
-`seconds` was the time its finish condition first held, so `drill-creep-easy`'s `seconds <= 90` reads
-`camp_cleared_time`, when the camp was first cleared.
-Also dropped: wc3agent pointed the game's camera at the staged party (the stage has no camera op), and left the
-opponent's race to the map (the drills give it Orc).
+**The early finish.** wc3agent ends a scenario once its `finish` condition holds (and, with `finish_after_seconds`,
+a little later, so loot can drop). A drill does the same: the condition is its match's `finish`, which ends the match
+there, every agent's result `finished`, so its checks read the game as wc3agent's did. wc3agent's `seconds` is the
+time its finish condition first held, so `drill-creep-easy`'s `seconds <= 90` reads `camp_cleared_time`, when the camp
+was first cleared. Dropped: wc3agent pointed the game's camera at the staged party (the stage has no camera op), and
+left the opponent's race to the map (the drills give it Orc).
+
+## Mirror duels
+
+The `mirror-*` tasks are wc3agent's duels (its `duel.py`): two identical armies of one race, about 60 food with two
+heroes (levels 5 and 3), melee, ranged, casters and siege, staged as mirror images either side of the middle of the
+starts (the stage's `formation`). Both players own every upgrade of their race, start with full mana, learn the same
+skills (`learn`) and cast on their own (the player slots' `autocast`, and the stage's `autocast`); the creeps in sight
+are removed (`clear`). The opponent fights the way Warcraft does: `wc3-scripted` attack-moves its army at the other
+one every 3 seconds. The match is decided once one army is down to 40% of the other's strength (`decide_ratio`), a
+win and a loss; after 150 seconds it is a draw. `rts_grade` grades the outcome, and reports how much of each army
+was kept.
+
+| Task | Your side | Opponent |
+|---|---|---|
+| `mirror-human`, `mirror-orc`, `mirror-undead`, `mirror-nightelf` | `wc3-llm` with Haiku 4.5 (any model, by `--model` or a sweep) | `wc3-scripted`, attack |
+| `mirror-<race>-baseline` | `wc3-scripted`, attack: Warcraft against Warcraft | `wc3-scripted`, attack |
+
+The `duels` eval plays the four races with a model; `sweeps/duels.toml` in the repo crosses them over models and
+seeds (a seed nudges every unit and shuffles the starts, and both armies stay mirror images). `agentenv_wc3/duels.py`
+writes the tasks, and `tests/test_drills.py` checks that they are what it writes.
 
 `agent-env wc3 drills import [--wc3env PATH]` regenerates the files from wc3env's pinned commit
 (`agentenv_wc3/drills.py`), and `tests/test_drills.py` checks that they are what it writes. In `drill-build-repair`

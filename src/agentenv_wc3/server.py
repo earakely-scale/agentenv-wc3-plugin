@@ -98,8 +98,8 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
-from agentenv_rts.grade import OPS, known_metric
-from agentenv_rts.grade import metric as metric_of
+from agentenv_rts.checks import OPS, known_metric
+from agentenv_rts.checks import metric as metric_of
 from agentenv_rts.lockstep import Lockstep
 from agentenv_rts.session import DEBUG, FILE, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline

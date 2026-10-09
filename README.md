@@ -196,11 +196,11 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
 
 | Task | Who plays | Game | Measured on the real game |
 |---|---|---|---|
-| `smoke` | nobody: `finish_match` plays the game out | 2 minutes | 40 s, $0 |
+| `smoke` | nobody: `finish_match` plays the game out | 2 minutes | 11 s, $0 (40 s before the stepped clock ran at 2048x) |
 | `broadcast-smoke` | two `wc3-scripted` agents (attack and raid), staged armies, a recorded broadcast in the game's own picture | 2 minutes, stepped in lockstep, graded per player (`dense`) | 4 min, $0; the same game every time it ran, a draw at the limit; a 1080p broadcast of about 2 minutes |
-| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); a draw: survived to the limit, outscored by the AI 8.7k to 4.8k. In `first-eval`, 6 games: 6 draws, $0.11 a game |
+| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 75 s (3 min before the 2048x clock), $0.10 (52 model turns, prompt-cached); a draw: survived to the limit, outscored by the AI 8.7k to 4.8k. In `first-eval`, 6 games: 6 draws, $0.11 a game |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
-| `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
+| `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | 13 min, $0.80 with the prompt cache (254 decisions; $2.40 before it); a draw; wc3agent's report and session kept |
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
 | `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime, with the game's picture | 11 min, ~$11 |
 | `duel-quick` | two wc3agents, Haiku 4.5 for both models, Human against Orc | 5 minutes, stepped in lockstep, graded per player (`dense`) | 19 min, $4.70 |
@@ -505,6 +505,7 @@ prompt is wc3agent's goal, which it keeps first in every macro request.
 |---|---|---|
 | Macro model | the `prompt_agent` step's `model` | `anthropic/claude-sonnet-5-5` |
 | Micro model | `WC3_MICRO_MODEL` in the `deploy_agent` step's `env_vars` | `anthropic/claude-haiku-4-5` |
+| Stop playing once the game has cost this much (USD); `finish_match` then plays it out | `WC3_MAX_COST_USD` (a sweep sets it to `max_cost_usd`) | no cap |
 | Macro reasoning effort | `WC3_MACRO_REASONING` | `low` |
 | Game seconds between macro turns | `WC3_TURN_SECONDS` (5 or more) | `5` |
 | Stop after this much game time | `WC3_MAX_GAME_SECONDS` | the match's time limit |
@@ -519,8 +520,15 @@ prompt is wc3agent's goal, which it keeps first in every macro request.
 - **`jev`** (or a `jev-…` model name) asks TypeSafe's Jev instead, with `TYPESAFE_API_KEY` in the agent's
   environment. **`off`** plays without micro.
 
-**The result** reports the macro turns, the micro calls, and the tokens and cost per model. Its trajectory is
-wc3agent's call log, with each decision and its cost.
+**Cost:** every call is priced as LiteLLM reports it (its response-cost header), so a model wc3agent's rates table
+doesn't name is priced too. A Claude macro model's system prompt and newest message are marked for prompt caching, as
+wc3agent marks them on Anthropic's own API.
+
+**The result** reports the macro turns, the micro calls, and the tokens and cost per model; a game stopped at its
+cap reads `stopped at its cost cap`. Its trajectory is wc3agent's call log, with each decision and its cost. Its
+report, wc3agent's own `report.html` (each macro turn's observation, reply, orders and their outcomes, with the micro
+decisions under it), and its session folder (calls, actions, outcomes, transcript, summary), zipped, go to the env,
+which keeps them with the match's files (`agent_files`).
 
 ### wc3-scripted
 
@@ -551,8 +559,15 @@ overrides (`{"game_settings": {"seed": 7}}`).
 | `mode` | `stepping` (time passes as the agents step) or `realtime` (the game's own clock) | `stepping` |
 | `lockstep` | `{"stall_seconds": n}`: how long a silent agent holds up the start or a lockstep turn, once | `600` |
 | `step_ms` | Game milliseconds one step of wc3env's engine plays, 25 to 60000 | `1000` |
-| `client_view` | Draws the game: its picture live and in the recording (stepping runs about 3× slower) | `false` |
+| `client_view` | Draws the game: its picture live and in the recording; its clock then runs at the game's own speed | `false` |
 | `allow_debug` | Lets an agent's `urn:rts:debug/v1` stage the game (keep it off for evaluations) | `false` |
+| `finish` | `{metric, op, value, after_seconds}`: the match ends once the first agent's metric holds (without `op`, once it is truthy), `after_seconds` later, as wc3agent ends a scenario; every agent's result is then `finished`, a draw. The drills set it | none |
+| `decide_ratio` | A staged fight ends once one side's army (the stage's handles `army` and `enemy`) is down to this share of the other's strength: that side lost, the other won. The mirror duels set 0.4 | none |
+
+**The clock:** a stepped game without `client_view` runs its clock at 2048× with a 1 ms wait floor, as wc3env's own
+pools do. A tick is the same tick at any speed; only the wall time between ticks shrinks, so `smoke` takes 11 s instead
+of 38. Realtime and `client_view` keep the game's own speed. The env owns the clock: an agent's `speed` op (wc3agent
+sends one) is accepted and ignored.
 
 ### Player slots: `add_player_slot`
 
@@ -563,8 +578,9 @@ in the lobby's `fill` request) are:
 - `faction`: `human`, `orc`, `undead`, `night_elf` or `random` (default `random`);
 - `team`: 1 to 12 (default: its own);
 - `label`: its name for spectators and the broadcast;
-- agents only: `ai_assist`, so the game's AI also plays the agent's side; and `omniscient`, so its `urn:rts` session
-  observes every player (for scripted opponents);
+- agents only: `ai_assist`, so the game's AI also plays the agent's side; `autocast`, so its units cast their spells
+  on their own, as the game has a computer player's do (wc3env's `computer_agents`; the mirror duels set it for both
+  sides); and `omniscient`, so its `urn:rts` session observes every player (for scripted opponents);
 - the AI only: `ai_level`, `easy`, `normal` or `insane` (default `normal`).
 
 A match takes no more players than its map's start locations, and at least one agent. Every AI player slot shares
@@ -573,12 +589,20 @@ one level, because the game has one AI level.
 ### Stage ops: `urn:wc3:stage/v1`
 
 Harness time, not the agents': `apply_server_config` sends the ops in order, after `close_lobby` and before play.
-- **The ops:** `spawn`, `level`, `give`, `item`, `hp`, `mana`, `kill`, `remove`, `resources`, `ai` (`paused`),
-  `research`, `invulnerable`, `alliance` and `destructable`.
+- **The hook's ops:** `spawn`, `level`, `give`, `item`, `hp`, `mana`, `kill`, `remove`, `resources`, `ai`
+  (`paused`), `research` (`type`, `level`), `invulnerable`, `alliance` and `destructable`.
+- **The env's own:**
+  - `formation`: `army` `[[type, n, row, level?], ...]` in rows `row` deep behind a front line `gap` (750) from the
+    middle of the starts, toward the player's own, spread `spacing` (100) apart, each unit nudged up to `jitter`
+    (40) by `seed` (the match's by default). Two formations with one seed are mirror images: wc3agent's duel layout.
+  - `learn`: a handle's heroes spend every skill point, the same way for every player (the deepest skill open now, a
+    tie to the first the hero lists).
+  - `autocast`: every autocast ability of a handle's units on.
+  - `clear`: remove every creep any player can see.
 - **`player`:** an agent's name, `opponent` (the first player not on the first agent's team), or a player number; the
   first agent by default.
-- **Places**, measured from the first agent's start: `home`, `enemy_home`, `nearest_camp`, `camp:<n>`,
-  `building:<name>` and `toward:<place>:<distance>`, each with optional `dx` and `dy`.
+- **Places**, measured from the first agent's start: `home`, `enemy_home`, `middle` (between the two),
+  `nearest_camp`, `camp:<n>`, `building:<name>` and `toward:<place>:<distance>`, each with optional `dx` and `dy`.
 - **Handles** (`as`) name the units an op makes, for later ops (`unit`). `army` and `hero` (a player's own) and
   `enemy` (its opponents') also feed `army_kept_percent` and `enemy_army_destroyed_percent`.
 - **`warmup_seconds`** (up to 600) lets the game run before the ops.
@@ -587,7 +611,8 @@ Harness time, not the agents': `apply_server_config` sends the ops in order, aft
 
 - **`rubric`:** `outcome` (the default), `dense`, `checks` or `smoke`.
 - **`weights`:** reweigh any criterion; 0 drops it, and weighing another rubric's criterion adds it. The criteria are
-  `outcome` (a win 1, a draw 0.5, a loss 0; a game nobody has won by the time limit is a draw); `outscore`,
+  `outcome` (a win 1, a draw 0.5, a loss 0; a game nobody has won by the time limit, or one its `finish` ended, is a
+  draw, and a fight `decide_ratio` decided is a win and a loss); `outscore`,
   `army_ratio`, `kills_ratio`, `buildings_destroyed`, `tier`, `expansions` and `hero_level` (which `dense` adds);
   `ran_to_limit` and `played_out` (`smoke`). Under `outcome`, rows for the score, army and kills report them with no
   weight. A rubric with `outcome` raises on a match that has none (cancelled, failed, or its engine down), failing
@@ -617,7 +642,8 @@ artifact, listed in the run's `metadata["match_files"][<step id>]`.
 
 | Kind | What | Default |
 |---|---|---|
-| `replay` | The game's native replay (`.w3g`), once the game has reached its end | yes |
+| `replay` | The game's native replay (`.w3g`), once the game has reached its end, and beside it the startup options wc3env wrote for playing it back (`.w3g.json`: the match setup, AI level and AI slots) | yes |
+| `agent_files` | The files each player left with the match through `urn:rts:file/v1`: `wc3-macro-micro` leaves wc3agent's `report.html` and its session, zipped | yes |
 | `map_video` | An MP4 of the map, a frame per step | yes |
 | `html_replay` | The spectator page with the whole game embedded, which plays in any browser | yes |
 | `timeline` | The timeline as JSON: every frame's units, events and notes | yes |
@@ -685,7 +711,7 @@ and orders only its own side; an `omniscient` slot's session observes every play
 
 | Module | What it gives a game |
 |---|---|
-| `session.py` | The `urn:rts:*` session contract: the observe, step, debug and note extensions an env serves. `RemoteSession`, a stdlib-only gym-style client, lets an existing RTS agent play an AgentEnv env unchanged |
+| `session.py` | The `urn:rts:*` session contract: the observe, step, debug, note and file extensions an env serves (`file`: a player leaves a file, such as its agent's report, with the match). `RemoteSession`, a stdlib-only gym-style client, lets an existing RTS agent play an AgentEnv env unchanged |
 | `lockstep.py` | `Lockstep`, one game clock for several players that moves when every one has stepped (each plays at its own address, through agentenv-game-env's routing) |
 | `timeline.py` | The spectator schema: the map once (bounds, terrain grid, trees, points of interest, players) and a compact frame per step (units, resources, events) |
 | `live.py`, `viewer/` | The live view at `/live` and `/live/data.json?since=T`, with the game alone (`?view`, a spectator view), the sidebar alone (`?panel`) and a self-contained HTML replay |
@@ -716,6 +742,13 @@ extensions and `/live`, gives agentenv-game-env its spectator card and match fil
   provider sets neither, and the real game has run without them so far.
 - **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
 - **Upstream seams in wc3agent:** an injectable session and micro transport, so the agent needs no patching.
+- **Parity with wc3env and wc3agent:** what's still missing.
+  - Replay playback: the `.w3g` and its startup options are kept, but playing one back to re-observe it isn't wired.
+  - wc3env's binary observations, its `StepPool` and vector rollouts (many games per host, for RL), and its Modal VM
+    and GCP runners.
+  - The mirror duels run on Echo Isles, with the creeps in sight cleared, not on wc3agent's flat arena map. Their
+    heroes learn by one rule for every hero, not by wc3agent's per-hero builds.
+  - A human player slot; wc3agent's commander feedback and its decision-panel replay.
 - **Battle.net on the Linux host.** Its installer and launcher run under Wine in a container, but on a host with no
   GPU the login page's embedded browser doesn't draw (its renderer restarts in a loop, with Mesa's software Vulkan
   and DXVK too), so the game's download still needs Windows. The rest of the setup runs on Linux.

@@ -9,6 +9,7 @@ import json
 import math
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -951,3 +952,10 @@ async def test_a_drill_ends_once_its_finish_condition_holds_and_its_after_second
         check_scenario({**env.scenario, "finish": {"metric": "fun"}})
     with pytest.raises(ValueError, match="decide_ratio"):
         check_scenario({**env.scenario, "decide_ratio": 1.5})
+
+
+def test_the_env_imports_without_agent_env_as_its_image_has_only_the_protocol():
+    script = ("import sys; sys.modules['agent_env'] = None; import agentenv_wc3.server, agentenv_wc3.worker, "
+              "agentenv_rts.checks")
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr[-2000:]

@@ -58,9 +58,11 @@ The env's `MatchSettings` model checks them and publishes them as a JSON Schema 
 | `mode` | `stepping`, `realtime` | `stepping` | |
 | `step_ms` | 25-60000 | `1000` | game time per program step |
 | `time_limit_seconds` | 60-14400 | `1200` | |
-| `client_view` | bool | `false` | the game draws itself for spectators; stepping about 3x slower |
+| `client_view` | bool | `false` | the game draws itself for spectators; its clock then runs at the game's own speed (a stepped game without it runs at 2048x) |
 | `lockstep` | `{stall_seconds}` | `{600}` | how long the match waits for a silent agent at its start, and, stepping with several agents, at each turn before it steps that agent with no orders, flagged |
 | `allow_debug` | bool | `false` | lets an agent's own session stage the game (research only; staging steps don't need it) |
+| `finish` | `{metric, op, value, after_seconds}` or `null` | `null` | the match ends once the first agent's metric holds, as wc3agent ends a scenario; every agent `finished`, a draw |
+| `decide_ratio` | 0-1 or `null` | `null` | a staged fight ends once one army (handles `army`, `enemy`) is down to this share of the other's strength: a win and a loss |
 
 ## Who plays: the lobby's player slots
 
@@ -130,11 +132,13 @@ the hook's staging ops in order, with two things the raw ops lack: **named place
 ```
 
 - **Ops:** the hook's own: `spawn`, `kill`, `remove`, `level`, `research`, `give`, `hp`, `mana`, `item`, `resources`,
-  `ai`, `invulnerable`, `alliance`, `destructable`.
+  `ai`, `invulnerable`, `alliance`, `destructable`; and the env's, for wc3agent's duels: `formation` (an army in rows
+  facing the other start, mirrored for either player by one seed), `learn` (heroes spend their skill points by one
+  rule for every player), `autocast` (every autocast ability on) and `clear` (the creeps any player sees removed).
 - **Players** are named by agent, by player number, or by position (`opponent` is the other side in a two-player
   game).
 - **Places** are named the way wc3agent names them, relative to the player's start, so a drill works from either start
-  location: `home`, `enemy_home`, `nearest_camp`, `camp:<n>`, `building:<name>`, `toward:<place>:<distance>`, plus
+  location: `home`, `enemy_home`, `middle`, `nearest_camp`, `camp:<n>`, `building:<name>`, `toward:<place>:<distance>`, plus
   `dx`/`dy`. The env resolves them from the map's prepared data.
 - **Handles:** `"as": "army"` names the units an op made; later ops take them (`"unit": "hero"`), and the summary
   reports metrics on them (the army kept, the enemy destroyed).
@@ -365,7 +369,8 @@ one-agent game's verification keeps its name (`<verifier_id>`); several agents' 
 | 5 | Players as the lobby's slots: `AgentEnvGameEnv` and `urn:game:lobby/v1` from agentenv-game-env, `add_player_slot`; `rts_seat_agents` and the shorthand removed | done |
 | 6 | agentenv-game-env 0.3.0: player slots by `player_id`, settings as models, each player slot's env card; the match (`urn:game:match/v1`: its start gate, `finish_match`, each player's outcome and scores) in place of `rts_finish` and the hold, finish and idle extensions; `rts_broadcast` live before the prompts, with `save_rts_broadcast` | done |
 | 7 | agentenv-game-env 0.4.0: the spectator view (`/live?view`) and the match's files (`@match_files`) in place of `urn:rts:recording/v1` and `urn:wc3:replay/v1`; `start_broadcast`, `save_broadcast` and `save_match_files` in place of the plugin's streamer, casters and steps | done |
-| 8 | Grading on outcomes: the `outcome` rubric in place of `melee`, void matches, the ladder over the AI's levels in sweeps; drills by skill, played by `wc3-llm`, in sweeps | done; not yet run on the real game |
+| 8 | Grading on outcomes: the `outcome` rubric in place of `melee`, void matches, the ladder over the AI's levels in sweeps; drills by skill, played by `wc3-llm`, in sweeps | done; run on the real game |
+| 9 | Parity with wc3env's runtime and wc3agent: wc3agent priced by LiteLLM, its prompt cache and cost cap, its report and session kept (`urn:rts:file/v1`, `agent_files`); the replay's startup options; the clock at 2048x; `autocast`; heroes' items in `get_state`; wc3agent's strength; drills that end where its scenarios end (`finish`); its mirror duels (`mirror-*`, `formation`, `learn`, `autocast`, `clear`, `decide_ratio`) | done; run on the real game |
 
 ## Decisions taken
 
