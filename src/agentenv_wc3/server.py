@@ -104,7 +104,7 @@ from agentenv_rts.lockstep import Lockstep
 from agentenv_rts.session import DEBUG, FILE, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
 
-from . import frames, metrics, render
+from . import frames, metrics, refusals, render
 from .bridge import DEAD, Bridge, WorkerError
 
 log = logging.getLogger(__name__)
@@ -898,9 +898,9 @@ class WC3Env(AgentEnvGameEnv):
                 await self.bridge.call("validate", slot=slot, actions=extra)
             batch, dropped = await self._still_valid(slot, self.queue.get(slot, []) + extra)
             self.queue[slot] = []
-            return slot, batch, dropped, self._seconds()
+            return slot, batch, dropped, self._seconds(), self._me(slot)
 
-        slot, batch, dropped, start = await self._run(before)
+        slot, batch, dropped, start, sent_at = await self._run(before)
         try:
             info = await self._play(slot, batch, seconds * 1000)
         except WorkerError as e:
@@ -915,10 +915,14 @@ class WC3Env(AgentEnvGameEnv):
                              "applied:")
                 lines += [f"  {self._describe(a)}: {why}" for a, why in dropped]
             if batch:
+                race = next(x["race"] for x in self.players if x["slot"] == slot)
+                unstarted = refusals.unstarted(sent_at, me, batch, {r.get("index") for r in rejected}, self.ref, race)
+                refused = len(rejected) + len(unstarted)
                 lines.append(f"Sent {len(batch)} order{'s' if len(batch) != 1 else ''}"
-                             + (f"; the game refused {len(rejected)}:" if rejected else "."))
+                             + (f"; the game refused {refused}:" if refused else "."))
                 lines += [f"  #{r['index'] + 1} {self._describe(batch[r['index']])}: {r['reason']}"
                           for r in rejected if 0 <= r.get("index", -1) < len(batch)]
+                lines += [f"  #{i + 1} {self._describe(batch[i])}: {why}" for i, why in unstarted.items()]
             for p in info["placements"]:
                 if 0 <= p.get("index", -1) < len(batch):
                     lines.append(f"  site for #{p['index'] + 1} {self._describe(batch[p['index']])}: "

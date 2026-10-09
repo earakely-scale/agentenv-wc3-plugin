@@ -5,7 +5,7 @@ import pytest
 from agentenv_game import GameError, LobbyStatus
 from conftest import new_game
 
-from agentenv_wc3 import render
+from agentenv_wc3 import refusals, render
 
 pytestmark = pytest.mark.anyio
 
@@ -211,3 +211,35 @@ def test_get_state_shows_a_heros_skills_and_the_points_it_has_to_spend():
     assert "skills Blizzard (AHbz) 1 · 2 skill points to spend: learn AHbz or AHab or AHwe" in text
     spent = {**hero, "abilities": [{"ability_id": "AHbz", "level": 2}, {"ability_id": "AHab", "level": 1}]}
     assert render.skills_text(spent, ref) == "skills Blizzard (AHbz) 2, Brilliance Aura (AHab) 1"
+
+
+def test_an_order_the_game_dropped_says_what_it_lacked_and_one_it_took_says_nothing():
+    ref = render.Reference.load()
+
+    def obs(gold, lumber, used, cap, *units):
+        return {"player": {"gold": gold, "lumber": lumber, "food_used": used, "food_cap": cap},
+                "units": [{"unit_id": 1000, "type_id": "htow", "structure": True},
+                          {"unit_id": 78, "type_id": "halt", "structure": True}, *units]}
+
+    def train(unit_id, type_id):
+        return {"unit_id": unit_id, "command": "train", "arguments": {"type_id": type_id}}
+
+    peasants = [train(1000, "hpea")] * 7
+    assert refusals.unstarted(obs(500, 0, 5, 12), obs(500, 0, 5, 12), peasants, set(), ref, "human") == {
+        6: "didn't start: not enough gold (needs 75, you had 50)"}
+    assert refusals.unstarted(obs(500, 0, 5, 12), obs(500, 0, 5, 12), peasants, {0}, ref, "human") == {}
+    capped = obs(1245, 300, 18, 18)
+    assert refusals.unstarted(capped, capped, [train(78, "Hamg")], set(), ref, "human") == {
+        0: "didn't start: not enough food (needs 5, 0 of 18 free: build another Farm)"}
+    queued = {**capped, "units": [capped["units"][0], {"unit_id": 78, "type_id": "halt", "structure": True,
+                                                       "queue": ["Hamg"]}]}
+    assert refusals.unstarted(capped, queued, [train(78, "Hamg")], set(), ref, "human") == {}
+    archmage = {"unit_id": 5, "type_id": "Hamg", "hero": True}
+    second = refusals.unstarted(obs(900, 300, 10, 30, archmage), obs(900, 300, 10, 30, archmage),
+                                [train(78, "Hmkg")], set(), ref, "human")
+    assert second == {0: "didn't start: a second hero requires Keep"}
+    castle = obs(900, 300, 10, 30, archmage, {"unit_id": 6, "type_id": "hcas", "structure": True})
+    assert refusals.unstarted(castle, castle, [train(78, "Hmkg")], set(), ref, "human") == {}
+    knights = refusals.unstarted(obs(900, 300, 10, 30), obs(900, 300, 10, 30), [train(1000, "hkni")], set(), ref,
+                                 "human")
+    assert knights == {0: "didn't start: requires Lumber Mill, Castle, Blacksmith"}
