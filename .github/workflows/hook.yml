@@ -1,0 +1,48 @@
+name: Hook
+# Builds wc3env's hook, wc3hook.dll, at the commit the plugin pins and with the plugin's patches, on GitHub's Windows
+# runner with MSVC as wc3env's own CI does, and publishes it as a release, so setting up the real game needs no
+# Windows machine. One release per wc3env commit and patch set: MSVC output isn't byte-reproducible, so a published
+# build is never replaced, and setup pins its SHA-256.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [patches/**, .github/workflows/hook.yml, src/agentenv_wc3/cli.py]
+permissions:
+  contents: write
+jobs:
+  hook:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - name: wc3env at the pinned commit, with the plugin's patches
+        run: |
+          commit=$(sed -n 's/^WC3ENV_COMMIT = "\([0-9a-f]\{40\}\)".*/\1/p' src/agentenv_wc3/cli.py)
+          git clone -q https://github.com/pwang724/wc3env wc3env
+          git -C wc3env checkout -q "$commit"
+          for p in patches/*.patch; do git -C wc3env apply "../$p"; done
+          sed -i 's/$/\r/' wc3env/wc3hook/build.bat
+          patches=$(cat patches/*.patch | sha256sum | cut -c1-12)
+          echo "TAG=wc3hook-${commit:0:7}-$patches" >> "$GITHUB_ENV"
+          echo "COMMIT=$commit" >> "$GITHUB_ENV"
+      - name: Build and test the hook (MSVC, x86)
+        shell: cmd
+        run: wc3env\wc3hook\build.bat
+      - name: The release's files
+        run: |
+          mkdir dist
+          cp wc3env/src/wc3env/native/wc3hook.dll dist/
+          cp wc3env/LICENSE dist/LICENSE-wc3env
+          cp wc3env/wc3hook/minhook/LICENSE.txt dist/LICENSE-MinHook.txt
+          cp wc3env/wc3hook/yyjson/LICENSE dist/LICENSE-yyjson
+          (cd dist && sha256sum wc3hook.dll > SHA256SUMS && cat SHA256SUMS)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then echo "$TAG is published already"; exit 0; fi
+          gh release create "$TAG" dist/* --title "$TAG" --notes "wc3env's hook, \`wc3hook.dll\` (32-bit), built by MSVC on GitHub's Windows runner from [pwang724/wc3env@${COMMIT:0:7}](https://github.com/pwang724/wc3env/tree/$COMMIT) with this repository's \`patches/\`, at ${GITHUB_SHA:0:7}. It contains no game files. Licences: wc3env (MIT), MinHook (BSD 2-clause) and yyjson (MIT), included. \`SHA256SUMS\` has its hash."
