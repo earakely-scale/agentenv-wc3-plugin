@@ -164,7 +164,8 @@
     "timeout_seconds": 3240,
     "depends_on": [
       "stage"
-    ]
+    ],
+    "fail_task_on_error": false
   },
   {
     "id": "finish",

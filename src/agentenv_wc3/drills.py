@@ -159,7 +159,7 @@ def convert(name: str, definition: dict) -> list[dict]:
     if scripted:
         steps.append({"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
                       "prompt_id": f"{task}-opponent", "prompt": "Play with the script.",
-                      "timeout_seconds": timeout, "depends_on": [start]})
+                      "timeout_seconds": timeout, "depends_on": [start], "fail_task_on_error": False})
     return [*steps,
             {"id": "finish", "type": "finish_match", "env_id": "wc3",
              "depends_on": ["play", "play-opponent"] if scripted else ["play"]},

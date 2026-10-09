@@ -115,9 +115,10 @@ class Session:
 @pytest.mark.parametrize("mode", ["stepping", "realtime"])
 async def test_it_plays_its_player_slot_to_the_end(monkeypatch, mode):
     agent = scripted()
-    sessions, sleeps = [], []
+    sessions, sleeps, timeouts = [], [], []
 
-    def connect(root, headers=None):
+    def connect(root, timeout, headers=None):
+        timeouts.append(timeout)
         sessions.append(Session(root, mode=mode))
         return sessions[-1]
 
@@ -129,6 +130,7 @@ async def test_it_plays_its_player_slot_to_the_end(monkeypatch, mode):
     result = await agent.WC3Scripted().run(request)
     [session] = sessions
     assert result.outcome is TaskOutcome.SUCCEEDED and session.root == "http://env:18765/players/1"
+    assert timeouts == [agent.STEP_WAIT_SECONDS] and agent.STEP_WAIT_SECONDS > 600
     assert len(session.steps) == 12 and {ms for _, ms in session.steps} == {1000}
     assert all(set(actions) == {1} for actions, _ in session.steps)
     assert [i for i, (actions, _) in enumerate(session.steps) if actions[1]] == [0, 5, 10]

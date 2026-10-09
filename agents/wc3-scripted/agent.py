@@ -23,6 +23,7 @@ SCRIPTS = ("attack", "raid", "idle")
 WORKERS = {"hpea", "opeo", "uaco", "ewsp"}
 MAX_ORDERS = 64
 STEP_MS = 1000
+STEP_WAIT_SECONDS = 900   # longer than lockstep's stall_seconds (600): a step waits for the slowest player's move
 
 
 def army(units: list[dict]) -> list[dict]:
@@ -109,7 +110,8 @@ class WC3Scripted(AgentEnvAgent):
         except ValueError as e:
             return TaskResult.failure("bad_script", str(e))
         server = next(iter(request.mcp_servers.values()))
-        remote = RemoteSession(server["url"].rstrip("/").removesuffix("/mcp"), headers=server.get("headers"))
+        remote = RemoteSession(server["url"].rstrip("/").removesuffix("/mcp"), timeout=STEP_WAIT_SECONDS,
+                               headers=server.get("headers"))
         try:
             state = await asyncio.to_thread(play, remote, script)
         except SessionError as e:

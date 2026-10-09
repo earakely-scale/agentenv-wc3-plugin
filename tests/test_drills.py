@@ -68,7 +68,7 @@ def test_fight_even_is_the_design_docs_drill():
          "depends_on": ["stage"], "fail_task_on_error": False},
         {"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
          "prompt_id": "drill-fight-even-opponent", "prompt": "Play with the script.", "timeout_seconds": 1800,
-         "depends_on": ["stage"]},
+         "depends_on": ["stage"], "fail_task_on_error": False},
         {"id": "finish", "type": "finish_match", "env_id": "wc3", "depends_on": ["play", "play-opponent"]},
         {"id": "grade", "type": "rts_grade", "env_id": "wc3", "player_names": ["wc3"], "rubric": "checks", "checks": [
             {"metric": "enemy_army_destroyed_percent", "op": ">=", "value": 100},
