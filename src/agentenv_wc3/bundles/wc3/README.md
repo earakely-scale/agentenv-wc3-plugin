@@ -55,7 +55,7 @@ the tools (as the full games' prompt has it, for the drill's race).
 
 Each drill tests one of seven skills, and the bundle has an eval per skill (`evals/drills-<skill>.toml`):
 `agent-env run wc3 --eval drills-combat` plays that skill's drills. The evals share no drill, so `agent-env run wc3`
-with neither a task nor an eval plays every drill once. To compare models on them, sweep them
+with neither a task nor an eval plays every drill once (and the `duels` eval's four duels). To compare models on them, sweep them
 (`sweeps/drills.toml` in the repo).
 
 | Skill | Drills |

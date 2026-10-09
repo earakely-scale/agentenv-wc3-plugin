@@ -11,8 +11,8 @@ broadcast, recorded with [agentenv-game-env](https://github.com/earakely-scale/a
 `start_broadcast`; the whole broadcast, with its overlay, is at the top of that README.*
 
 AI agents play Warcraft III: The Frozen Throne through [wc3env](https://github.com/pwang724/wc3env).
-- **Who they play:** the game's own AI, each other (model against model), as a team, in a free-for-all, or in short
-  drills.
+- **Who they play:** the game's own AI, each other (model against model), as a team, in a free-for-all, in short
+  drills, or in wc3agent's mirror duels (two identical armies, against Warcraft's own way of fighting).
 - **Who can play:**
   - any chat model, through MCP tools (`wc3-llm`);
   - wc3env's own two-model agent, `wc3agent`, in which a macro model plans and a fast micro model controls each unit
@@ -22,7 +22,7 @@ AI agents play Warcraft III: The Frozen Throne through [wc3env](https://github.c
   what is staged first and how it is graded, all without code.
 - **How it's graded:** on the outcome: a win 1, a draw 0.5, a loss 0, where a game nobody has won by its time limit is
   a draw. A sweep plays each model against the game's AI at its three levels and reports the highest level it beats;
-  each drill tests one skill.
+  each drill tests one skill, and each duel a model's control of an army.
 
 Every game is graded, saved as a native `.w3g` replay and recorded. You can watch it live in the game's own picture,
 with the agents' plans beside it, and broadcast it to Twitch or X, or only record the broadcast.
@@ -89,7 +89,8 @@ agent-env wc3 watch --open                   # while a game runs: its live view
 agent-env wc3 recordings --out match         # afterwards: the run's match files and broadcast, in ./match
 ```
 
-Name a task or an eval: with neither, `agent-env run wc3` runs every eval in the bundle, which is every drill once.
+Name a task or an eval: with neither, `agent-env run wc3` runs every eval in the bundle, which is every drill and
+every mirror duel once.
 
 ## Play the real game (x86-64 Linux)
 
@@ -204,6 +205,7 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
 | `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime, with the game's picture | 11 min, ~$11 |
 | `duel-quick` | two wc3agents, Haiku 4.5 for both models, Human against Orc | 5 minutes, stepped in lockstep, graded per player (`dense`) | 19 min, $4.70 |
+| `mirror-*` (4 races) | `wc3-llm` with Haiku 4.5 against `wc3-scripted` (Warcraft's way of fighting); `-baseline`: scripted on both sides | wc3agent's mirror duels: two identical 60-food armies of one race, decided once one is down to 40% of the other's strength, a draw at 150 s | Orc with Haiku: 3.5 min, $0.23, lost at 70 s (kept 18% of its army, destroyed 22% of the other); the Orc baseline: 15 s, $0 |
 | `drill-*` (25) | `wc3-llm` with Haiku 4.5, against the AI or the scripted `wc3-scripted` | wc3agent's 25 scenarios as drills, one skill each: 1.5 to 10 minutes, graded on the share of their checks met | played by wc3agent before the drills moved to `wc3-llm`: `drill-fight-even` 11 min, $2.30, 0.6; `drill-creep-easy` 10 min, $1.90, 0.67 |
 
 `agent-env run wc3 --task <task>` runs one, and `--model <model>` plays it on another model without editing it (for
@@ -216,7 +218,7 @@ costs about $1.20 (there is nothing to fight, so the micro model is never asked)
 - **Drills:** all but `drill-full-game-easy` stage their start (`urn:wc3:stage/v1`), and each is graded by its checks.
   Each tests one of seven skills: economy, map control, defence, combat, creeping, hero and items, and a full game.
   The bundle has an eval per skill (`agent-env run wc3 --eval drills-combat`), and `agent-env run wc3` with neither a
-  task nor an eval plays every drill once. The bundle's [README](src/agentenv_wc3/bundles/wc3/README.md) lists the 25
+  task nor an eval plays every drill and mirror duel once. The bundle's [README](src/agentenv_wc3/bundles/wc3/README.md) lists the 25
   drills; [docs/task-design.md](docs/task-design.md) is the design.
 - **What every task saves** (`save_match_files`): the `.w3g` replay, an MP4 of the map, a self-contained HTML replay
   and the timeline as JSON, to recut or analyse a game without playing it again. `macro-micro-realtime` keeps the
