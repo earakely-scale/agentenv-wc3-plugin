@@ -4,7 +4,7 @@ A sweep spec (TOML) names a template task (a bundled one, such as vs-ai-quick, o
 (models, maps, races, opponents, seeds) and a per-game cost cap. `generate` writes one task per combination into a
 bundle folder, with an eval over them and a manifest of each task's axes. `run` plays the eval under a spend budget,
 one `agent-env run` per game: it never starts a game that could take the spend past the budget at the per-game cap.
-`report` tabulates the results by model, map and seed.
+`report` tabulates the outcomes by model, AI level, map and seed: the ladder is the highest AI level a model beats.
 """
 
 from __future__ import annotations
@@ -29,10 +29,12 @@ RACES = {"human": "Human", "orc": "Orc", "undead": "Undead", "night_elf": "Night
 WORKER = {"human": "Peasant", "orc": "Peon", "undead": "Acolyte", "night_elf": "Wisp"}
 SUPPLY = {"human": "Farm", "orc": "Orc Burrow", "undead": "Ziggurat", "night_elf": "Moon Well"}
 DIFFICULTIES = ("easy", "normal", "insane")
+OUTCOMES = {"victory": "win", "draw": "draw", "time_limit": "draw", "defeat": "loss"}
+BEATEN = 0.75   # a level is beaten when at least three in four of its games are won
 PROMPT = (
     "You play Warcraft III: The Frozen Throne as {race} on {map}, a {players}-player map, against the game's own "
-    "{difficulty} AI ({opponent}). You win by destroying every enemy building; the game ends undecided after "
-    "{minutes} minutes of game time, and is then judged on the game's score. You act only through the wc3 tools; "
+    "{difficulty} AI ({opponent}). You win by destroying every enemy building; the game ends after {minutes} "
+    "minutes of game time, and a game nobody has won by then is a draw. You act only through the wc3 tools; "
     "nobody will answer questions, so never ask or wait for confirmation.\n\n"
     "Game time is frozen until you call advance, so think as long as you like. The loop: get_state shows your "
     "resources, units, structures, idle workers and what happened; act queues orders for your units by id; advance "
@@ -157,7 +159,7 @@ def generate(spec: Spec, out: Path) -> list[str]:
     (out / "evals").mkdir(exist_ok=True)
     agent = next(s for s in template if s["id"] == spec.player_step).get("agent_name")
     manifest = {"name": spec.name, "template": spec.template, "max_cost_usd": spec.max_cost_usd, "agent": agent,
-                "tasks": {}}
+                "player_step": spec.player_step, "tasks": {}}
     for c in spec.combinations():
         name = task_name(spec, c)
         (out / "tasks" / f"{name}.json").write_text(json.dumps(task_of(spec, template, c, name), indent=2) + "\n")
@@ -178,21 +180,30 @@ def metadata(instance: str) -> dict:
         return ((get_task_instance_store().get(instance).context or {}).get("metadata")) or {}
 
 
-def outcome(task: str, axes: dict, agent: str | None, instance: str | None, wall: float | None, code: int) -> dict:
-    """One game's row: its grade, result, scores and the spend of `agent`'s player slot (the one agent of a match
-    without player slots), from the run's stored instance. The cost is None when the run recorded none."""
+def outcome(task: str, axes: dict, agent: str | None, instance: str | None, wall: float | None, code: int,
+            player_step: str = "play") -> dict:
+    """One game's row: its grade and outcome, scores and the spend of `agent`'s player slot (the one agent of a match
+    without player slots), from the run's stored instance. A game with no grade is void, with the reason; an agent
+    whose play step failed had its game played out, and the row keeps its error. The cost is None when the run
+    recorded none."""
     row = {"task": task, **axes, "instance": instance, "wall_seconds": wall, "exit": code}
     if instance is None:
-        return {**row, "grade": 0.0, "cost_usd": None}
+        return {**row, "grade": None, "outcome": None, "void": "no instance recorded", "cost_usd": None}
     found = metadata(instance)
-    grade = next(iter((found.get("verifications") or {}).values()), {}).get("score", 0.0)
+    verification = next(iter((found.get("verifications") or {}).values()), None)
+    failed = found.get("failed_steps") or []
+    void = None if verification else next((f["error"] for f in failed if f.get("is_fatal", True)), "not graded")
+    agent_error = next((f["error"] for f in failed if f["step_id"] == player_step and not f.get("is_fatal", True)),
+                       None)
     summary = next(iter((found.get("rts_summary") or {}).values()), {})
     players = summary.get("player_slots") or []
     me = next((x for x in players if agent and x.get("player_name") == agent), None) or next(
         (x for x in players if x.get("player_kind") == "agent"), {})
     them = next((x for x in players if x.get("team") != me.get("team")), {})
     mine, theirs, spend = me.get("metrics") or {}, them.get("metrics") or {}, me.get("spend") or {}
-    return {**row, "grade": round(grade, 4), "result": me.get("result"), "score": mine.get("total"),
+    return {**row, "grade": None if void else round(verification["score"], 4), "result": me.get("result"),
+            "outcome": None if void else OUTCOMES.get(me.get("result")), "void": void, "agent_error": agent_error,
+            "score": mine.get("total"),
             "opponent_score": theirs.get("total"), "units_killed": mine.get("units_killed"),
             "orders": me.get("orders_sent"), "decisions": spend.get("decisions"),
             "cost_usd": spend.get("cost_usd"), "game_seconds": summary.get("game_time_seconds"),
@@ -231,24 +242,47 @@ def run(out: Path, budget: float, parallel: int = 2, agent_env: str = "agent-env
             del running[task]
             found = INSTANCE.findall((logs / f"{task}.log").read_text(errors="replace"))
             wall, instance = (float(found[-1][0]), found[-1][1]) if found else (None, None)
-            row = outcome(task, manifest["tasks"][task], manifest.get("agent"), instance, wall, proc.returncode)
+            row = outcome(task, manifest["tasks"][task], manifest.get("agent"), instance, wall, proc.returncode,
+                          manifest.get("player_step", "play"))
             rows.append(row)
             spent += cost(row, cap)
             with (out / "results.jsonl").open("a") as f:
                 f.write(json.dumps(row) + "\n")
             paid = (f"${row['cost_usd']:.3f}" if row["cost_usd"] is not None else
                     f"no spend recorded, counted as its cap ${cap:.2f}")
-            echo(f"done  {task}: grade {row['grade']}, {row.get('result')}, {paid} (spent ${spent:.2f})")
+            result = f"void ({row['void']})" if row.get("void") else f"{row['outcome']}, grade {row['grade']}"
+            echo(f"done  {task}: {result}, {paid} (spent ${spent:.2f})")
     return rows
 
 
+def won_drawn_lost(games: list[dict], sep: str = "-") -> str:
+    """Games as won-drawn-lost, void games left out."""
+    if not games:
+        return "–"
+    played = [g for g in games if not g.get("void")]
+    return sep.join(str(sum(g.get("outcome") == o for g in played)) for o in ("win", "draw", "loss"))
+
+
+def beaten(games_by_level: dict[str, list[dict]]) -> str:
+    """The highest AI level a model beat, at least three in four of its games there won."""
+    best = None
+    for level in DIFFICULTIES:
+        played = [g for g in games_by_level.get(level, []) if not g.get("void")]
+        won = sum(g.get("outcome") == "win" for g in played)
+        if played and won >= BEATEN * len(played):
+            best = f"{level} ({won} of {len(played)} won)"
+    return best or "none"
+
+
 def report(out: Path) -> str:
-    """The sweep's results as Markdown: by model, by model and map, and each model's spread across seeds."""
+    """The sweep's outcomes as Markdown: by model (ranked on points, a win 1 and a draw 0.5, then on score share), by
+    model and AI level with the highest level beaten, by model and map, and the games that were void."""
     rows = results(out)
     if not rows:
         return "No results yet."
     models = list(dict.fromkeys(r["model"] for r in rows))
     maps = list(dict.fromkeys(r["map"] for r in rows))
+    levels = [d for d in DIFFICULTIES if any(r["opponent"]["computer"] == d for r in rows)]
 
     def mean(xs):
         xs = [x for x in xs if x is not None]
@@ -258,38 +292,49 @@ def report(out: Path) -> str:
         xs = [x for x in xs if x is not None]
         return statistics.stdev(xs) if len(xs) > 1 else 0.0
 
+    def share(games):
+        scored = [g for g in games if g.get("score") is not None and g.get("opponent_score") is not None
+                  and g["score"] + g["opponent_score"]]
+        return mean(g["score"] / (g["score"] + g["opponent_score"]) for g in scored)
+
     manifest = json.loads((out / "sweep.json").read_text())
     cap, unknown = float(manifest["max_cost_usd"]), sum(r.get("cost_usd") is None for r in rows)
     lines = [f"Sweep `{manifest['name']}`: {len(rows)} games, ${sum(cost(r, cap) for r in rows):.2f} of model spend"
              + (f" ({unknown} with no spend recorded, counted at the cap)." if unknown else "."), "",
-             "| Model | Games | Grade (mean ± sd) | Won / limit / lost | Score vs opponent | Score share | Cost a game "
-             f"| At the ${cap:.2f} cap | Turns a game |", "|---|---|---|---|---|---|---|---|---|"]
-    ranked = sorted(models, key=lambda m: -(mean(r["grade"] for r in rows if r["model"] == m) or 0))
+             "| Model | Games | Points (mean ± sd) | Won / drawn / lost | Void | Score share | Score vs opponent "
+             f"| Cost a game | At the ${cap:.2f} cap | Turns a game |", "|---|---|---|---|---|---|---|---|---|---|"]
+    ranked = sorted(models, key=lambda m: (-(mean(r["grade"] for r in rows if r["model"] == m) or 0),
+                                           -(share([r for r in rows if r["model"] == m]) or 0)))
     for m in ranked:
         mine = [r for r in rows if r["model"] == m]
-        grades = [r["grade"] for r in mine]
-        won = sum(r.get("result") == "victory" for r in mine)
-        lost = sum(r.get("result") == "defeat" for r in mine)
+        played = [r for r in mine if not r.get("void")]
+        points = [r["grade"] for r in played]
         scored = [r for r in mine if r.get("score") is not None and r.get("opponent_score") is not None]
         versus = (f"{mean(r['score'] for r in scored) / 1000:.1f}k vs "
                   f"{mean(r['opponent_score'] for r in scored) / 1000:.1f}k") if scored else "–"
-        share = mean(r["score"] / (r["score"] + r["opponent_score"]) for r in scored
-                     if r["score"] + r["opponent_score"])
+        ratio, mean_points = share(mine), "–" if not points else f"{mean(points):.2f} ± {sd(points):.2f}"
         paid, turns = mean(r.get("cost_usd") for r in mine) or 0, mean(r.get("decisions") for r in mine) or 0
         capped = sum((r.get("cost_usd") or 0) >= cap for r in mine)
-        lines.append(f"| {m} | {len(mine)} | {mean(grades):.2f} ± {sd(grades):.2f} | {won} / {len(mine) - won - lost} "
-                     f"/ {lost} | {versus} | {'–' if share is None else f'{share:.0%}'} | ${paid:.3f} | {capped} "
+        lines.append(f"| {m} | {len(mine)} | {mean_points} | {won_drawn_lost(mine, ' / ')} | {len(mine) - len(played)} "
+                     f"| {'–' if ratio is None else f'{ratio:.0%}'} | {versus} | ${paid:.3f} | {capped} "
                      f"| {turns:.0f} |")
-    lines += ["", "Grade by map, one per seed:", "", "| Model | " + " | ".join(short(p) for p in maps)
+    lines += ["", "Won-drawn-lost against each AI level, and the highest level beaten (three in four games won):", "",
+              "| Model | " + " | ".join(levels) + " | Highest level beaten |", "|---|" + "---|" * (len(levels) + 1)]
+    for m in ranked:
+        by_level = {d: [r for r in rows if r["model"] == m and r["opponent"]["computer"] == d] for d in levels}
+        lines.append(f"| {m} | " + " | ".join(won_drawn_lost(by_level[d]) for d in levels) + f" | {beaten(by_level)} |")
+    lines += ["", "Points by map, one per seed:", "", "| Model | " + " | ".join(short(p) for p in maps)
               + " | Spread across seeds (mean sd) |", "|---|" + "---|" * (len(maps) + 1)]
     for m in ranked:
         cells, spreads = [], []
         for p in maps:
             games = sorted((r for r in rows if r["model"] == m and r["map"] == p), key=lambda r: r["seed"])
-            cells.append(" ".join(f"{r['grade']:.2f}" for r in games) or "–")
-            spreads.append(sd([r["grade"] for r in games]))
+            cells.append(" ".join("void" if r.get("void") else f"{r['grade']:.2f}" for r in games) or "–")
+            spreads.append(sd([r["grade"] for r in games if not r.get("void")]))
         lines.append(f"| {m} | " + " | ".join(cells) + f" | {mean(spreads):.2f} |")
-    if unfinished := [r for r in rows if r["instance"] is None or r.get("error")]:
-        lines += ["", "Games that did not finish: " + ", ".join(
-            f"{r['task']} ({r.get('error') or 'no instance recorded'})" for r in unfinished)]
+    if void := [r for r in rows if r.get("void")]:
+        lines += ["", "Void games, left out of the points: " + ", ".join(f"{r['task']} ({r['void']})" for r in void)]
+    if failed := [r for r in rows if r.get("agent_error")]:
+        lines += ["", "Agents that failed mid-game, their games played out and graded: " + ", ".join(
+            f"{r['task']} ({r['agent_error']})" for r in failed)]
     return "\n".join(lines) + "\n"

@@ -1,6 +1,8 @@
 """`rts_grade`: judge a finished RTS game from the env's `data/get` summary with a rubric set in the task. Each graded
 player gets its own verification, scored by agent-env's weighted average, so runs, evals and the hub read it as they
-read any verifier's; a failed gate outweighs every criterion and zeroes it."""
+read any verifier's; a failed gate outweighs every criterion and zeroes it. The default rubric is the outcome alone: a
+win 1, a draw 0.5, a loss 0, where a game nobody won by its time limit is a draw; a match that never got an outcome is
+void and fails the step rather than reading as a loss."""
 
 from __future__ import annotations
 
@@ -18,17 +20,19 @@ from agentenv_protocol import client
 log = logging.getLogger(__name__)
 
 GATE_WEIGHT = -100
-MELEE = {"reached_end": 1, "win": 3, "survive": 1, "outscore": 1}
 RUBRICS = {
-    "melee": MELEE,
-    "dense": {**MELEE, "army_ratio": 1, "kills_ratio": 1, "buildings_destroyed": 1, "tier": 1, "expansions": 1,
-              "hero_level": 1},
+    "outcome": {"outcome": 1},
+    "dense": {"outcome": 1, "outscore": 1, "army_ratio": 1, "kills_ratio": 1, "buildings_destroyed": 1, "tier": 1,
+              "expansions": 1, "hero_level": 1},
     "checks": {},
     "smoke": {"ran_to_limit": 1, "played_out": 1},
 }
+POINTS = {"victory": 1.0, "draw": 0.5, "time_limit": 0.5, "defeat": 0.0}
+OUTCOMES = {"victory": "won: every enemy defeated", "draw": "a draw: the game's own tie",
+            "time_limit": "a draw: nobody won by the time limit", "defeat": "lost: defeated"}
 TARGETS = {"army_ratio": 1.0, "buildings_destroyed": 5, "tier": 3, "expansions": 1, "hero_level": 5}
 GATES = ("game_ran", "agent_played")
-AT_TIME_LIMIT = ("score", "draw", "loss")
+VOID_MATCH = {"cancelled": "the match was cancelled", "failed": "the match failed"}
 OPS = {">=": operator.ge, "<=": operator.le, "==": operator.eq, ">": operator.gt, "<": operator.lt}
 CHECK_KEYS = frozenset(("metric", "op", "value", "weight"))
 METRICS = frozenset((
@@ -39,8 +43,11 @@ METRICS = frozenset((
     "average_unspent_gold uprooted_seconds fewest_workers army_kept_percent enemy_army_destroyed_percent "
     "camp_cleared camp_cleared_time seconds structures").split())
 BY_TYPE = {"count": 0, "first_time": None, "present_seconds": 0}
-PARAMS = ("player_names", "rubric", "weights", "targets", "checks", "at_time_limit", "gates", "verifier_id",
-          "timeout_seconds")
+PARAMS = ("player_names", "rubric", "weights", "targets", "checks", "gates", "verifier_id", "timeout_seconds")
+
+
+class VoidMatch(RuntimeError):
+    """The match has no outcome to grade: it was cancelled or failed, or its game engine did."""
 
 
 def known_metric(name: str) -> bool:
@@ -85,7 +92,6 @@ class Game:
     summary: dict
     player: dict
     enemies: list[dict]
-    at_time_limit: str
     targets: dict
 
     @property
@@ -108,25 +114,38 @@ def _unreported(criterion: str, what: str) -> dict:
     return {"criterion": criterion, "result": False, "score": 0.0, "evidence": f"{what} not reported"}
 
 
-def reached_end(g: Game) -> dict:
-    return {"criterion": "the game reached its end: a result, or the time limit",
-            "result": bool(g.summary.get("game_over")), "evidence": f"{g.result or 'no result'} at {_clock(g)}"}
+def outcome(g: Game) -> dict:
+    return {"criterion": "the outcome: a win 1, a draw 0.5, a loss 0; nobody winning by the time limit is a draw",
+            "result": g.result == "victory", "score": POINTS[g.result],
+            "evidence": f"{OUTCOMES[g.result]} at {_clock(g)}"}
 
 
-def win(g: Game) -> dict:
-    by_score = g.at_time_limit == "score"
+def void(summary: dict, match: dict | None, player: dict) -> str | None:
+    """Why the player's game has no outcome, if it has none."""
+    if summary.get("engine_failed"):
+        return f"the game engine failed: {summary.get('error') or 'no error reported'}"
+    if match and match.get("status") in VOID_MATCH:
+        return VOID_MATCH[match["status"]] + (f": {match['status_detail']}" if match.get("status_detail") else "")
+    if player.get("result") not in POINTS:
+        who, seconds = player.get("player_name") or "the agent", summary.get("game_time_seconds")
+        return f"{who} has no result at {seconds} game seconds"
+    return None
+
+
+def _info(name: str, criterion: str, evidence: str) -> dict:
+    return {"name": name, "criterion": f"{criterion} (information only)", "result": None, "weight": 0,
+            "evidence": evidence}
+
+
+def facts(g: Game) -> list[dict]:
+    """What the outcome leaves out, for the record: the game's score, army and kills against the enemies'."""
     mine, best = _total(g.player), max(map(_total, g.enemies), default=0)
-    tiebreak = by_score and g.result == "time_limit" and mine > best
-    criterion = "won: every enemy building destroyed" + (", or the higher score at the time limit" if by_score else "")
-    return {"criterion": criterion, "result": g.result == "victory" or tiebreak,
-            "evidence": f"{g.result or 'no result'}, score {mine} vs {best}"}
-
-
-def survive(g: Game) -> dict:
-    loss = g.at_time_limit == "loss"
-    return {"criterion": "not defeated" + ("; the time limit counts as a defeat" if loss else ""),
-            "result": g.result != "defeat" and not (loss and g.result == "time_limit"),
-            "evidence": g.result or "no result"}
+    share = f", {mine / (mine + best):.0%} of the two" if mine + best else ""
+    army = max((g.metric("army", e) or 0 for e in g.enemies), default=0)
+    return [_info("score", "the game's score against the best enemy's", f"score {mine} vs {best}{share}"),
+            _info("army", "the army against the strongest enemy's", f"army {g.metric('army')} vs {army}"),
+            _info("kills", "units killed and lost",
+                  f"killed {g.metric('units_killed')}, lost {g.metric('units_lost')}")]
 
 
 def outscore(g: Game) -> dict:
@@ -231,8 +250,8 @@ def check(g: Game, c: dict) -> dict:
             "evidence": f"measured {measured}"}
 
 
-CRITERIA = {f.__name__: f for f in (reached_end, win, survive, outscore, army_ratio, kills_ratio, buildings_destroyed,
-                                    tier, expansions, hero_level, ran_to_limit, played_out)}
+CRITERIA = {f.__name__: f for f in (outcome, outscore, army_ratio, kills_ratio, buildings_destroyed, tier, expansions,
+                                    hero_level, ran_to_limit, played_out)}
 GATE_CHECKS = {"game_ran": game_ran, "agent_played": agent_played}
 
 
@@ -243,19 +262,19 @@ def _number(value) -> bool:
 class RTSGradeTaskStep(TaskStep):
     """Grade the players of a deployed RTS env's finished game: `rubric` picks the preset criteria, `weights` reweighs
     them (0 drops one, a weight adds one from another preset), `targets` sets full credit, `checks` adds metric
-    checks, `at_time_limit` decides an undecided game (the higher score wins it, a draw, or a loss) and `gates`
-    the failures that zero a player. `player_names` are the agents to grade; every agent by default."""
+    checks and `gates` the failures that zero a player. `player_names` are the agents to grade; every agent by
+    default. A rubric that grades the outcome raises VoidMatch for a match without one."""
 
     type: ClassVar[str] = "rts_grade"
     entity_refs = (EntityRef.env("env_id"),)
 
     def __init__(self, id: str, version: int | None, env_id: str, player_names: list[str] | None = None,
-                 rubric: str = "melee", weights: dict | None = None, targets: dict | None = None,
-                 checks: list[dict] | None = None, at_time_limit: str = "draw", gates: list[str] | None = None,
+                 rubric: str = "outcome", weights: dict | None = None, targets: dict | None = None,
+                 checks: list[dict] | None = None, gates: list[str] | None = None,
                  verifier_id: str | None = None, timeout_seconds: int = 300, depends_on: list | None = None,
                  fail_task_on_error: bool = True):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
-        self.env_id, self.rubric, self.at_time_limit = env_id, rubric, at_time_limit
+        self.env_id, self.rubric = env_id, rubric
         self.player_names = list(player_names) if player_names is not None else None
         self.weights, self.targets = dict(weights or {}), dict(targets or {})
         self.checks = [dict(c) for c in checks or []]
@@ -263,9 +282,6 @@ class RTSGradeTaskStep(TaskStep):
         self.verifier_id, self.timeout_seconds = verifier_id or id, timeout_seconds
         if rubric not in RUBRICS:
             raise ValueError(f"rts_grade rubric must be one of {', '.join(RUBRICS)}, got {rubric!r}")
-        if at_time_limit not in AT_TIME_LIMIT:
-            raise ValueError(f"rts_grade at_time_limit must be one of {', '.join(AT_TIME_LIMIT)}, got "
-                             f"{at_time_limit!r}")
         if unknown := sorted(set(self.gates) - set(GATES)):
             raise ValueError(f"rts_grade gates must be among {', '.join(GATES)}, got {unknown}")
         if player_names is not None and (not isinstance(player_names, list)
@@ -304,7 +320,8 @@ class RTSGradeTaskStep(TaskStep):
     def grade(self, summary: dict, match: dict | None = None) -> dict[str, list[dict]]:
         """The rows of each graded player's verification, by its key: `verifier_id` alone when the game's one agent is
         graded (or no agent name identifies the player), else `<verifier_id>:<agent>`. `match` is the final
-        match finish_match kept, which says how it ended."""
+        match finish_match kept, which says how it ended; a game it would grade on an outcome that has none raises
+        VoidMatch."""
         everyone, agents = players(summary)
         if self.player_names is None:
             graded = [(s.get("player_name"), s) for s in agents]
@@ -321,9 +338,13 @@ class RTSGradeTaskStep(TaskStep):
                              "result": False, "weight": GATE_WEIGHT,
                              "evidence": f"player slots {[s.get('player_name') for s in everyone]}"}]
                 continue
-            g = Game(summary, player, [s for s in everyone if s.get("team") != player.get("team")],
-                     self.at_time_limit, targets)
-            out[key] = [{"name": k, **CRITERIA[k](g), "weight": w} for k, w in self.criteria().items()]
+            criteria = self.criteria()
+            if "outcome" in criteria and (why := void(summary, match, player)):
+                raise VoidMatch(f"{key}: no outcome to grade, {why}")
+            g = Game(summary, player, [s for s in everyone if s.get("team") != player.get("team")], targets)
+            out[key] = [{"name": k, **CRITERIA[k](g), "weight": w} for k, w in criteria.items()]
+            if self.rubric == "outcome":
+                out[key] += facts(g)
             out[key] += [check(g, c) for c in self.checks]
             out[key] += [{"name": k, **GATE_CHECKS[k](g), "weight": GATE_WEIGHT} for k in gates]
             if match:
@@ -345,8 +366,8 @@ class RTSGradeTaskStep(TaskStep):
             graded = {k: [{"name": "data_get", "criterion": "the env answered data/get", "result": False,
                            "weight": GATE_WEIGHT, "evidence": repr(e)}] for k in keys}
         else:
-            graded = step.grade(summary, context.metadata.get("game_match"))
             context.metadata.setdefault("rts_summary", {})[step.verifier_id] = summary   # what was graded
+            graded = step.grade(summary, context.metadata.get("game_match"))
         verifications = context.metadata.setdefault("verifications", {})
         for key, rows in graded.items():
             verifications[key] = {"results": rows, "score": aggregate_score(rows, ScoreAggregator.WEIGHTED_AVERAGE)}

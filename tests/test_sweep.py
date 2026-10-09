@@ -104,7 +104,9 @@ def test_the_runner_stops_before_a_game_could_take_the_spend_past_the_budget_and
     assert [r["task"] for r in rows] == names[:2]   # 0.3 spent + 0.5 fits in 1.0, 0.6 + 0.5 does not
     assert rows[0]["instance"] == f"@local/x/{names[0]}" and rows[0]["wall_seconds"] == 12.5
     assert (rows[0]["grade"], rows[0]["cost_usd"], rows[0]["score"], rows[0]["opponent_score"]) == (0.4, 0.3, 500, 1000)
-    assert (rows[0]["result"], rows[0]["orders"], rows[0]["decisions"]) == ("time_limit", 40, 30)
+    assert (rows[0]["result"], rows[0]["outcome"], rows[0]["void"], rows[0]["agent_error"]) == ("time_limit", "draw",
+                                                                                                None, None)
+    assert (rows[0]["orders"], rows[0]["decisions"]) == (40, 30)
     assert said[-1].startswith("stopped: another game could take the spend past $1.00")
     rows = sweep.run(out, budget=10.0, parallel=3, agent_env=fake_agent_env(tmp_path), echo=said.append)
     assert sorted(r["task"] for r in rows) == sorted(names) and len(sweep.results(out)) == 8
@@ -144,5 +146,63 @@ def test_the_report_ranks_the_models_and_shows_each_seed(generated, tmp_path, mo
     ranking = [line.split(" | ")[0] for line in text.splitlines() if line.startswith("| openai") or
                line.startswith("| anthropic")]
     assert ranking[:2] == ["| openai/gpt-5.4-mini", "| anthropic/claude-haiku-4-5"]
-    assert "| openai/gpt-5.4-mini | 4 | 0.60 ± 0.00 | 0 / 4 / 0 | 3.0k vs 1.0k | 75% | $0.100 | 0 | 30 |" in text
+    assert "| openai/gpt-5.4-mini | 4 | 0.60 ± 0.00 | 0 / 4 / 0 | 0 | 75% | 3.0k vs 1.0k | $0.100 | 0 | 30 |" in text
+    assert "| openai/gpt-5.4-mini | 0-4-0 | none |" in text
     assert "| anthropic/claude-haiku-4-5 | 0.20 0.20 | 0.20 0.20 | 0.00 |" in text
+
+
+def test_a_game_without_a_grade_is_void_and_an_agent_that_failed_keeps_its_outcome(generated, monkeypatch):
+    out, _ = generated
+    void = {**summary(0.1, 500), "verifications": {}, "failed_steps": [
+        {"step_id": "grade", "error": "wc3: no outcome to grade, the match was cancelled", "is_fatal": True}]}
+    monkeypatch.setattr(sweep, "metadata", lambda instance: void)
+    row = sweep.outcome("void", {}, None, "i", 1.0, 1)
+    assert (row["grade"], row["outcome"]) == (None, None)
+    assert row["void"] == "wc3: no outcome to grade, the match was cancelled"
+    crashed = {**summary(0.1, 500), "failed_steps": [{"step_id": "play", "error": "agent died", "is_fatal": False}]}
+    monkeypatch.setattr(sweep, "metadata", lambda instance: crashed)
+    row = sweep.outcome("crashed", {}, None, "i", 1.0, 0)
+    assert (row["grade"], row["outcome"], row["void"], row["agent_error"]) == (0.4, "draw", None, "agent died")
+    assert sweep.outcome("lost", {}, None, None, None, 1)["void"] == "no instance recorded"
+
+
+LADDER = """
+name = "ladder"
+template = "vs-ai-quick"
+models = ["m1", "m2"]
+opponents = [
+  {computer = "easy", race = "orc"}, {computer = "normal", race = "orc"}, {computer = "insane", race = "orc"},
+]
+seeds = [1, 2]
+time_limit_seconds = 1800
+max_cost_usd = 0.5
+"""
+
+
+def test_the_report_gives_each_ai_levels_won_drawn_lost_and_the_highest_level_beaten(tmp_path, monkeypatch):
+    (tmp_path / "spec.toml").write_text(LADDER)
+    out = tmp_path / "sweep"
+    sweep.generate(sweep.Spec.load(tmp_path / "spec.toml"), out)
+    manifest = json.loads((out / "sweep.json").read_text())
+    assert manifest["player_step"] == "play" and len(manifest["tasks"]) == 12
+
+    def game(instance):
+        task = instance.rpartition("/")[2]
+        level, model = manifest["tasks"][task]["opponent"]["computer"], manifest["tasks"][task]["model"]
+        result = {"easy": "victory", "normal": "victory" if model == "m1" else "defeat"}.get(level, "time_limit")
+        if level == "insane" and task.endswith("s2") and model == "m1":
+            return {**summary(0.1, 500), "verifications": {}, "failed_steps": [
+                {"step_id": "grade", "error": "the game engine failed", "is_fatal": True}]}
+        found = summary(0.1, 500)
+        found["rts_summary"]["wc3"]["player_slots"][0]["result"] = result
+        return found | {"verifications": {"wc3": {"score": {"victory": 1.0, "defeat": 0.0}.get(result, 0.5)}}}
+
+    monkeypatch.setattr(sweep.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sweep, "metadata", game)
+    sweep.run(out, budget=10.0, parallel=4, agent_env=fake_agent_env(tmp_path), echo=lambda _: None)
+    text = sweep.report(out)
+    assert "| m1 | 6 | 0.90 ± 0.22 | 4 / 1 / 0 | 1 |" in text and "| m2 | 6 | 0.50 ± 0.45 | 2 / 2 / 2 | 0 |" in text
+    assert "| Model | easy | normal | insane | Highest level beaten |" in text
+    assert "| m1 | 2-0-0 | 2-0-0 | 0-1-0 | normal (2 of 2 won) |" in text
+    assert "| m2 | 2-0-0 | 0-0-2 | 0-2-0 | easy (2 of 2 won) |" in text
+    assert "Void games, left out of the points: ladder-m1-vs-insane-orc-s2 (the game engine failed)" in text

@@ -115,8 +115,8 @@ async def test_a_match_finish_plays_out_passes_the_smoke_rubric(env_vars, licens
         finish = next(r for r in verification["results"] if r["name"] == "finish")
         assert finish["evidence"] == "the match finished: the time limit, 1:30; played out from 0:00"
         # The agents' rubric sees a game the harness played, and gives it nothing.
-        melee = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3").execute(run_context(record))
-        [verification] = melee.metadata["verifications"].values()
+        outcome = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3").execute(run_context(record))
+        [verification] = outcome.metadata["verifications"].values()
         gate = next(r for r in verification["results"] if r["name"] == "agent_played")
         assert gate["result"] is False and verification["score"] == 0
 
@@ -223,7 +223,7 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_match_files(local_store
     grade = by_type["rts_grade"]
     expected = (("smoke", "smoke") if task == "smoke" else ("checks", "drill") if task.startswith("drill-")
                 else ("dense", "duel") if task.startswith("duel") else ("dense", task) if task.startswith("broadcast")
-                else ("melee", "wc3"))
+                else ("outcome", "wc3"))
     assert grade["id"] == "grade" and (grade["rubric"], grade["verifier_id"]) == expected
     assert by_type["finish_match"]["id"] in grade["depends_on"]   # every match is played out before it is graded
     plays = [s for s in steps if s["type"] == "prompt_agent"]

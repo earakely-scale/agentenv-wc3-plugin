@@ -106,7 +106,8 @@
     "timeout_seconds": 3600,
     "depends_on": [
       "start"
-    ]
+    ],
+    "fail_task_on_error": false
   },
   {
     "id": "play-p2",
@@ -118,7 +119,8 @@
     "timeout_seconds": 3600,
     "depends_on": [
       "start"
-    ]
+    ],
+    "fail_task_on_error": false
   },
   {
     "id": "finish",

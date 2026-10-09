@@ -24,7 +24,7 @@ from mcp.client.streamable_http import streamable_http_client
 from test_steps import deployed, fill_and_close, open_match, run_context
 
 from agentenv_rts import choices, display, highlights, recording
-from agentenv_rts.grade import RTSGradeTaskStep
+from agentenv_rts.grade import RTSGradeTaskStep, VoidMatch
 from agentenv_rts.lockstep import Lockstep
 from agentenv_rts.session import RemoteSession, SessionError
 from agentenv_rts.timeline import Timeline, model_name
@@ -732,23 +732,27 @@ def test_any_chat_model_answers_choice_questions_in_jevs_shape():
     assert checked["contract_valid"] is True
 
 
-async def ended(step) -> tuple[dict, dict, dict]:
+async def ended(step) -> tuple[dict, dict, dict, str | None]:
     """A 60-second game whose agent stopped after 5 s, ended by `step` (finish_match or cancel_match): the summary,
-    the run's metadata once graded, and what a move after the end gets."""
+    the run's metadata once graded, what a move after the end gets, and why grading found the match void."""
     async with deployed(WC3Env()) as record:
         await match(record)
         session = RemoteSession(base(record))
         for _ in range(5):
             await asyncio.to_thread(session.step, {0: []})
-        context = await step(id="end", version=None, env_id="wc3").execute(run_context(record))
-        context = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3").execute(context)
+        context, void = await step(id="end", version=None, env_id="wc3").execute(run_context(record)), None
+        try:
+            context = await RTSGradeTaskStep(id="grade", version=None, env_id="wc3").execute(context)
+        except VoidMatch as e:
+            void = str(e)
         summary = (await client.get_data(base(record))).parts[0].data
         late = await asyncio.to_thread(session.step, {0: []})
-    return summary, context.metadata, late
+    return summary, context.metadata, late, void
 
 
 async def test_a_game_its_agents_left_is_played_out_to_its_end(env_vars):
-    summary, metadata, _ = await ended(FinishMatchTaskStep)
+    summary, metadata, _, void = await ended(FinishMatchTaskStep)
+    assert void is None
     assert summary["game_over"] and summary["result"] == "time_limit" and summary["game_time_seconds"] == 60
     assert summary["harness"]["finish_seconds"] == 55
     final = metadata["game_match"]
@@ -763,7 +767,8 @@ async def test_a_game_its_agents_left_is_played_out_to_its_end(env_vars):
 
 
 async def test_cancel_match_leaves_the_game_where_it_stopped(env_vars):
-    summary, metadata, late = await ended(CancelMatchTaskStep)
+    summary, metadata, late, void = await ended(CancelMatchTaskStep)
     assert not summary["game_over"] and summary["game_time_seconds"] == 5
     assert metadata["game_match"]["status"] == "cancelled" and "status_detail" not in metadata["game_match"]
+    assert void == "grade: no outcome to grade, the match was cancelled" and "verifications" not in metadata
     assert late["done"] and late["elapsed_ms"] == 0   # over for its players too: a move changes nothing

@@ -1,0 +1,21 @@
+# The ladder: each model against the game's easy, normal and insane Orc AI on two 1v1 maps, two seeds each, in
+# 30-minute games: 12 games a model. A level is beaten when at least three of its four games are won; a game nobody
+# has won by the limit is a draw. Games won or lost end early, so only draws run the full 30 minutes.
+# agent-env wc3 sweep generate sweeps/ladder.toml runs/ladder
+# agent-env wc3 sweep run runs/ladder --budget <dollars>
+name = "ladder"
+template = "vs-ai"
+models = [
+  "fireworks_ai/deepseek-v4p1-flash",
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.4-mini",
+]
+maps = ["(2)EchoIsles.w3x", "(2)TerenasStand.w3x"]
+opponents = [
+  {computer = "easy", race = "orc"},
+  {computer = "normal", race = "orc"},
+  {computer = "insane", race = "orc"},
+]
+seeds = [1, 2]
+time_limit_seconds = 1800
+max_cost_usd = 2.0

@@ -174,7 +174,7 @@ class MatchSettings(BaseModel):
     randomize_starts: bool = False
     """Shuffle the start locations."""
     time_limit_seconds: int = Field(DEFAULT_SCENARIO["time_limit_seconds"], ge=60, le=4 * 3600)
-    """Game seconds; at the limit the match ends, and the higher score is ahead."""
+    """Game seconds; at the limit the match ends with no winner."""
     mode: Literal[MODES] = "stepping"
     """stepping: the game waits while the agents think; realtime: it runs on its own clock."""
     allow_debug: bool = False
@@ -1491,7 +1491,8 @@ class WC3Env(AgentEnvGameEnv):
         return (f"You are player slot {slot}, {me['race'].replace('_', ' ')}, team {me['team']}"
                 + (f", with {', '.join(allies)}" if allies else "")
                 + f". Against: {', '.join(enemies) or 'nobody'}. The game ends when a side has no buildings left, or "
-                f"at the {self.scenario['time_limit_seconds'] // 60}-minute limit, where the higher score is ahead."
+                f"at the {self.scenario['time_limit_seconds'] // 60}-minute limit, where a game nobody has won is a "
+                "draw."
                 + ("" if self.begun or self._out(slot) else
                    " The clock starts once every player has made its first move: plan as long as you like; your "
                    "first advance sends your opening orders."))

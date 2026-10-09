@@ -1,5 +1,5 @@
-"""`rts_grade` on synthetic summaries (today's, without player slots, and one with them), against the scripts the
-bundle's tasks were graded by before it, and as a step reading a served env's data/get."""
+"""`rts_grade` on synthetic summaries (today's, without player slots, and one with them), the smoke rubric against the
+script the smoke task was graded by before it, and as a step reading a served env's data/get."""
 
 import pytest
 from agent_env.task_step.registry import get_task_step_registry
@@ -8,25 +8,9 @@ from agentenv_protocol import AgentEnvEnvironment, DataPart, client, environment
 from conftest import STEPS
 from test_steps import deployed, run_context
 
-from agentenv_rts.grade import RTSGradeTaskStep
+from agentenv_rts.grade import RTSGradeTaskStep, VoidMatch
 
 pytestmark = pytest.mark.anyio
-
-
-def wc3_verifier(s: dict) -> list[dict]:
-    """wc3-verifier's grade(), as the five agent tasks ran it before rts_grade (its agent_played without the idle
-    extension, which finish_match replaced): the reference melee must match."""
-    mine, theirs = (s.get("score") or {}).get("total", 0), (s.get("opponent_score") or {}).get("total", 0)
-    harness = s.get("harness") or {}
-    return [
-        {"criterion": "the game reached its end: a result, or the time limit", "result": bool(s.get("game_over"))},
-        {"criterion": "won: every enemy building destroyed", "weight": 3, "result": s.get("result") == "victory"},
-        {"criterion": "not defeated", "result": s.get("result") != "defeat"},
-        {"criterion": "outscored the AI on the game's score total", "result": mine > theirs,
-         "score": min(1.0, mine / theirs) if theirs else float(mine > 0)},
-        {"criterion": "the game kept running", "weight": -100, "result": not s.get("engine_failed")},
-        {"criterion": "the agent played: it gave orders", "weight": -100, "result": harness.get("orders_sent", 0) > 0},
-    ]
 
 
 def smoke_verifier(s: dict) -> list[dict]:
@@ -46,6 +30,7 @@ TODAY = {"game_over": True, "result": "time_limit", "game_time_seconds": 300.0, 
 TODAYS = {
     "victory": {**TODAY, "result": "victory"},
     "defeat": {**TODAY, "result": "defeat"},
+    "the game's own draw": {**TODAY, "result": "draw"},
     "behind at the limit": TODAY,
     "ahead at the limit": {**TODAY, "score": {"total": 2500}},
     "level at the limit": {**TODAY, "score": {"total": 1800}},
@@ -92,71 +77,77 @@ def judged(rows: list[dict]) -> list[tuple]:
     return [(r["criterion"], r["result"], r.get("weight", 1), r.get("score")) for r in rows]
 
 
-@pytest.mark.parametrize("case", TODAYS)
-def test_melee_is_wc3_verifier_and_smoke_is_smoke_verifier(case):
+@pytest.mark.parametrize("case", [c for c in TODAYS if TODAYS[c]["result"]])
+def test_smoke_is_smoke_verifier(case):
     summary = TODAYS[case]
-    [melee] = step(at_time_limit="draw").grade(summary).values()
-    assert judged(melee) == judged(wc3_verifier(summary)) and score(melee) == score(wc3_verifier(summary))
     [smoke] = step(rubric="smoke").grade(summary).values()
     assert judged(smoke) == judged(smoke_verifier(summary)) and score(smoke) == score(smoke_verifier(summary))
-    if summary["result"] != "time_limit":
-        [default] = step().grade(summary).values()
-        assert score(default) == score(wc3_verifier(summary))
 
 
-def test_todays_half_grades_stay_half():
-    assert score(step(at_time_limit="draw").grade(TODAYS["level at the limit"])["grade"]) == 0.5
-    assert score(step(at_time_limit="draw").grade(TODAYS["ahead at the limit"])["grade"]) == 0.5
+@pytest.mark.parametrize(("case", "points", "evidence"), [
+    ("victory", 1, "won: every enemy defeated"), ("defeat", 0, "lost: defeated"),
+    ("the game's own draw", 0.5, "a draw: the game's own tie"),
+    ("behind at the limit", 0.5, "a draw: nobody won by the time limit"),
+    ("ahead at the limit", 0.5, "a draw: nobody won by the time limit"),
+    ("level at the limit", 0.5, "a draw: nobody won by the time limit")])
+def test_the_grade_is_the_outcome_a_win_a_draw_or_a_loss(case, points, evidence):
+    rows = step().grade(TODAYS[case])["grade"]
+    assert [r["name"] for r in rows] == ["outcome", "score", "army", "kills", "game_ran", "agent_played"]
+    assert score(rows) == points and rows[0]["score"] == points and rows[0]["result"] is (points == 1)
+    assert rows[0]["evidence"] == f"{evidence} at 300.0 of 300 game seconds"
 
 
-def test_a_win_counts_most():
-    grades = {case: score(step().grade(TODAYS[case])["grade"]) for case in ("victory", "behind at the limit",
-                                                                              "defeat")}
-    assert grades["victory"] > grades["behind at the limit"] > grades["defeat"] > 0
-    outscored = by_name(step().grade(TODAY)["grade"])["outscore"]
-    assert outscored["score"] == 0.5 and outscored["result"] is False and outscored["evidence"] == "score 900 vs 1800"
+def test_the_score_army_and_kills_are_evidence_not_grade():
+    rows = by_name(step().grade(TODAYS["ahead at the limit"])["grade"])
+    assert rows["score"] == {
+        "name": "score", "criterion": "the game's score against the best enemy's (information only)", "result": None,
+        "weight": 0, "evidence": "score 2500 vs 1800, 58% of the two"}
+    assert by_name(step().grade(DUEL)["grade:alice"])["army"]["evidence"] == "army 2000 vs 1000"
+    assert by_name(step().grade(DUEL)["grade:bob"])["kills"]["evidence"] == "killed 10, lost 30"
 
 
-@pytest.mark.parametrize(("at_time_limit", "win", "survive", "grade"), [
-    ("score", True, True, 1.0), ("draw", False, True, 0.5), ("loss", False, False, 2 / 6)])
-def test_the_time_limit_is_the_higher_score_a_draw_or_a_loss(at_time_limit, win, survive, grade):
-    rows = step(at_time_limit=at_time_limit).grade(TODAYS["ahead at the limit"])["grade"]
-    assert (by_name(rows)["win"]["result"], by_name(rows)["survive"]["result"]) == (win, survive)
-    assert score(rows) == pytest.approx(grade)
-    defeat = by_name(step(at_time_limit=at_time_limit).grade(TODAYS["defeat"])["grade"])
-    assert not defeat["win"]["result"] and not defeat["survive"]["result"]
+@pytest.mark.parametrize(("summary", "match", "why"), [
+    (TODAYS["still running"], None, "the agent has no result at 300.0 game seconds"),
+    (TODAYS["the engine failed"], None, "the game engine failed: wine died"),
+    (TODAY, {"status": "cancelled", "status_detail": "the game could not play out"},
+     "the match was cancelled: the game could not play out"),
+    (TODAY, {"status": "failed"}, "the match failed")])
+def test_a_match_without_an_outcome_is_void_not_a_loss(summary, match, why):
+    for rubric in ("outcome", "dense"):
+        with pytest.raises(VoidMatch, match=f"^grade: no outcome to grade, {why}$"):
+            step(rubric=rubric).grade(summary, match)
+    assert score(step(rubric="checks", checks=[{"metric": "tier"}]).grade(TODAYS["the engine failed"])["grade"]) == 0
 
 
-def test_a_level_score_at_the_limit_is_no_win():
-    assert not by_name(step().grade(TODAYS["level at the limit"])["grade"])["win"]["result"]
+def test_a_draw_without_orders_scores_nothing():
+    assert score(step().grade(TODAYS["no orders"])["grade"]) == 0
 
 
 def test_dense_grades_every_agent_player_slot_against_the_other_team():
-    grades = step(rubric="dense", verifier_id="wc3", at_time_limit="score").grade(DUEL)
+    grades = step(rubric="dense", verifier_id="wc3").grade(DUEL)
     assert set(grades) == {"wc3:alice", "wc3:bob"}
     alice, bob = by_name(grades["wc3:alice"]), by_name(grades["wc3:bob"])
-    assert list(alice) == ["reached_end", "win", "survive", "outscore", "army_ratio", "kills_ratio",
-                           "buildings_destroyed", "tier", "expansions", "hero_level", "game_ran", "agent_played"]
+    assert list(alice) == ["outcome", "outscore", "army_ratio", "kills_ratio", "buildings_destroyed", "tier",
+                           "expansions", "hero_level", "game_ran", "agent_played"]
     assert {k: r.get("score", float(r["result"])) for k, r in alice.items()} == pytest.approx({
-        "reached_end": 1, "win": 1, "survive": 1, "outscore": 1, "army_ratio": 1, "kills_ratio": 0.75,
-        "buildings_destroyed": 0.25, "tier": 2 / 3, "expansions": 1, "hero_level": 0.8, "game_ran": 1,
-        "agent_played": 1})
+        "outcome": 0.5, "outscore": 1, "army_ratio": 1, "kills_ratio": 0.75, "buildings_destroyed": 0.25,
+        "tier": 2 / 3, "expansions": 1, "hero_level": 0.8, "game_ran": 1, "agent_played": 1})
     assert alice["army_ratio"]["evidence"] == "army 2000 vs 1000"
     assert alice["buildings_destroyed"]["evidence"] == "destroyed 2 of 8"
     assert alice["outscore"]["criterion"] == "outscored every opponent on the game's score total"
-    assert bob["win"]["result"] is False and bob["outscore"]["score"] == pytest.approx(2 / 3)
+    assert bob["outcome"]["score"] == 0.5 and bob["outscore"]["score"] == pytest.approx(2 / 3)
     assert bob["buildings_destroyed"]["evidence"] == "destroyed 0, full credit at 5"
-    assert score(grades["wc3:alice"]) == pytest.approx((1 + 3 + 1 + 1 + 1 + 0.75 + 0.25 + 2 / 3 + 1 + 0.8) / 12)
+    assert score(grades["wc3:alice"]) == pytest.approx((0.5 + 1 + 1 + 0.75 + 0.25 + 2 / 3 + 1 + 0.8) / 8)
     assert score(grades["wc3:alice"]) > score(grades["wc3:bob"]) > 0
 
 
 def test_allies_are_not_opponents_and_computer_player_slots_are_not_graded():
     summary = game(player("alice", total=1000), player("bob", total=5000), player(computer="easy", team=2, total=800),
                    player(computer="easy", team=2, total=900))
-    grades = step(verifier_id="wc3", at_time_limit="score").grade(summary)
+    grades = step(verifier_id="wc3").grade(summary)
     assert set(grades) == {"wc3:alice", "wc3:bob"}
-    alice = by_name(grades["wc3:alice"])
-    assert alice["outscore"]["evidence"] == "score 1000 vs 900" and alice["win"]["result"] is True
+    assert by_name(grades["wc3:alice"])["score"]["evidence"] == "score 1000 vs 900, 53% of the two"
+    alice = by_name(step(rubric="dense", verifier_id="wc3").grade(summary)["wc3:alice"])
     assert alice["outscore"]["criterion"] == "outscored the AI on the game's score total"
 
 
@@ -172,9 +163,13 @@ def test_a_summary_without_player_slots_is_one_player_slot_under_the_verifier_id
 
 
 def test_weights_drop_add_and_reweigh_criteria_and_targets_set_full_credit():
-    rows = by_name(step(weights={"win": 0, "survive": 2, "army_ratio": 1}).grade(DUEL)["grade:bob"])
-    assert list(rows) == ["reached_end", "survive", "outscore", "army_ratio", "game_ran", "agent_played"]
-    assert rows["survive"]["weight"] == 2 and rows["army_ratio"]["score"] == 0.5
+    rows = by_name(step(rubric="dense", weights={"outscore": 0, "tier": 0, "expansions": 0, "hero_level": 0,
+                                                  "buildings_destroyed": 0, "kills_ratio": 0, "outcome": 2})
+                   .grade(DUEL)["grade:bob"])
+    assert list(rows) == ["outcome", "army_ratio", "game_ran", "agent_played"]
+    assert rows["outcome"]["weight"] == 2 and rows["army_ratio"]["score"] == 0.5
+    added = by_name(step(weights={"tier": 1}).grade(DUEL)["grade:bob"])
+    assert list(added) == ["outcome", "tier", "score", "army", "kills", "game_ran", "agent_played"]
     targets = {"army_ratio": 2.0, "hero_level": 2, "tier": 2, "expansions": 2, "buildings_destroyed": 1}
     alice = by_name(step(rubric="dense", targets=targets).grade(DUEL)["grade:alice"])
     assert alice["army_ratio"]["score"] == 1
@@ -225,15 +220,16 @@ def test_checks_resolve_wc3agents_metric_names():
 
 def test_checks_add_to_any_rubric_and_fail_on_what_the_summary_lacks():
     rows = by_name(step(checks=[{"metric": "count:hhou", "op": ">=", "value": 0}]).grade(TODAY)["grade"])
-    assert rows["count:hhou"]["result"] is False and "win" in rows
+    assert rows["count:hhou"]["result"] is False and "outcome" in rows
 
 
 def test_a_failed_gate_zeroes_the_player_slot_and_gates_can_be_left_out():
     beaten = game(player("alice", result="victory", orders=0, **ALICE), player("bob", team=2, result="defeat", **BOB))
-    assert score(step().grade(beaten)["grade:alice"]) == 0 and score(step().grade(beaten)["grade:bob"]) > 0
+    assert score(step().grade(beaten)["grade:alice"]) == 0 and score(step().grade(beaten)["grade:bob"]) == 0
     assert score(step(gates=["game_ran"]).grade(beaten)["grade:alice"]) == 1
-    assert score(step(gates=[]).grade({**beaten, "engine_failed": True})["grade:alice"]) == 1
-    assert score(step(gates=["game_ran"]).grade({**beaten, "engine_failed": True})["grade:alice"]) == 0
+    tier = {"rubric": "checks", "checks": [{"metric": "tier", "op": ">=", "value": 1}]}
+    assert score(step(**tier, gates=[]).grade({**beaten, "engine_failed": True})["grade:alice"]) == 1
+    assert score(step(**tier, gates=["game_ran"]).grade({**beaten, "engine_failed": True})["grade:alice"]) == 0
     silent = game(player("alice", orders=0, **ALICE), player("bob", team=2, orders=0, **BOB))
     assert all(score(rows) == 0 for rows in step().grade(silent).values())
 
@@ -246,13 +242,13 @@ def test_smoke_never_asks_that_the_agent_played():
 
 @pytest.mark.parametrize(("fields", "message"), [
     ({"rubric": "blitz"}, "rubric must be one of"),
-    ({"at_time_limit": "overtime"}, "at_time_limit must be one of"),
     ({"gates": ["game_ran", "fun"]}, "gates must be among"),
     ({"player_names": "alice"}, "player_names are agent names"),
     ({"player_names": [""]}, "player_names are agent names"),
     ({"weights": {"speed": 1}}, "weights are for the criteria"),
-    ({"weights": {"win": "3"}}, "weights must be numbers"),
-    ({"weights": {"win": True}}, "weights must be numbers"),
+    ({"weights": {"win": 3}}, "weights are for the criteria"),
+    ({"weights": {"outcome": "3"}}, "weights must be numbers"),
+    ({"weights": {"outcome": True}}, "weights must be numbers"),
     ({"targets": {"win": 1}}, "targets are for"),
     ({"targets": {"tier": 0}}, "targets must be positive"),
     ({"checks": [{"metric": "food_cap", "op": ">=", "value": 1}]}, "is not one the summary reports"),
@@ -272,18 +268,17 @@ def test_bad_fields_are_refused_when_the_step_is_made(fields, message):
 
 def test_the_step_round_trips_and_is_registered(local_stores):
     data = {"id": "grade", "type": "rts_grade", "version": None, "env_id": "wc3", "player_names": ["alice"],
-            "rubric": "checks", "weights": {"win": 2}, "targets": {"tier": 2},
-            "checks": [{"metric": "tier", "op": ">=", "value": 2}], "at_time_limit": "loss", "gates": ["game_ran"],
+            "rubric": "checks", "weights": {"outcome": 2}, "targets": {"tier": 2},
+            "checks": [{"metric": "tier", "op": ">=", "value": 2}], "gates": ["game_ran"],
             "verifier_id": "v", "timeout_seconds": 60, "fail_task_on_error": False,
             "depends_on": [{"task_step_id": "play"}]}
     assert STEPS["rts_grade"] == "agentenv_rts.grade:RTSGradeTaskStep"
     registered = get_task_step_registry()["rts_grade"]
     assert registered is RTSGradeTaskStep and registered.from_dict(data).to_dict() == data
     defaults = RTSGradeTaskStep.from_dict({"id": "grade", "type": "rts_grade", "env_id": "wc3"}).to_dict()
-    assert {k: defaults[k] for k in ("player_names", "rubric", "at_time_limit", "gates", "verifier_id",
-                                     "fail_task_on_error")} == {
-        "player_names": None, "rubric": "melee", "at_time_limit": "draw", "gates": ["game_ran", "agent_played"],
-        "verifier_id": "grade", "fail_task_on_error": True}
+    assert {k: defaults[k] for k in ("player_names", "rubric", "gates", "verifier_id", "fail_task_on_error")} == {
+        "player_names": None, "rubric": "outcome", "gates": ["game_ran", "agent_played"], "verifier_id": "grade",
+        "fail_task_on_error": True}
 
 
 @environment_card(name="wc3")
@@ -310,15 +305,23 @@ async def test_the_step_grades_what_data_get_reports_with_the_runs_overrides():
                                           "score": score(grade.grade(DUEL)["wc3:alice"])}
     assert set(overridden.metadata["verifications"]) == {"wc3:bob"}
     assert "army_ratio" in by_name(overridden.metadata["verifications"]["wc3:bob"]["results"])
-    assert grade.rubric == "melee" and grade.player_names is None
+    assert grade.rubric == "outcome" and grade.player_names is None
 
 
 async def test_todays_env_is_graded_under_the_verifier_id_alone():
     async with deployed(FakeSummary(TODAYS["victory"])) as record:
-        context = await step(verifier_id="wc3", at_time_limit="draw").execute(run_context(record))
-    rows = step(at_time_limit="draw").grade(TODAYS["victory"])["grade"]
-    assert context.metadata["verifications"] == {"wc3": {"results": rows, "score": score(wc3_verifier(
-        TODAYS["victory"]))}}
+        context = await step(verifier_id="wc3").execute(run_context(record))
+    rows = step().grade(TODAYS["victory"])["grade"]
+    assert context.metadata["verifications"] == {"wc3": {"results": rows, "score": 1.0}}
+
+
+async def test_a_void_match_fails_the_step_and_keeps_what_it_graded():
+    async with deployed(FakeSummary(TODAYS["the engine failed"])) as record:
+        context = run_context(record)
+        with pytest.raises(VoidMatch, match="the game engine failed"):
+            await step(verifier_id="wc3").execute(context)
+    assert context.metadata["rts_summary"]["wc3"] == TODAYS["the engine failed"]
+    assert "verifications" not in context.metadata
 
 
 async def test_an_env_that_does_not_answer_data_get_scores_nothing(monkeypatch):

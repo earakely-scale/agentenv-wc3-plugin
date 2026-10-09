@@ -96,7 +96,8 @@
     "depends_on": [
       "start",
       "agent"
-    ]
+    ],
+    "fail_task_on_error": false
   },
   {
     "id": "finish",
@@ -110,7 +111,7 @@
     "id": "grade",
     "type": "rts_grade",
     "env_id": "wc3",
-    "rubric": "melee",
+    "rubric": "outcome",
     "verifier_id": "wc3",
     "depends_on": [
       "finish"

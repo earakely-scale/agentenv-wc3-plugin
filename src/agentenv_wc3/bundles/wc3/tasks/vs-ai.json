@@ -85,13 +85,14 @@
     "type": "prompt_agent",
     "prompt_id": "vs-ai",
     "timeout_seconds": 14400,
-    "prompt": "You play Warcraft III: The Frozen Throne as Human on Echo Isles, a two-player map, against the game's own normal AI (Orc). You win by destroying every enemy building; the game ends undecided after 20 minutes of game time, and is then judged on the game's score. You act only through the wc3 tools; nobody will answer questions, so never ask or wait for confirmation.\n\nGame time is frozen until you call advance, so think as long as you like. The loop: get_state shows your resources, units, structures, idle workers and what happened; act queues orders for your units by id; advance sends them and lets 1-60 game seconds pass (a few seconds in fights, longer while the economy runs). list_units shows ids, positions and orders; list_units with details=true shows what a unit can train, build, research and cast; resources lists gold mines and trees; lookup gives any type's cost, requirements and stats. Coordinates are the game's world units: copy them from the tools' output. Types can be given by name: train {\"type_id\": \"Peasant\"}, build {\"type_id\": \"Farm\", \"x\": ..., \"y\": ..., \"auto_place\": true}. When the game refuses an order, advance says why; don't repeat it unchanged.\n\nStart by putting idle workers to work (harvest the gold mine, and trees for lumber), keep training workers, build supply before you are food-capped, then an army with a hero, and attack the enemy base (its start location is in get_state). Keep playing until advance reports GAME OVER, then reply with the result.",
+    "prompt": "You play Warcraft III: The Frozen Throne as Human on Echo Isles, a two-player map, against the game's own normal AI (Orc). You win by destroying every enemy building; the game ends after 20 minutes of game time, and a game nobody has won by then is a draw. You act only through the wc3 tools; nobody will answer questions, so never ask or wait for confirmation.\n\nGame time is frozen until you call advance, so think as long as you like. The loop: get_state shows your resources, units, structures, idle workers and what happened; act queues orders for your units by id; advance sends them and lets 1-60 game seconds pass (a few seconds in fights, longer while the economy runs). list_units shows ids, positions and orders; list_units with details=true shows what a unit can train, build, research and cast; resources lists gold mines and trees; lookup gives any type's cost, requirements and stats. Coordinates are the game's world units: copy them from the tools' output. Types can be given by name: train {\"type_id\": \"Peasant\"}, build {\"type_id\": \"Farm\", \"x\": ..., \"y\": ..., \"auto_place\": true}. When the game refuses an order, advance says why; don't repeat it unchanged.\n\nStart by putting idle workers to work (harvest the gold mine, and trees for lumber), keep training workers, build supply before you are food-capped, then an army with a hero, and attack the enemy base (its start location is in get_state). Keep playing until advance reports GAME OVER, then reply with the result.",
     "depends_on": [
       "start",
       "agent"
     ],
     "agent_name": "wc3",
-    "model": "anthropic/claude-sonnet-5-5"
+    "model": "anthropic/claude-sonnet-5-5",
+    "fail_task_on_error": false
   },
   {
     "id": "finish",
@@ -105,7 +106,7 @@
     "id": "grade",
     "type": "rts_grade",
     "env_id": "wc3",
-    "rubric": "melee",
+    "rubric": "outcome",
     "verifier_id": "wc3",
     "depends_on": [
       "finish"
