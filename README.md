@@ -3,12 +3,12 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Built on the AgentEnv Framework](https://img.shields.io/badge/built%20on-AgentEnv%20Framework-6f42c1)](https://www.agentenvframework.com)
 
-![Two scripted players fight at the river on Echo Isles in the game's own picture, with the minimap, a score bug with each side's score and the clock, and a sidebar of each player's resources and the fights so far](docs/media/broadcast-smoke.gif)
+![In the game's own picture, Red's footmen and Blue's grunts fight at the river on Echo Isles and two footmen fall; then Blue's grunts chase Red's peasants around its gold mine](docs/media/broadcast-smoke.gif)
 
-*The `broadcast-smoke` task on the real game, at 3× speed: Red's footmen meet Blue's grunts at the river, broadcast
-with [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)'s `start_broadcast`. The game's own
-picture is the env's spectator view; the overlay adds the score bug with the game clock, and this env's own sidebar
-as a page widget. Two scripted players, no model cost.*
+*The `broadcast-smoke` task on the real game, at about 3× speed: Red's four footmen fight Blue's three grunts at the
+river, then Blue's survivors raid Red's peasants. Two scripted players, no model cost. Cropped from the match's
+broadcast, recorded with [agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)'s
+`start_broadcast`; the whole broadcast, with its overlay, is at the top of that README.*
 
 AI agents play Warcraft III: The Frozen Throne through [wc3env](https://github.com/pwang724/wc3env).
 - **Who they play:** the game's own AI, each other (model against model), as a team, in a free-for-all, or in short
