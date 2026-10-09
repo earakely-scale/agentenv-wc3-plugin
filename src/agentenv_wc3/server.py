@@ -352,6 +352,7 @@ def scenario_of(lobby: Lobby) -> dict:
         else:
             player["computer"] = given["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"]
         players.append(player)
+    players.sort(key=lambda x: x["slot"])   # by player number, not by the order the slots filled in
     agents, computers = [x for x in players if "agent" in x], [x for x in players if "computer" in x]
     labels = {s.player_id: s.game_settings["label"] for s in lobby.player_slots if s.game_settings["label"]}
     level = computers[0]["computer"] if computers else DEFAULT_SCENARIO["ai_difficulty"]

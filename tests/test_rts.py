@@ -20,7 +20,7 @@ from agent_env.artifact import FileArtifact
 from agentenv_game import MATCH
 from agentenv_game.steps import CancelMatchTaskStep, FinishMatchTaskStep, SaveMatchFilesTaskStep
 from agentenv_protocol import client
-from conftest import new_game
+from conftest import new_game, slot_request
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from test_steps import deployed, fill_and_close, open_match, run_context
@@ -959,3 +959,16 @@ def test_the_env_imports_without_agent_env_as_its_image_has_only_the_protocol():
               "agentenv_rts.checks")
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr[-2000:]
+
+
+async def test_the_first_agent_is_the_lowest_player_number_whatever_order_the_slots_filled_in(env_vars):
+    env = WC3Env()
+    try:
+        env.new_lobby({"time_limit_seconds": 120})
+        env.fill_slot(slot_request(1, {"agent": "opponent", "race": "orc", "omniscient": True}))
+        env.fill_slot(slot_request(0, {"agent": "wc3", "race": "human"}))
+        await env.close_lobby()
+        assert env.lead == 0 and [x["slot"] for x in env.players] == [0, 1]
+        assert env._staged_player("opponent") == 1 and env._staged_player(None) == 0
+    finally:
+        await env.close()
