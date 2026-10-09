@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 from test_steps import deployed
 
@@ -89,3 +90,27 @@ def test_old_tool_results_are_trimmed_all_at_once():
     agent.trim(chat)
     kept = [m["content"] for m in chat if m["role"] == "tool"]
     assert kept[:-agent.KEEP] == [agent.TRIMMED] * (10 - agent.KEEP) and agent.TRIMMED not in kept[-agent.KEEP:]
+
+
+async def test_a_model_call_that_times_out_is_retried(monkeypatch):
+    agent, calls, chat = llm(), [], [{"role": "user", "content": "go"}]
+
+    def answer(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("no answer", request=request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}], "usage": {"total_tokens": 3}},
+                              headers={"x-litellm-response-cost": "0.01"})
+
+    async def no_wait(seconds):
+        pass
+
+    monkeypatch.setattr(agent.asyncio, "sleep", no_wait)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        message, usage, cost = await agent.complete(http, "http://models", "k", "m", chat, [])
+    assert (message["content"], usage, cost, len(calls)) == ("hi", {"total_tokens": 3}, 0.01, 2)
+    calls.clear()
+    monkeypatch.setattr(agent, "RETRIES", 1)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        with pytest.raises(httpx.ReadTimeout):
+            await agent.complete(http, "http://models", "k", "m", chat, [])

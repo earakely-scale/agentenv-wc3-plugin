@@ -44,6 +44,7 @@ SYSTEM = ("You play a real-time strategy game through the tools you are given; t
 NUDGE = "The game is not over yet: keep playing through the tools until it is."
 TRIMMED = "[An earlier result, trimmed to save room: get_state shows the game as it is now.]"
 NUDGES, KEEP, TRIM_CHARS, MAX_TOKENS, RETRIES = 3, 6, 120_000, 4096, 4
+MODEL_SECONDS = 180   # one model turn; a call that hangs longer is retried
 TRAJECTORY_LIMIT = 2000
 
 
@@ -89,13 +90,19 @@ def trim(chat: list[dict]) -> None:
 
 async def complete(http: httpx.AsyncClient, base: str, key: str, model: str, chat: list[dict],
                    tools: list[dict]) -> tuple[dict, dict, float]:
-    """One model turn: its message, its token usage and its cost (LiteLLM's response-cost header)."""
+    """One model turn: its message, its token usage and its cost (LiteLLM's response-cost header). A call that times
+    out or meets a server error is retried a few times."""
     for attempt in range(RETRIES):
-        r = await http.post(f"{base}/chat/completions", headers={"Authorization": f"Bearer {key}"},
-                            json={"model": model, "messages": outgoing(chat), "tools": tools,
-                                  "max_tokens": MAX_TOKENS})
-        if r.status_code not in (429, 500, 502, 503, 504) or attempt == RETRIES - 1:
-            break
+        try:
+            r = await http.post(f"{base}/chat/completions", headers={"Authorization": f"Bearer {key}"},
+                                json={"model": model, "messages": outgoing(chat), "tools": tools,
+                                      "max_tokens": MAX_TOKENS})
+        except httpx.TimeoutException:
+            if attempt == RETRIES - 1:
+                raise
+        else:
+            if r.status_code not in (429, 500, 502, 503, 504) or attempt == RETRIES - 1:
+                break
         await asyncio.sleep(5 * 2 ** attempt)
     r.raise_for_status()
     body = r.json()
@@ -136,9 +143,10 @@ class Player:
     async def play(self, prompt: str) -> None:
         self.chat = [{"role": "user", "content": prompt}]
         headers = self.server.get("headers") or {}
+        model_timeout = httpx.Timeout(MODEL_SECONDS, connect=30)
         async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(300, connect=30)) as mcp_http, \
                 streamable_http_client(self.server["url"], http_client=mcp_http) as (read, write, _), \
-                ClientSession(read, write) as mcp, httpx.AsyncClient(timeout=600) as http:
+                ClientSession(read, write) as mcp, httpx.AsyncClient(timeout=model_timeout) as http:
             await mcp.initialize()
             tools = tools_of((await mcp.list_tools()).tools)
             while self.stats["turns"] < self.max_turns:
