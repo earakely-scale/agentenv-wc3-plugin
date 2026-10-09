@@ -89,44 +89,38 @@ agent-env wc3 watch --open                   # while a game runs: its live view
 agent-env wc3 recordings --out match         # afterwards: the run's match files and broadcast, in ./match
 ```
 
-Always name a task: without `--task`, `agent-env run wc3` runs every task in the bundle.
+Name a task or an eval: with neither, `agent-env run wc3` runs every eval in the bundle, which is every drill once.
 
 ## Play the real game (x86-64 Linux)
 
 The game runs under Wine in Docker, on an **x86-64 Linux host** (a laptop, a server or a cloud VM). Apple Silicon and
-other arm64 machines can't run it; drive a Linux host from them instead. Getting the game files ready takes one pass
-on a Windows machine, about an hour, once.
+other arm64 machines can't run it; drive a Linux host from them instead. The one step that still needs Windows is
+Battle.net's download of the game; everything else runs on the Linux host.
 
-**1. Get the game.** Buy Warcraft III: Reforged on Battle.net (it includes the classic game). In the Battle.net app,
-open the Warcraft III page, choose **Warcraft III - Legacy TFT 1.29** in the Game Version dropdown, and install it.
-That is the one build wc3env supports (`1.29.2.9232`, checked by its executable's hash), and installing it also puts
-the activation files `roc.w3k` and `tft.w3k` in its folder.
+**1. Get the game.** Buy Warcraft III: Reforged on Battle.net (it includes the classic game). In the Battle.net app on
+a Windows machine (a cloud Windows VM works), open the Warcraft III page, choose **Warcraft III - Legacy TFT 1.29** in
+the Game Version dropdown, and install it. That is the one build wc3env supports (`1.29.2.9232`, checked by its
+executable's hash), and installing it also puts the activation files `roc.w3k` and `tft.w3k` in its folder. Copy the
+installed folder (`C:\Program Files (x86)\Warcraft III`, about 1.2 GB) to the Linux host. Battle.net under Wine on
+the Linux host itself installs and opens, but its login page doesn't draw without a GPU yet.
 
-**2. Prepare the game files (once, on Windows x64).** Any Windows machine works, including a cloud Windows VM. Install
-64-bit Python 3.11+ and Visual Studio Build Tools 2022 with "Desktop development with C++", then, in wc3env at the
-commit this plugin pins
-([`eb660aa`](https://github.com/pwang724/wc3env/tree/eb660aa558fb6e5c639a1ff404082f7dc0ee483e)):
-
-```powershell
-git apply path\to\agentenv-wc3-plugin\patches\wc3env-realtime-hold.patch   # optional, see below
-wc3hook\build.bat                                   # builds and tests the injected hook
-python docker\prepare.py --game-dir "C:\Program Files (x86)\Warcraft III (Legacy)" --output build\docker-context
-```
-
-The patch lets a realtime game wait at its start until every player has made its first move (the hook's `hold` and
-`release`). Without it, a realtime game starts when it is created; stepping games wait either way.
-
-`prepare.py` checks the executable's hash and copies only the game files and stock maps the worker needs, never the
-activation files (see wc3env's [docker/README.md](https://github.com/pwang724/wc3env/blob/main/docker/README.md)).
-
-**3. Build the worker image (on the Linux host).** Copy `build\docker-context` there:
+**2. Build the worker image (on the Linux host).**
 
 ```bash
-chmod -R a+rX docker-context                 # the image's build runs as a non-root user, which must read it
-docker build --platform linux/amd64 --target environment -t wc3-worker:local docker-context
+agent-env wc3 build-worker "$HOME/Warcraft III"   # wc3-worker:local, about five minutes
 ```
 
-**4. Store the activation files.** `license import` writes them into the file of agent-env's local secret store,
+`build-worker` takes wc3env at the commit this plugin pins
+([`eb660aa`](https://github.com/pwang724/wc3env/tree/eb660aa558fb6e5c639a1ff404082f7dc0ee483e)) and applies
+`patches/wc3env-realtime-hold.patch`, which lets a realtime game wait at its start until every player has made its
+first move (the hook's `hold` and `release`). It downloads wc3env's hook, `wc3hook.dll`, as this repository's
+[Hook workflow](.github/workflows/hook.yml) built it from that commit and patch with MSVC on GitHub's Windows runner
+and released it, and checks it against the SHA-256 pinned in `agentenv_wc3/cli.py`. Then wc3env's `prepare.py` checks
+the executable's hash and copies only the game files and stock maps the worker needs, never the activation files, and
+Docker builds the image. To build the hook yourself instead, run `wc3hook\build.bat` in that wc3env checkout on
+Windows with Visual Studio Build Tools 2022.
+
+**3. Store the activation files.** `license import` writes them into the file of agent-env's local secret store,
 which `.agentenv/config.toml` names (an absolute path; the import creates the file):
 
 ```toml
@@ -136,8 +130,7 @@ config = { file_path = "/home/you/.config/agentenv/secrets.yaml" }
 ```
 
 ```bash
-mkdir -p ~/.wc3-license && cp roc.w3k tft.w3k ~/.wc3-license/ && chmod 600 ~/.wc3-license/*
-agent-env wc3 license import ~/.wc3-license  # stores them as the secrets WC3_ROC_W3K and WC3_TFT_W3K
+agent-env wc3 license import "$HOME/Warcraft III"  # stores roc.w3k and tft.w3k as WC3_ROC_W3K and WC3_TFT_W3K
 agent-env wc3 license show                   # whether they are there, never what they contain
 ```
 
@@ -154,7 +147,7 @@ How the activation files reach the game:
   and how to store it. `add_license` reads no secret when the env lacks nothing: on the fake game, or with the files
   mounted in the env's container at `WC3_LICENSE_DIR` (`/run/wc3-license`), as wc3env's own image takes them.
 
-**5. Play.**
+**4. Play.**
 
 ```bash
 agent-env wc3 check                          # the host, your worker image, your activation files
@@ -723,8 +716,9 @@ extensions and `/live`, gives agentenv-game-env its spectator card and match fil
   provider sets neither, and the real game has run without them so far.
 - **The real game from a Mac:** the env on a remote x86-64 Linux host (a Modal VM sandbox, or a remote Docker host).
 - **Upstream seams in wc3agent:** an injectable session and micro transport, so the agent needs no patching.
-- **A Linux-only build of wc3env's inputs**, so no Windows machine is needed (the hook with MinGW, StormLib on
-  Linux).
+- **Battle.net on the Linux host.** Its installer and launcher run under Wine in a container, but on a host with no
+  GPU the login page's embedded browser doesn't draw (its renderer restarts in a loop, with Mesa's software Vulkan
+  and DXVK too), so the game's download still needs Windows. The rest of the setup runs on Linux.
 
 ## Development
 
