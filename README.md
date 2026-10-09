@@ -200,12 +200,12 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
 | `smoke` | nobody: `finish_match` plays the game out | 2 minutes | 11 s, $0 (40 s before the stepped clock ran at 2048x) |
 | `broadcast-smoke` | two `wc3-scripted` agents (attack and raid), staged armies, a recorded broadcast in the game's own picture | 2 minutes, stepped in lockstep, graded per player (`dense`) | 4 min, $0; the same game every time it ran, a draw at the limit; a 1080p broadcast of about 2 minutes |
 | `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 75 s (3 min before the 2048x clock), $0.10 (52 model turns, prompt-cached); a draw: survived to the limit, outscored by the AI 8.7k to 4.8k. In `first-eval`, 6 games: 6 draws, $0.11 a game |
-| `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
+| `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | in 30-minute games against normal: Sonnet 5.5 lost at 22.8 min ($1.22), Opus 5.5 drew ($2.36). The [ladder](docs/evals/ladder.md), 36 games of three low-cost models against easy, normal and insane: no win, $0.10 to $0.34 a game |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | 13 min, $0.80 with the prompt cache (254 decisions; $2.40 before it); a draw; wc3agent's report and session kept |
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
 | `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime, with the game's picture | 11 min, ~$11 |
 | `duel-quick` | two wc3agents, Haiku 4.5 for both models, Human against Orc | 5 minutes, stepped in lockstep, graded per player (`dense`) | 19 min, $4.70 |
-| `mirror-*` (4 races) | `wc3-llm` with Haiku 4.5 against `wc3-scripted` (Warcraft's way of fighting); `-baseline`: scripted on both sides | wc3agent's mirror duels: two identical 60-food armies of one race, decided once one is down to 40% of the other's strength, a draw at 150 s | Orc with Haiku: 3.5 min, $0.23, lost at 70 s (kept 18% of its army, destroyed 22% of the other); the Orc baseline: 15 s, $0 |
+| `mirror-*` (4 races) | `wc3-llm` with Haiku 4.5 against `wc3-scripted` (Warcraft's way of fighting); `-baseline`: scripted on both sides | wc3agent's mirror duels: two identical 60-food armies of one race, decided once one is down to 40% of the other's strength, a draw at 150 s | [duels](docs/evals/duels.md): Haiku 4.5 won 2 and drew 1 of 9, $0.31 a duel; DeepSeek 3 of 9, GPT-5.4 mini 0 of 8. The baselines, Warcraft against Warcraft: player 0 59% over 48 duels, about 80 s of game time, $0 |
 | `drill-*` (25) | `wc3-llm` with Haiku 4.5, against the AI or the scripted `wc3-scripted` | wc3agent's 25 scenarios as drills, one skill each: 1.5 to 10 minutes, graded on the share of their checks met | played by wc3agent before the drills moved to `wc3-llm`: `drill-fight-even` 11 min, $2.30, 0.6; `drill-creep-easy` 10 min, $1.90, 0.67 |
 
 `agent-env run wc3 --task <task>` runs one, and `--model <model>` plays it on another model without editing it (for
@@ -768,7 +768,8 @@ extensions and `/live`, gives agentenv-game-env its spectator card and match fil
   - Replay playback: the `.w3g` and its startup options are kept, but playing one back to re-observe it isn't wired.
   - wc3env's binary observations, its `StepPool` and vector rollouts (many games per host, for RL), and its Modal VM
     and GCP runners.
-  - The mirror duels run on Echo Isles, with the creeps in sight cleared, not on wc3agent's flat arena map.
+  - The mirror duels run on Echo Isles, with the creeps in sight cleared and odd seeds swapping the armies' ground,
+    not on wc3agent's flat arena map: building it needs StormLib, which wc3env's map tools load from a Windows DLL.
   - A human player slot; wc3agent's commander feedback and its decision-panel replay.
 - **Battle.net on the Linux host.** Its installer and launcher run under Wine in a container, but on a host with no
   GPU the login page's embedded browser doesn't draw (its renderer restarts in a loop, with Mesa's software Vulkan
