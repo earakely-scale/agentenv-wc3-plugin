@@ -167,7 +167,9 @@ It works in any match, not only drills: a raiding opponent beside the game's AI,
 **No early finish.** Drills run to their time limit (1.5-5 minutes), and `finish_match` plays out what the agents
 leave. The "first time" metrics record when a goal was met, so nothing is lost.
 
-**The goal** is the prompt. `wc3-macro-micro` passes its prompt to wc3agent as the goal (today it ignores it).
+**The goal** is the prompt: the drill's goal, then how to play through the tools for the drill's race (`prompts.py`).
+The drills are played by `wc3-llm`; `wc3-macro-micro` can play one too, with `WC3_GOAL=prompt`, which pins the prompt
+as wc3agent's goal.
 
 **The 25:** `agent-env wc3 drills import` converts wc3agent's definitions once into 25 task files in the bundle
 (`drill-fight-even`, `drill-defend-base-orc`, ...), which we own from then on.
@@ -176,18 +178,19 @@ leave. The "first time" metrics record when a goal was met, so nothing is lost.
 [`drill-fight-even.json`](../src/agentenv_wc3/bundles/wc3/tasks/drill-fight-even.json):
 
 1. `deploy_env`, then two `deploy_agent`s, both with `"env_ids": []` (each player slot gives its agent its address):
-   the player, `wc3-macro-micro` with `WC3_GOAL=prompt`, and the attacker, `wc3-scripted` with `SCRIPT=attack`.
+   the player, `wc3-llm`, and the attacker, `wc3-scripted` with `SCRIPT=attack`.
 2. `add_license`, and `open_lobby`: 150 game seconds, stepping (so the two play in lockstep). Then a player slot
    each, `wc3` as `"0"`, `human`, and `opponent` as `"1"`, `orc` with `omniscient`, and `close_lobby`.
 3. `stage`: an `apply_server_config` step calling `urn:wc3:stage/v1` with the hero, its level and potion, the army
    and the enemy army, by named places and handles.
 4. A `prompt_agent` per agent: the player's prompt is the drill's goal; the attacker's is ignored (an A2A agent
-   plays only when prompted).
+   plays only when prompted). Both tolerate a failure, so a drill whose agent fails is still played out and graded.
 5. `finish_match`, then `rts_grade` with `rubric: checks` and wc3agent's five checks, then the replay and the
    recording.
 
-On the real game Haiku 4.5 (macro and micro) destroyed the enemy army and kept its hero alive but lost 7 units and
-kept 31% of its army's strength: 3 of the 5 checks, 0.6.
+On the real game, played by `wc3-macro-micro` before the drills moved to `wc3-llm`, Haiku 4.5 (macro and micro)
+destroyed the enemy army and kept its hero alive but lost 7 units and kept 31% of its army's strength: 3 of the 5
+checks, 0.6.
 
 ## The env's end-of-game summary (`data/get`, what `rts_grade` reads)
 
