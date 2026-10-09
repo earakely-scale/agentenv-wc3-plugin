@@ -1,0 +1,5 @@
+tasks = [
+  "drill-fight-even",
+  "drill-fight-outnumbered",
+  "drill-hero-in-danger",
+]

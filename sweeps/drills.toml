@@ -1,0 +1,13 @@
+# Every drill, played by each model: 25 short staged tasks, each graded on the share of its checks met and grouped
+# by skill in the report. Drills keep their own boards, races and prompts.
+# agent-env wc3 sweep generate sweeps/drills.toml runs/drills
+# agent-env wc3 sweep run runs/drills --budget <dollars>
+name = "drills"
+template = "drill-*"
+models = [
+  "fireworks_ai/deepseek-v4p1-flash",
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.4-mini",
+]
+prompt = ""
+max_cost_usd = 0.5

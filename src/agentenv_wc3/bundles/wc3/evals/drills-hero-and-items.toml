@@ -1,0 +1,5 @@
+tasks = [
+  "drill-hero-revive",
+  "drill-loot",
+  "drill-shopping",
+]

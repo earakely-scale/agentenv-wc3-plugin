@@ -1,0 +1,10 @@
+tasks = [
+  "drill-build-supply",
+  "drill-build-supply-orc",
+  "drill-build-supply-undead",
+  "drill-build-supply-nightelf",
+  "drill-build-production",
+  "drill-spend-and-tech",
+  "drill-opening",
+  "drill-build-repair",
+]

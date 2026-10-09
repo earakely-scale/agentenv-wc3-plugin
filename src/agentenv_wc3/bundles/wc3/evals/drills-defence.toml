@@ -1,0 +1,8 @@
+tasks = [
+  "drill-defend-base",
+  "drill-defend-base-human",
+  "drill-defend-base-orc",
+  "drill-defend-base-undead",
+  "drill-defend-base-nightelf",
+  "drill-build-towers",
+]

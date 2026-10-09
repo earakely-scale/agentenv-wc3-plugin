@@ -1,6 +1,7 @@
 """wc3agent's scenarios as drill tasks: each definition becomes an ordinary task of player slots, a stage step
-(`urn:wc3:stage/v1`), an opponent and a `checks` rubric. `agent-env wc3 drills import` writes them into the bundle once;
-the bundle owns them from then on."""
+(`urn:wc3:stage/v1`), an opponent and a `checks` rubric, played by `wc3-llm` like the full games. `agent-env wc3 drills
+import` writes them into the bundle once; the bundle owns them from then on. Each drill tests one skill, and the
+bundle has an eval per skill."""
 
 from __future__ import annotations
 
@@ -9,12 +10,15 @@ import math
 from pathlib import Path
 
 from .license import LICENSE_SECRETS
+from .prompts import drill_prompt
 
 DEFINITIONS = Path("wc3agent/src/wc3agent/scenarios/definitions")   # in a wc3env checkout
 TASKS = Path(__file__).with_name("bundles") / "wc3" / "tasks"
+EVALS = TASKS.with_name("evals")
 MAP = "(2)EchoIsles.w3x"   # wc3agent's MeleeConfig default, which its scenarios run on
 AI_DIFFICULTY = "easy"   # likewise; most drills pause the AI anyway
 MODEL = "anthropic/claude-haiku-4-5"
+AGENT = "wc3-llm"
 WALL_SECONDS_PER_GAME_SECOND = 12   # what the bundle's stepped tasks allow an agent
 RACES = {"human": "human", "orc": "orc", "undead": "undead", "nightelf": "night_elf"}
 SCRIPTED = ("attack", "raid")
@@ -23,10 +27,33 @@ TIMED = {"camp_cleared_time"}   # metrics that say when their condition first he
 KEYS = {"title", "goal", "minutes", "setup", "checks", "race", "opponent", "opponent_after_seconds", "finish",
         "finish_after_seconds", "skip_seconds"}
 METRIC_HANDLES = ("army", "hero", "enemy")   # what army_kept_percent and enemy_army_destroyed_percent read
+SKILLS = {
+    "economy": ("build_supply", "build_supply_orc", "build_supply_undead", "build_supply_nightelf",
+                "build_production", "spend_and_tech", "opening", "build_repair"),
+    "map-control": ("expansion", "scouting"),
+    "defence": ("defend_base", "defend_base_human", "defend_base_orc", "defend_base_undead", "defend_base_nightelf",
+                "build_towers"),
+    "combat": ("fight_even", "fight_outnumbered", "hero_in_danger"),
+    "creeping": ("creep_easy", "creep_hard"),
+    "hero-and-items": ("hero_revive", "loot", "shopping"),
+    "full-game": ("full_game_easy",),
+}
 
 
 def task_name(name: str) -> str:
     return "drill-" + name.replace("_", "-")
+
+
+def skill(task: str) -> str | None:
+    """The skill a drill task tests: drill-build-supply → economy; None for a task that is no drill."""
+    return next((group for group, names in SKILLS.items() if task in map(task_name, names)), None)
+
+
+def evals() -> dict[str, str]:
+    """The bundle's drill evals by file name, one per skill. They share no task: `agent-env run` with neither a task
+    nor an eval runs every eval, so every drill once."""
+    return {f"drills-{group}.toml": "tasks = [\n" + "".join(f'  "{task_name(n)}",\n' for n in names) + "]\n"
+            for group, names in SKILLS.items()}
 
 
 def _place(op: dict) -> dict:
@@ -93,8 +120,8 @@ def convert(name: str, definition: dict) -> list[dict]:
     timeout = max(1800, WALL_SECONDS_PER_GAME_SECOND * seconds)
     ops = _stage_ops(name, definition)
     steps = [{"id": "deploy", "type": "deploy_env", "env_id": "wc3"},
-             {"id": "agent", "type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": "wc3-macro-micro",
-              "env_ids": [], "env_vars": {"WC3_MICRO_MODEL": MODEL, "WC3_GOAL": "prompt"}, "depends_on": ["deploy"]}]
+             {"id": "agent", "type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": AGENT, "env_ids": [],
+              "depends_on": ["deploy"]}]
     if scripted:
         steps.append({"id": "opponent", "type": "deploy_agent", "agent_name": "opponent",
                       "a2a_agent_id": "wc3-scripted", "env_ids": [],
@@ -127,7 +154,8 @@ def convert(name: str, definition: dict) -> list[dict]:
                                       "args": {"warmup_seconds": warmup, "ops": ops}}],
                       "depends_on": ["start"]})
     steps.append({"id": "play", "type": "prompt_agent", "agent_name": "wc3", "model": MODEL, "prompt_id": task,
-                  "prompt": definition["goal"], "timeout_seconds": timeout, "depends_on": [start]})
+                  "prompt": drill_prompt(definition["goal"], RACES[race]), "timeout_seconds": timeout,
+                  "depends_on": [start], "fail_task_on_error": False})
     if scripted:
         steps.append({"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
                       "prompt_id": f"{task}-opponent", "prompt": "Play with the script.",

@@ -8,12 +8,8 @@
     "id": "agent",
     "type": "deploy_agent",
     "agent_name": "wc3",
-    "a2a_agent_id": "wc3-macro-micro",
+    "a2a_agent_id": "wc3-llm",
     "env_ids": [],
-    "env_vars": {
-      "WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5",
-      "WC3_GOAL": "prompt"
-    },
     "depends_on": [
       "deploy"
     ]
@@ -160,11 +156,12 @@
     "agent_name": "wc3",
     "model": "anthropic/claude-haiku-4-5",
     "prompt_id": "drill-defend-base",
-    "prompt": "A raiding party is attacking your workers while your army stands on the far side of the base. Bring the army back, kill the raiders, and lose as few workers and buildings as you can.",
+    "prompt": "A raiding party is attacking your workers while your army stands on the far side of the base. Bring the army back, kill the raiders, and lose as few workers and buildings as you can.\n\nGame time is frozen until you call advance, so think as long as you like. The loop: get_state shows your resources, units, structures, idle workers and what happened; act queues orders for your units by id; advance sends them and lets 1-60 game seconds pass (a few seconds in fights, longer while the economy runs). list_units shows ids, positions and orders; list_units with details=true shows what a unit can train, build, research and cast; resources lists gold mines and trees; lookup gives any type's cost, requirements and stats. Coordinates are the game's world units: copy them from the tools' output. Types can be given by name: train {\"type_id\": \"Peasant\"}, build {\"type_id\": \"Farm\", \"x\": ..., \"y\": ..., \"auto_place\": true}. When the game refuses an order, advance says why; don't repeat it unchanged.\n\nYou act only through the wc3 tools; nobody will answer questions, so never ask or wait for confirmation. Keep playing until advance reports GAME OVER, then reply with the result.",
     "timeout_seconds": 1800,
     "depends_on": [
       "stage"
-    ]
+    ],
+    "fail_task_on_error": false
   },
   {
     "id": "play-opponent",

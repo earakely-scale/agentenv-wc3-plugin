@@ -1,0 +1,4 @@
+tasks = [
+  "drill-expansion",
+  "drill-scouting",
+]

@@ -1,15 +1,17 @@
-"""Sweeps: a task set crossed from one template task, and an eval over it (phase 4 of docs/task-design.md).
+"""Sweeps: a task set crossed from template tasks, and an eval over it (phase 4 of docs/task-design.md).
 
-A sweep spec (TOML) names a template task (a bundled one, such as vs-ai-quick, or a task file), the axes it varies
-(models, maps, races, opponents, seeds) and a per-game cost cap. `generate` writes one task per combination into a
-bundle folder, with an eval over them and a manifest of each task's axes. `run` plays the eval under a spend budget,
-one `agent-env run` per game: it never starts a game that could take the spend past the budget at the per-game cap.
-`report` tabulates the outcomes by model, AI level, map and seed: the ladder is the highest AI level a model beats.
+A sweep spec (TOML) names its template tasks (a bundled one, such as vs-ai-quick, a glob of bundled ones, such as
+drill-*, or a task file), the axes it varies (models, maps, races, opponents, seeds; an axis left out keeps each
+template's own) and a per-game cost cap. `generate` writes one task per combination into a bundle folder, with an eval
+over them and a manifest of each task's axes. `run` plays the eval under a spend budget, one `agent-env run` per game:
+it never starts a game that could take the spend past the budget at the per-game cap. `report` tabulates full games
+by model, AI level, map and seed (the ladder is the highest AI level a model beats), and drills by model and skill.
 """
 
 from __future__ import annotations
 
 import copy
+import fnmatch
 import itertools
 import json
 import re
@@ -23,11 +25,9 @@ from pathlib import Path
 from agent_env.store.routing import namespace_routing
 from agent_env.task.store import get_task_instance_store
 
-from .drills import TASKS
+from .drills import SKILLS, TASKS, skill
+from .prompts import HOW_TO_PLAY, PLAY_TO_THE_END, RACES, SUPPLY, WORKER
 
-RACES = {"human": "Human", "orc": "Orc", "undead": "Undead", "night_elf": "Night Elf"}
-WORKER = {"human": "Peasant", "orc": "Peon", "undead": "Acolyte", "night_elf": "Wisp"}
-SUPPLY = {"human": "Farm", "orc": "Orc Burrow", "undead": "Ziggurat", "night_elf": "Moon Well"}
 DIFFICULTIES = ("easy", "normal", "insane")
 OUTCOMES = {"victory": "win", "draw": "draw", "time_limit": "draw", "defeat": "loss"}
 BEATEN = 0.75   # a level is beaten when at least three in four of its games are won
@@ -35,18 +35,10 @@ PROMPT = (
     "You play Warcraft III: The Frozen Throne as {race} on {map}, a {players}-player map, against the game's own "
     "{difficulty} AI ({opponent}). You win by destroying every enemy building; the game ends after {minutes} "
     "minutes of game time, and a game nobody has won by then is a draw. You act only through the wc3 tools; "
-    "nobody will answer questions, so never ask or wait for confirmation.\n\n"
-    "Game time is frozen until you call advance, so think as long as you like. The loop: get_state shows your "
-    "resources, units, structures, idle workers and what happened; act queues orders for your units by id; advance "
-    "sends them and lets 1-60 game seconds pass (a few seconds in fights, longer while the economy runs). list_units "
-    "shows ids, positions and orders; list_units with details=true shows what a unit can train, build, research and "
-    "cast; resources lists gold mines and trees; lookup gives any type's cost, requirements and stats. Coordinates are "
-    "the game's world units: copy them from the tools' output. Types can be given by name: train "
-    "{{\"type_id\": \"{worker}\"}}, build {{\"type_id\": \"{supply}\", \"x\": ..., \"y\": ..., \"auto_place\": true}}. "
-    "When the game refuses an order, advance says why; don't repeat it unchanged.\n\n"
+    "nobody will answer questions, so never ask or wait for confirmation.\n\n" + HOW_TO_PLAY + "\n\n"
     "Start by putting idle workers to work (harvest the gold mine, and trees for lumber), keep training workers, build "
     "supply before you are food-capped, then an army with a hero, and attack the enemy base (its start location is in "
-    "get_state). Keep playing until advance reports GAME OVER, then reply with the result.")
+    "get_state). " + PLAY_TO_THE_END)
 SPEC_KEYS = {"name", "template", "models", "maps", "races", "opponents", "seeds", "time_limit_seconds",
              "max_cost_usd", "player_step", "prompt"}
 INSTANCE = re.compile(r"(\d+(?:\.\d+)?)s, instance (\S+)")
@@ -57,9 +49,9 @@ class Spec:
     name: str
     template: str
     models: list[str]
-    maps: list[str] = field(default_factory=lambda: ["(2)EchoIsles.w3x"])
-    races: list[str] = field(default_factory=lambda: ["human"])
-    opponents: list[dict] = field(default_factory=lambda: [{"computer": "easy", "race": "orc"}])
+    maps: list[str] | None = None
+    races: list[str] | None = None
+    opponents: list[dict] | None = None
     seeds: list[int] = field(default_factory=lambda: [1])
     time_limit_seconds: int | None = None
     max_cost_usd: float = 0.5
@@ -76,23 +68,50 @@ class Spec:
             raise ValueError("a sweep's name is lowercase letters, digits and dashes")
         if not spec.models:
             raise ValueError("a sweep needs at least one model")
-        for race in spec.races:
+        for race in spec.races or ():
             if race not in RACES:
                 raise ValueError(f"race {race!r} is not one of {', '.join(RACES)}")
-        for o in spec.opponents:
+        for o in spec.opponents or ():
             if o.get("computer") not in DIFFICULTIES or o.get("race") not in RACES:
                 raise ValueError(f"an opponent is {{computer = easy|normal|insane, race = ...}}, got {o!r}")
+        templates = spec.templates()
+        if not templates:
+            raise ValueError(f"no bundled task matches the template {spec.template!r}")
+        if spec.prompt and (drills := [t for t in templates if skill(t)]):
+            raise ValueError(f"drills keep their own prompts ({', '.join(drills)}): set prompt = \"\"")
         return spec
 
-    def steps(self) -> list[dict]:
+    def templates(self) -> dict[str, list[dict]]:
+        """The template tasks' steps by name: a task file, or the bundled tasks the template names or matches."""
         path = Path(self.template)
-        path = path if path.suffix == ".json" else TASKS / f"{self.template}.json"
-        return json.loads(path.read_text())
+        if path.suffix == ".json":
+            return {path.stem: json.loads(path.read_text())}
+        names = sorted(p.stem for p in TASKS.glob("*.json") if fnmatch.fnmatchcase(p.stem, self.template))
+        return {n: json.loads((TASKS / f"{n}.json").read_text()) for n in names}
 
     def combinations(self) -> list[dict]:
-        """In rounds: every model plays a seed before any plays the next, so a budget that runs out cuts evenly."""
-        return [{"model": m, "map": p, "race": r, "opponent": o, "seed": s}
-                for s, p, r, o, m in itertools.product(self.seeds, self.maps, self.races, self.opponents, self.models)]
+        """In rounds: every model plays a seed before any plays the next, so a budget that runs out cuts evenly. An
+        axis the spec leaves out keeps each template's own."""
+        out = []
+        templates = {name: own(steps, self.player_step) for name, steps in self.templates().items()}
+        for s in self.seeds:
+            for name, mine in templates.items():
+                out += [{"template": name, "model": m, "map": p, "race": r, "opponent": o, "seed": s}
+                        for p, r, o, m in itertools.product(self.maps or [mine["map"]], self.races or [mine["race"]],
+                                                            self.opponents or [mine["opponent"]], self.models)]
+        return out
+
+
+def own(steps: list[dict], player_step: str) -> dict:
+    """A template's own map, its player's race and its computer opponent (None when it has none)."""
+    settings = next(s for s in steps if s["type"] == "open_lobby").get("game_settings", {})
+    play = next(s for s in steps if s["id"] == player_step)
+    slots = [s for s in steps if s["type"] == "add_player_slot"]
+    mine = next(s for s in slots if s.get("player_name") == play.get("agent_name")).get("game_settings", {})
+    ai = next((s.get("game_settings", {}) for s in slots if s["player_kind"] == "ai"), None)
+    return {"map": settings.get("map"), "race": mine.get("faction", "human"),
+            "opponent": None if ai is None else {"computer": ai.get("ai_level") or "normal",
+                                                 "race": ai.get("faction", "orc")}}
 
 
 def short(text: str) -> str:
@@ -103,15 +122,17 @@ def short(text: str) -> str:
 
 
 def task_name(spec: Spec, c: dict) -> str:
-    """The task's name, from the axes the sweep varies."""
+    """The task's name, from the templates and axes the sweep varies."""
     parts = [spec.name]
+    if len(spec.templates()) > 1:
+        parts.append(c["template"].removeprefix("drill-"))
     if len(spec.models) > 1:
         parts.append(short(c["model"]))
-    if len(spec.maps) > 1:
+    if len(spec.maps or ()) > 1:
         parts.append(short(c["map"]))
-    if len(spec.races) > 1:
+    if len(spec.races or ()) > 1:
         parts.append(c["race"].replace("_", ""))
-    if len(spec.opponents) > 1:
+    if len(spec.opponents or ()) > 1:
         parts.append(f"vs-{c['opponent']['computer']}-{c['opponent']['race'].replace('_', '')}")
     if len(spec.seeds) > 1:
         parts.append(f"s{c['seed']}")
@@ -138,7 +159,7 @@ def task_of(spec: Spec, template: list[dict], c: dict, name: str) -> list[dict]:
     opponent, slots = c["opponent"], [s for s in steps if s["type"] == "add_player_slot"]
     mine = next(s for s in slots if s.get("player_name") == play.get("agent_name"))
     mine["game_settings"] = {**mine.get("game_settings", {}), "faction": c["race"]}
-    if ai := next((s for s in slots if s["player_kind"] == "ai"), None):
+    if opponent and (ai := next((s for s in slots if s["player_kind"] == "ai"), None)):
         ai["game_settings"] = {**ai.get("game_settings", {}), "faction": opponent["race"],
                                "ai_level": opponent["computer"]}
     if spec.prompt:
@@ -154,15 +175,16 @@ def task_of(spec: Spec, template: list[dict], c: dict, name: str) -> list[dict]:
 
 def generate(spec: Spec, out: Path) -> list[str]:
     """Writes the sweep's bundle: tasks/<name>.json per combination, evals/<sweep>.toml, and sweep.json."""
-    template = spec.steps()
+    templates = spec.templates()
     (out / "tasks").mkdir(parents=True, exist_ok=True)
     (out / "evals").mkdir(exist_ok=True)
-    agent = next(s for s in template if s["id"] == spec.player_step).get("agent_name")
+    agent = next(s for s in next(iter(templates.values())) if s["id"] == spec.player_step).get("agent_name")
     manifest = {"name": spec.name, "template": spec.template, "max_cost_usd": spec.max_cost_usd, "agent": agent,
                 "player_step": spec.player_step, "tasks": {}}
     for c in spec.combinations():
         name = task_name(spec, c)
-        (out / "tasks" / f"{name}.json").write_text(json.dumps(task_of(spec, template, c, name), indent=2) + "\n")
+        steps = task_of(spec, templates[c["template"]], c, name)
+        (out / "tasks" / f"{name}.json").write_text(json.dumps(steps, indent=2) + "\n")
         manifest["tasks"][name] = c
     (out / "evals" / f"{spec.name}.toml").write_text(
         "tasks = [\n" + "".join(f'  "{n}",\n' for n in manifest["tasks"]) + "]\n")
@@ -274,34 +296,28 @@ def beaten(games_by_level: dict[str, list[dict]]) -> str:
     return best or "none"
 
 
-def report(out: Path) -> str:
-    """The sweep's outcomes as Markdown: by model (ranked on points, a win 1 and a draw 0.5, then on score share), by
-    model and AI level with the highest level beaten, by model and map, and the games that were void."""
-    rows = results(out)
-    if not rows:
-        return "No results yet."
-    models = list(dict.fromkeys(r["model"] for r in rows))
-    maps = list(dict.fromkeys(r["map"] for r in rows))
-    levels = [d for d in DIFFICULTIES if any(r["opponent"]["computer"] == d for r in rows)]
+def mean(xs) -> float | None:
+    xs = [x for x in xs if x is not None]
+    return statistics.fmean(xs) if xs else None
 
-    def mean(xs):
-        xs = [x for x in xs if x is not None]
-        return statistics.fmean(xs) if xs else None
 
-    def sd(xs):
-        xs = [x for x in xs if x is not None]
-        return statistics.stdev(xs) if len(xs) > 1 else 0.0
+def sd(xs) -> float:
+    xs = [x for x in xs if x is not None]
+    return statistics.stdev(xs) if len(xs) > 1 else 0.0
 
-    def share(games):
-        scored = [g for g in games if g.get("score") is not None and g.get("opponent_score") is not None
-                  and g["score"] + g["opponent_score"]]
-        return mean(g["score"] / (g["score"] + g["opponent_score"]) for g in scored)
 
-    manifest = json.loads((out / "sweep.json").read_text())
-    cap, unknown = float(manifest["max_cost_usd"]), sum(r.get("cost_usd") is None for r in rows)
-    lines = [f"Sweep `{manifest['name']}`: {len(rows)} games, ${sum(cost(r, cap) for r in rows):.2f} of model spend"
-             + (f" ({unknown} with no spend recorded, counted at the cap)." if unknown else "."), "",
-             "| Model | Games | Points (mean ± sd) | Won / drawn / lost | Void | Score share | Score vs opponent "
+def share(games: list[dict]) -> float | None:
+    """The mean share of the game's score a model took against its opponent."""
+    return mean(g["score"] / (g["score"] + g["opponent_score"]) for g in games if g.get("score") is not None
+                and g.get("opponent_score") is not None and g["score"] + g["opponent_score"])
+
+
+def games_report(rows: list[dict], cap: float) -> list[str]:
+    """Full games: by model (ranked on points, a win 1 and a draw 0.5, then on score share), by model and AI level with
+    the highest level beaten, and by model and map."""
+    models, maps = list(dict.fromkeys(r["model"] for r in rows)), list(dict.fromkeys(r["map"] for r in rows))
+    levels = [d for d in DIFFICULTIES if any((r.get("opponent") or {}).get("computer") == d for r in rows)]
+    lines = ["| Model | Games | Points (mean ± sd) | Won / drawn / lost | Void | Score share | Score vs opponent "
              f"| Cost a game | At the ${cap:.2f} cap | Turns a game |", "|---|---|---|---|---|---|---|---|---|---|"]
     ranked = sorted(models, key=lambda m: (-(mean(r["grade"] for r in rows if r["model"] == m) or 0),
                                            -(share([r for r in rows if r["model"] == m]) or 0)))
@@ -321,7 +337,8 @@ def report(out: Path) -> str:
     lines += ["", "Won-drawn-lost against each AI level, and the highest level beaten (three in four games won):", "",
               "| Model | " + " | ".join(levels) + " | Highest level beaten |", "|---|" + "---|" * (len(levels) + 1)]
     for m in ranked:
-        by_level = {d: [r for r in rows if r["model"] == m and r["opponent"]["computer"] == d] for d in levels}
+        by_level = {d: [r for r in rows if r["model"] == m and (r.get("opponent") or {}).get("computer") == d]
+                    for d in levels}
         lines.append(f"| {m} | " + " | ".join(won_drawn_lost(by_level[d]) for d in levels) + f" | {beaten(by_level)} |")
     lines += ["", "Points by map, one per seed:", "", "| Model | " + " | ".join(short(p) for p in maps)
               + " | Spread across seeds (mean sd) |", "|---|" + "---|" * (len(maps) + 1)]
@@ -332,6 +349,60 @@ def report(out: Path) -> str:
             cells.append(" ".join("void" if r.get("void") else f"{r['grade']:.2f}" for r in games) or "–")
             spreads.append(sd([r["grade"] for r in games if not r.get("void")]))
         lines.append(f"| {m} | " + " | ".join(cells) + f" | {mean(spreads):.2f} |")
+    return lines
+
+
+def drills_report(rows: list[dict], cap: float) -> list[str]:
+    """Drills: by model (ranked on the share of checks met), by model and skill, and by drill. A drill is passed when
+    every one of its checks is met."""
+    models, drills = list(dict.fromkeys(r["model"] for r in rows)), list(dict.fromkeys(r["template"] for r in rows))
+    skills = [g for g in SKILLS if any(skill(d) == g for d in drills)]
+
+    def graded(model, where=lambda r: True):
+        return [r for r in rows if r["model"] == model and not r.get("void") and where(r)]
+
+    def passed(games):
+        if not games:
+            return "–"
+        return f"{sum(r['grade'] >= 1 for r in games)} of {len(games)}, {mean(r['grade'] for r in games):.0%}"
+
+    ranked = sorted(models, key=lambda m: -(mean(r["grade"] for r in graded(m)) or 0))
+    lines = [f"| Model | Drills | Passed, checks met | Void | Cost a drill | At the ${cap:.2f} cap | Turns a drill |",
+             "|---|---|---|---|---|---|---|"]
+    for m in ranked:
+        mine = [r for r in rows if r["model"] == m]
+        paid, turns = mean(r.get("cost_usd") for r in mine) or 0, mean(r.get("decisions") for r in mine) or 0
+        lines.append(f"| {m} | {len(mine)} | {passed(graded(m))} | {sum(bool(r.get('void')) for r in mine)} "
+                     f"| ${paid:.3f} | {sum((r.get('cost_usd') or 0) >= cap for r in mine)} | {turns:.0f} |")
+    lines += ["", "By skill: drills passed, and the share of checks met:", "",
+              "| Model | " + " | ".join(skills) + " |", "|---|" + "---|" * len(skills)]
+    for m in ranked:
+        lines.append(f"| {m} | " + " | ".join(passed(graded(m, lambda r, g=g: skill(r["template"]) == g))
+                                             for g in skills) + " |")
+    lines += ["", "By drill, the share of checks met, one per seed:", "",
+              "| Drill | Skill | " + " | ".join(ranked) + " |", "|---|---|" + "---|" * len(ranked)]
+    for d in drills:
+        cells = [" ".join("void" if r.get("void") else f"{r['grade']:.2f}"
+                          for r in sorted((r for r in rows if r["model"] == m and r["template"] == d),
+                                          key=lambda r: r["seed"])) or "–" for m in ranked]
+        lines.append(f"| {d.removeprefix('drill-')} | {skill(d)} | " + " | ".join(cells) + " |")
+    return lines
+
+
+def report(out: Path) -> str:
+    """The sweep's results as Markdown: full games and drills apart, then the games that were void and the agents
+    that failed mid-game."""
+    rows = results(out)
+    if not rows:
+        return "No results yet."
+    manifest = json.loads((out / "sweep.json").read_text())
+    cap, unknown = float(manifest["max_cost_usd"]), sum(r.get("cost_usd") is None for r in rows)
+    drills = [r for r in rows if skill(r.get("template", ""))]
+    games = [r for r in rows if not skill(r.get("template", ""))]
+    lines = [f"Sweep `{manifest['name']}`: {len(rows)} games, ${sum(cost(r, cap) for r in rows):.2f} of model spend"
+             + (f" ({unknown} with no spend recorded, counted at the cap)." if unknown else "."), ""]
+    lines += games_report(games, cap) if games else []
+    lines += ([""] if games and drills else []) + (drills_report(drills, cap) if drills else [])
     if void := [r for r in rows if r.get("void")]:
         lines += ["", "Void games, left out of the points: " + ", ".join(f"{r['task']} ({r['void']})" for r in void)]
     if failed := [r for r in rows if r.get("agent_error")]:

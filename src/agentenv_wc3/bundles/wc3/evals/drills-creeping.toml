@@ -1,0 +1,4 @@
+tasks = [
+  "drill-creep-easy",
+  "drill-creep-hard",
+]

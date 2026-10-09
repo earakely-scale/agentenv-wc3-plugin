@@ -8,10 +8,11 @@ import pytest
 from click.testing import CliRunner
 from wc3agent.scenarios.scenario import DEFINITIONS
 
-from agentenv_wc3 import drills
+from agentenv_wc3 import drills, prompts
 from agentenv_wc3.cli import wc3
 
 TASKS = Path(__file__).resolve().parents[1] / "src/agentenv_wc3/bundles/wc3/tasks"
+EVALS = TASKS.with_name("evals")
 DRILLS = sorted(p.stem for p in TASKS.glob("drill-*.json"))
 STEP_TYPES = {"deploy_env", "deploy_agent", "add_license", "open_lobby", "add_player_slot", "close_lobby",
               "apply_server_config", "prompt_agent", "finish_match", "rts_grade", "save_match_files"}
@@ -33,8 +34,7 @@ def test_fight_even_is_the_design_docs_drill():
     goal = definition("fight_even")["goal"]
     assert drills.convert("fight_even", definition("fight_even")) == [
         {"id": "deploy", "type": "deploy_env", "env_id": "wc3"},
-        {"id": "agent", "type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": "wc3-macro-micro", "env_ids": [],
-         "env_vars": {"WC3_MICRO_MODEL": "anthropic/claude-haiku-4-5", "WC3_GOAL": "prompt"},
+        {"id": "agent", "type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": "wc3-llm", "env_ids": [],
          "depends_on": ["deploy"]},
         {"id": "opponent", "type": "deploy_agent", "agent_name": "opponent", "a2a_agent_id": "wc3-scripted",
          "env_ids": [], "env_vars": {"SCRIPT": "attack", "SCRIPT_AFTER_SECONDS": "0", "SCRIPT_EVERY_SECONDS": "5"},
@@ -64,7 +64,8 @@ def test_fight_even_is_the_design_docs_drill():
                  "as": "enemy"}]}}],
          "depends_on": ["start"]},
         {"id": "play", "type": "prompt_agent", "agent_name": "wc3", "model": "anthropic/claude-haiku-4-5",
-         "prompt_id": "drill-fight-even", "prompt": goal, "timeout_seconds": 1800, "depends_on": ["stage"]},
+         "prompt_id": "drill-fight-even", "prompt": prompts.drill_prompt(goal, "human"), "timeout_seconds": 1800,
+         "depends_on": ["stage"], "fail_task_on_error": False},
         {"id": "play-opponent", "type": "prompt_agent", "agent_name": "opponent",
          "prompt_id": "drill-fight-even-opponent", "prompt": "Play with the script.", "timeout_seconds": 1800,
          "depends_on": ["stage"]},
@@ -214,3 +215,19 @@ def test_a_check_on_the_finish_time_reads_the_finish_metrics_own_time():
     assert {"metric": "camp_cleared_time", "op": "<=", "value": 90} in drills.checks(creep)
     assert drills.checks({"checks": [{"metric": "seconds", "op": "<=", "value": 9}]}) == [
         {"metric": "seconds", "op": "<=", "value": 9}]
+
+
+def test_every_drill_tests_one_skill_and_each_skill_is_a_bundle_eval():
+    named = [n for names in drills.SKILLS.values() for n in names]
+    assert sorted(named) == sorted(p.stem for p in DEFINITIONS.glob("*.json")) and len(set(named)) == len(named)
+    assert drills.skill("drill-build-supply-nightelf") == "economy" and drills.skill("vs-ai") is None
+    assert {p.name: p.read_text() for p in EVALS.glob("drills*.toml")} == drills.evals()
+    assert drills.evals()["drills-combat.toml"] == (
+        'tasks = [\n  "drill-fight-even",\n  "drill-fight-outnumbered",\n  "drill-hero-in-danger",\n]\n')
+
+
+def test_a_drill_tells_the_agent_how_to_play_its_own_race():
+    play = steps_of("build_supply_nightelf")["play"]
+    assert play["prompt"].startswith(definition("build_supply_nightelf")["goal"] + "\n\nGame time is frozen")
+    assert '{"type_id": "Wisp"}' in play["prompt"] and '{"type_id": "Moon Well"' in play["prompt"]
+    assert play["prompt"].endswith("Keep playing until advance reports GAME OVER, then reply with the result.")

@@ -62,7 +62,7 @@ def test_a_template_of_agents_gets_the_race_on_the_players_slot_and_the_opponent
     (tmp_path / "t.json").write_text(json.dumps(template))
     spec = sweep.Spec(name="s", template=str(tmp_path / "t.json"), models=["m"], races=["undead"],
                       opponents=[{"computer": "insane", "race": "night_elf"}], prompt=None)
-    steps = sweep.task_of(spec, spec.steps(), spec.combinations()[0], "s")
+    steps = sweep.task_of(spec, spec.templates()["t"], spec.combinations()[0], "s")
     assert steps[1]["game_settings"] == {"faction": "undead", "team": 1}
     assert steps[2]["game_settings"] == {"faction": "night_elf", "team": 2, "ai_level": "insane"}
     assert steps[4]["prompt"] == "x"
@@ -206,3 +206,57 @@ def test_the_report_gives_each_ai_levels_won_drawn_lost_and_the_highest_level_be
     assert "| m1 | 2-0-0 | 2-0-0 | 0-1-0 | normal (2 of 2 won) |" in text
     assert "| m2 | 2-0-0 | 0-0-2 | 0-2-0 | easy (2 of 2 won) |" in text
     assert "Void games, left out of the points: ladder-m1-vs-insane-orc-s2 (the game engine failed)" in text
+
+
+
+DRILLS = """
+name = "drills"
+template = "drill-*"
+models = ["m1", "m2"]
+prompt = ""
+max_cost_usd = 0.5
+"""
+
+
+def test_a_drills_sweep_keeps_each_drills_own_race_board_and_prompt(tmp_path):
+    (tmp_path / "spec.toml").write_text(DRILLS)
+    spec = sweep.Spec.load(tmp_path / "spec.toml")
+    names = sweep.generate(spec, tmp_path / "sweep")
+    assert len(names) == 50 and names[:2] == ["drills-build-production-m1", "drills-build-production-m2"]
+    manifest = json.loads((tmp_path / "sweep" / "sweep.json").read_text())
+    elf = manifest["tasks"]["drills-build-supply-nightelf-m2"]
+    assert (elf["template"], elf["race"], elf["opponent"]) == ("drill-build-supply-nightelf", "night_elf",
+                                                               {"computer": "easy", "race": "orc"})
+    assert manifest["tasks"]["drills-fight-even-m1"]["opponent"] is None   # a scripted opponent, no computer
+    original = json.loads((sweep.TASKS / "drill-build-supply-nightelf.json").read_text())
+    made = json.loads((tmp_path / "sweep/tasks/drills-build-supply-nightelf-m2.json").read_text())
+    by_id = {s["id"]: s for s in made}
+    assert by_id["play"]["prompt"] == next(s for s in original if s["id"] == "play")["prompt"]
+    assert by_id["play"]["model"] == "m2" and by_id["agent"]["env_vars"] == {"WC3_MAX_COST_USD": "0.5"}
+    assert by_id["stage"] == next(s for s in original if s["id"] == "stage")
+    (tmp_path / "prompted.toml").write_text(DRILLS.replace('prompt = ""', ""))
+    with pytest.raises(ValueError, match="drills keep their own prompts"):
+        sweep.Spec.load(tmp_path / "prompted.toml")
+    (tmp_path / "none.toml").write_text(DRILLS.replace("drill-*", "nothing-*"))
+    with pytest.raises(ValueError, match="no bundled task matches"):
+        sweep.Spec.load(tmp_path / "none.toml")
+
+
+def test_the_report_gives_drills_by_model_and_skill(tmp_path, monkeypatch):
+    (tmp_path / "spec.toml").write_text(DRILLS.replace('"drill-*"', '"drill-[cf]*"'))
+    out = tmp_path / "sweep"
+    sweep.generate(sweep.Spec.load(tmp_path / "spec.toml"), out)
+
+    def drill(instance):
+        found = summary(0.05, 500)
+        met = 1.0 if "m1" in instance or "creep" in instance else 0.5
+        return found | {"verifications": {"drill:wc3": {"score": met}}}
+
+    monkeypatch.setattr(sweep.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sweep, "metadata", drill)
+    sweep.run(out, budget=10.0, parallel=4, agent_env=fake_agent_env(tmp_path), echo=lambda _: None)
+    text = sweep.report(out)
+    assert "| m1 | 5 | 5 of 5, 100% | 0 | $0.050 | 0 | 30 |" in text and "| m2 | 5 | 2 of 5, 70% | 0 |" in text
+    assert "| Model | combat | creeping | full-game |" in text
+    assert "| m2 | 0 of 2, 50% | 2 of 2, 100% | 0 of 1, 50% |" in text
+    assert "| creep-hard | creeping | 1.00 | 1.00 |" in text and "Won-drawn-lost" not in text
