@@ -2,8 +2,11 @@
 
 import asyncio
 import base64
+import hashlib
+import io
 import os
 import socket
+import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -30,6 +33,7 @@ from click.testing import CliRunner
 from conftest import ONE_AGENT, slot_request
 
 from agentenv_rts.grade import RTSGradeTaskStep
+from agentenv_wc3 import cli
 from agentenv_wc3.license import LICENSE_SECRETS, license_from_secrets, read_license
 from agentenv_wc3.server import WC3Env
 
@@ -160,6 +164,40 @@ def test_read_license(license_dir):
                                          "tft.w3k": base64.b64encode(b"tft key").decode()}
     (license_dir / "tft.w3k").write_bytes(b"")
     assert read_license(license_dir) is None
+
+
+def test_build_worker_patches_wc3env_checks_the_hook_and_builds_from_prepares_context(tmp_path, monkeypatch):
+    game, ran, hook = tmp_path / "Warcraft III", [], b"MZ the hook"
+    game.mkdir()
+
+    def wc3env(given, into):
+        (into / "wc3env/docker").mkdir(parents=True)
+        return into / "wc3env"
+
+    def run(command, cwd=None):
+        ran.append([str(c) for c in command])
+        if command[1].endswith("prepare.py"):
+            Path(command[-1]).mkdir()
+            (Path(command[-1]) / "Dockerfile").write_text("FROM scratch\n")
+            assert (Path(command[1]).parents[1] / "src/wc3env/native/wc3hook.dll").read_bytes() == hook
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(cli.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(cli, "_wc3env", wc3env)
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    monkeypatch.setattr(cli.urllib.request, "urlopen", lambda url, timeout: io.BytesIO(hook))
+    monkeypatch.setattr(cli, "HOOK_SHA256", hashlib.sha256(hook).hexdigest())
+    result = CliRunner().invoke(cli.wc3, ["build-worker", str(game), "--tag", "wc3-worker:test"])
+    assert result.exit_code == 0, result.output
+    assert [c[:2] for c in ran[:-2]] == [["git", "apply"]] and ran[0][2].endswith("wc3env-realtime-hold.patch")
+    assert ran[-2][2:] == ["--game-dir", str(game), "--output", ran[-2][-1]]
+    assert ran[-1][:7] == ["docker", "build", "--platform", "linux/amd64", "--target", "environment", "-t"]
+    assert "agent-env wc3 license import" in result.output
+    monkeypatch.setattr(cli, "HOOK_SHA256", "0" * 64)
+    result = CliRunner().invoke(cli.wc3, ["build-worker", str(game)])
+    assert result.exit_code != 0 and "its SHA-256 differs" in result.output
+    monkeypatch.setattr(cli.platform, "machine", lambda: "arm64")
+    assert "build the worker on an x86-64 host" in CliRunner().invoke(cli.wc3, ["build-worker", str(game)]).output
 
 
 def test_the_license_comes_from_the_secret_store_first(license_dir, local_stores, tmp_path):

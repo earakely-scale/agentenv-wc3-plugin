@@ -1,10 +1,11 @@
-"""`agent-env wc3`: check what a Warcraft III env needs on this machine, build and register the env from your
-wc3env worker image (or on wc3env's fake game, on any machine), build and register the wc3-macro-micro and
-wc3-scripted agents, serve the env locally against the fake game, watch a running game live, and copy a run's match
-files and broadcast into one folder."""
+"""`agent-env wc3`: check what a Warcraft III env needs on this machine, build wc3env's worker image from your game
+files, build and register the env from it (or on wc3env's fake game, on any machine), build and register the agents,
+serve the env locally against the fake game, watch a running game live, and copy a run's match files and broadcast
+into one folder."""
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import platform
@@ -29,8 +30,11 @@ from . import drills, license, sweep
 ENVIRONMENT_NAME = "wc3"
 BASE_IMAGE = "wc3-worker:local"
 STANDIN_IMAGE = "wc3-worker:standin"
-WC3ENV = "https://github.com/pwang724/wc3env"
 WC3ENV_COMMIT = "eb660aa558fb6e5c639a1ff404082f7dc0ee483e"   # the one agents/wc3-player/Dockerfile pins
+# wc3env's hook at WC3ENV_COMMIT with patches/, as the Hook workflow built and released it.
+HOOK_RELEASE = "wc3hook-eb660aa-261b1079f262"
+HOOK_URL = f"https://github.com/earakely-scale/agentenv-wc3-plugin/releases/download/{HOOK_RELEASE}/wc3hook.dll"
+HOOK_SHA256 = "9d072cf8b15a65fac54950a5c20c56fefcca72e9966c0bbe2fd9aa846ee07d76"
 # Each agent `setup --agent` registers: its directory under agents/, what it is, and its A2AAgent metadata.
 AGENTS = {
     "wc3-macro-micro": ("wc3-player", "Warcraft III wc3agent (macro + micro)",
@@ -147,13 +151,53 @@ def check(base: str, license_dir: Path | None):
         click.echo(f"✓ the wc3env worker image {base}")
     else:
         ok = False
-        click.echo(f"✗ no image {base}: build it from your own installation as {WC3ENV}/blob/main/docker/README.md "
-                   "shows (docker build --platform linux/amd64 --target environment -t wc3-worker:local ...)")
+        click.echo(f"✗ no image {base}: build it from your own installation with agent-env wc3 build-worker "
+                   "GAME_DIR")
     where, problem = _license_source(license_dir)
     ok = ok and problem is None
     click.echo(f"✓ activation files in {where}" if problem is None else f"✗ {problem}")
     if not ok:
         raise SystemExit(1)
+
+
+@wc3.command("build-worker")
+@click.argument("game_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--tag", default=BASE_IMAGE, show_default=True, help="The worker image to build.")
+@click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="Checkout of this plugin, for its patches. Default: the one an editable install runs from, or the "
+                   "cwd.")
+def build_worker(game_dir: Path, tag: str, source: Path | None):
+    """Build wc3env's worker image on this x86-64 host from your Warcraft III Legacy installation in GAME_DIR, with no
+    Windows machine: wc3env at the pinned commit with this plugin's patches, the hook the plugin's Hook workflow
+    built for them (its hash checked), and the game files wc3env's prepare.py picks, never the activation files."""
+    if platform.machine().lower() not in ("x86_64", "amd64"):
+        raise click.ClickException(f"this machine is {platform.machine()}: build the worker on an x86-64 host")
+    root = _checkout(source)
+    with tempfile.TemporaryDirectory() as tmp:
+        wc3env = _wc3env(None, Path(tmp))
+        for patch in sorted((root / "patches").glob("*.patch")):
+            click.echo(f"Applying {patch.name}")
+            if subprocess.run(["git", "apply", str(patch)], cwd=wc3env).returncode:
+                raise click.ClickException(f"{patch.name} does not apply to wc3env {WC3ENV_COMMIT[:7]}")
+        click.echo(f"Downloading the hook ({HOOK_RELEASE})")
+        with urllib.request.urlopen(HOOK_URL, timeout=300) as r:
+            hook = r.read()
+        if hashlib.sha256(hook).hexdigest() != HOOK_SHA256:
+            raise click.ClickException(f"{HOOK_URL} is not the hook this plugin pins (its SHA-256 differs)")
+        (wc3env / "src/wc3env/native").mkdir(parents=True, exist_ok=True)
+        (wc3env / "src/wc3env/native/wc3hook.dll").write_bytes(hook)
+        context = Path(tmp) / "context"
+        prepare = [sys.executable, str(wc3env / "docker/prepare.py"), "--game-dir", str(game_dir), "--output",
+                   str(context)]
+        if subprocess.run(prepare).returncode:
+            raise click.ClickException(f"wc3env's prepare.py refused {game_dir}: it needs Warcraft III Legacy 1.29.2")
+        for path in [context, *context.rglob("*")]:   # the image's build reads it as a non-root user
+            path.chmod(path.stat().st_mode | (0o555 if path.is_dir() else 0o444))
+        click.echo(f"Building {tag} (linux/amd64): Wine and the game, several minutes")
+        build = ["docker", "build", "--platform", "linux/amd64", "--target", "environment", "-t", tag, str(context)]
+        if subprocess.run(build).returncode:
+            raise click.ClickException("docker build of the worker failed")
+    click.echo(f"Built {tag}. Next: agent-env wc3 license import {game_dir}, then agent-env wc3 setup --agent")
 
 
 def _license_source(license_dir: Path | None = None) -> tuple[str, str | None]:
@@ -268,7 +312,7 @@ def setup(env_id: str, base: str, source: Path | None, image: str | None, fake: 
             build_platform = "linux/amd64"
             if not _image_exists(base):
                 raise click.ClickException(f"no image {base}: build wc3env's worker image from your own installation "
-                                           f"first ({WC3ENV}/blob/main/docker/README.md), pass --base, or build the "
+                                           "first (agent-env wc3 build-worker GAME_DIR), pass --base, or build the "
                                            "fake game with --fake")
         image = f"mcp-server-{env_id}"
         click.echo(f"Building {image} on {base} for {build_platform} from {root}")
