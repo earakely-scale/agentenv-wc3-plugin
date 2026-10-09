@@ -1267,9 +1267,12 @@ class WC3Env(AgentEnvGameEnv):
         kind = op["op"]
         if kind not in STAGE_OPS:
             raise ValueError(f"unknown op; the staging ops are {', '.join(STAGE_OPS)}")
-        units = handles.get(op["unit"], []) if "unit" in op else None
-        if units is not None and not units:
-            raise ValueError(f"no units named {op['unit']!r} yet")
+        units = None
+        if "unit" in op:   # a handle or a list of them, so one op stages both sides in the same step
+            named = [op["unit"]] if isinstance(op["unit"], str) else list(op["unit"])
+            if missing := [n for n in named if not handles.get(n)]:
+                raise ValueError(f"no units named {', '.join(map(repr, missing))} yet")
+            units = [u for n in named for u in handles[n]]
         if kind == "spawn":
             player = self._staged_player(op.get("player"))
             args = {"type_id": op["type"], "player": player, "n": int(op.get("n", 1)), **self._place(op),
@@ -1318,21 +1321,21 @@ class WC3Env(AgentEnvGameEnv):
         return home, {"x": (other["x"] - home["x"]) / length, "y": (other["y"] - home["y"]) / length}, length
 
     async def _formation(self, op: dict, handles: dict[str, list[int]]) -> None:
-        """wc3agent's duel layout: `army` [[type, n, depth, level?], ...] in rows `depth` behind a front `gap` from the
-        middle of the starts, toward the player's own (`swapped`: toward the other's, the armies trading places), each
-        row spread `spacing` apart and every unit nudged up to `jitter` by `seed`, so two formations with one seed are
-        mirror images. Mirror images across the middle stand on different ground of a point-symmetric map, whichever
-        start each player has, so as wc3agent alternates its duels, `swapped` defaults to an odd seed's (the match's
-        by default): a sweep over seeds gives each side each ground."""
-        player = self._staged_player(op.get("player"))
+        """wc3agent's duel layout: `army` [[type, n, depth, level?], ...] for `player` (one, or a list with as many
+        `as` handles) in rows `depth` behind a front `gap` from the middle of the starts, toward the player's own
+        (`swapped`: toward the other's, the armies trading places), each row spread `spacing` apart and every unit
+        nudged up to `jitter` by `seed`, so formations with one seed are mirror images. Mirror images across the
+        middle stand on different ground of a point-symmetric map, so as wc3agent alternates its duels, `swapped`
+        defaults to an odd seed's (the match's by default). Several players' armies are made unit by unit, which of a
+        mirror pair comes first alternating: an army made wholly after the other won mirror duels it should have
+        split."""
+        players = op.get("player") if isinstance(op.get("player"), list) else [op.get("player")]
+        names = op.get("as") if isinstance(op.get("as"), list) else [op.get("as")]
+        if len(names) != len(players):
+            raise ValueError("formation needs one `as` handle per player")
         home, along, length = self._line()
         gap, spacing, jitter = float(op.get("gap", 750)), float(op.get("spacing", 100)), float(op.get("jitter", 40))
-        own = self.metrics.home(self.obs.get(player) or {}) or home
-        side = 1.0 if own is home else -1.0   # +1: this player's start is the first agent's, its enemy further along
         seed = op.get("seed", self.scenario["seed"] or 0)
-        facing = -side if op.get("swapped", seed % 2 == 1) else side   # +1: the enemy's army lies further along
-        across = {"x": -along["y"], "y": along["x"]}
-        front = length / 2 - facing * gap
         rows: dict[float, list[tuple[str, int | None]]] = {}
         for entry in op["army"]:
             raw, n, depth, *level = entry
@@ -1340,24 +1343,37 @@ class WC3Env(AgentEnvGameEnv):
         nudge = random.Random(seed)
         nudges = {(depth, k): (nudge.uniform(-jitter, jitter), nudge.uniform(-jitter, jitter))
                   for depth, units in rows.items() for k in range(len(units))}
-        made = []
-        for depth, units in rows.items():
-            for k, (raw, level) in enumerate(units):
-                ahead, sideways = nudges[(depth, k)]
-                t = front - facing * (depth - ahead)
-                spread = (k - (len(units) - 1) / 2) * spacing + sideways
-                at = {"x": home["x"] + t * along["x"] + spread * across["x"],
-                      "y": home["y"] + t * along["y"] + spread * across["y"]}
+        across = {"x": -along["y"], "y": along["x"]}
+        places = []
+        for ref in players:
+            player = self._staged_player(ref)
+            own = self.metrics.home(self.obs.get(player) or {}) or home
+            side = 1.0 if own is home else -1.0   # +1: this player's start is the first agent's
+            facing = -side if op.get("swapped", seed % 2 == 1) else side   # +1: the enemy's army lies further along
+            front, spots = length / 2 - facing * gap, []
+            for depth, units in rows.items():
+                for k, (raw, level) in enumerate(units):
+                    ahead, sideways = nudges[(depth, k)]
+                    t = front - facing * (depth - ahead)
+                    spread = (k - (len(units) - 1) / 2) * spacing + sideways
+                    spots.append((raw, level, {"x": home["x"] + t * along["x"] + spread * across["x"],
+                                               "y": home["y"] + t * along["y"] + spread * across["y"]}))
+            places.append((player, spots))
+        made: dict[int, list[int]] = {player: [] for player, _ in places}
+        for k in range(len(places[0][1])):
+            for player, spots in places if k % 2 == 0 else places[::-1]:
+                raw, level, at = spots[k]
                 uid, = (await self.bridge.call("debug", op="spawn", args={"type_id": raw, "player": player, "n": 1,
                                                                            **at})).get("unit_ids") or [None]
                 if uid is None:
                     raise ValueError(f"the game spawned no {raw}")
                 if level:
                     await self.bridge.call("debug", op="level", args={"unit_id": uid, "level": int(level)})
-                made.append(uid)
-        if name := op.get("as"):
-            handles.setdefault(name, []).extend(made)
-            self.metrics.stage(name, player, made)
+                made[player].append(uid)
+        for (player, _), name in zip(places, names, strict=True):
+            if name:
+                handles.setdefault(name, []).extend(made[player])
+                self.metrics.stage(name, player, made[player])
 
     async def _staging_step(self, actions: dict[int, list]) -> None:
         """Orders the harness gives for players while it stages: the game takes them as it runs a moment."""
@@ -1365,14 +1381,22 @@ class WC3Env(AgentEnvGameEnv):
                                               ms=STAGE_STEP_MS))
 
     async def _learn(self, units: list[int]) -> None:
-        """Heroes spend every skill point the same way, whoever owns them: each point on the deepest skill open now,
-        a tie to the first the hero lists (wc3agent's skill_to_learn without its per-hero builds)."""
+        """Heroes spend every skill point the same way, whoever owns them, all in the same steps: each point on the
+        deepest skill open now, a tie to the first the hero lists (wc3agent's skill_to_learn without its per-hero
+        builds). The observation can trail a learn just sent, so as in wc3agent's duel a skill counts at the more of
+        its seen and sent levels, or it is learned twice."""
+        sent: dict[int, dict[str, int]] = {}
         self._observed(await self.bridge.call("observe"))
         for _ in range(LEARN_ROUNDS):
             orders: dict[int, list] = {}
             for slot, obs in self.obs.items():
                 for hero in (u for u in obs.get("units") or () if u.get("hero") and u["unit_id"] in units):
-                    if raw := render.skill_to_learn(hero, self.ref):
+                    told = sent.setdefault(hero["unit_id"], {})
+                    seen = {a["ability_id"]: a.get("level", 0) for a in hero.get("abilities") or ()}
+                    counted = [{"ability_id": raw, "level": max(seen.get(raw, 0), told.get(raw, 0))}
+                               for raw in {*seen, *told}]
+                    if raw := render.skill_to_learn({**hero, "abilities": counted}, self.ref):
+                        told[raw] = told.get(raw, 0) + 1
                         orders.setdefault(slot, []).append({"unit_id": hero["unit_id"], "command": "learn",
                                                             "arguments": {"ability_id": raw}})
             if not orders:

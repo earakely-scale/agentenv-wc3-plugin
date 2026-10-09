@@ -133,8 +133,9 @@ the hook's staging ops in order, with two things the raw ops lack: **named place
 
 - **Ops:** the hook's own: `spawn`, `kill`, `remove`, `level`, `research`, `give`, `hp`, `mana`, `item`, `resources`,
   `ai`, `invulnerable`, `alliance`, `destructable`; and the env's, for wc3agent's duels: `formation` (an army in rows
-  facing the other start, mirrored for either player by one seed), `learn` (heroes spend their skill points by one
-  rule for every player), `autocast` (every autocast ability on) and `clear` (the creeps any player sees removed).
+  facing the other start, mirrored for either player by one seed, several players' made interleaved), `learn` (heroes
+  spend their skill points by one rule for every player), `autocast` (every autocast ability on) and `clear` (the
+  creeps any player sees removed). An op's `unit` may list several handles, staged in the same steps.
 - **Players** are named by agent, by player number, or by position (`opponent` is the other side in a two-player
   game).
 - **Places** are named the way wc3agent names them, relative to the player's start, so a drill works from either start

@@ -227,6 +227,12 @@ def test_an_order_the_game_dropped_says_what_it_lacked_and_one_it_took_says_noth
     peasants = [train(1000, "hpea")] * 7
     assert refusals.unstarted(obs(500, 0, 5, 12), obs(500, 0, 5, 12), peasants, set(), ref, "human") == {
         6: "didn't start: not enough gold (needs 75, you had 50)"}
+    six = obs(50, 0, 6, 12)
+    six["units"][0] = {**six["units"][0], "queue": ["hpea"] * 6}
+    assert refusals.unstarted(obs(500, 0, 5, 12), six, peasants, set(), ref, "human") == {
+        6: "didn't start: not enough gold (needs 75, you had 50)"}
+    seven = {**six, "units": [{**six["units"][0], "queue": ["hpea"] * 7}, *six["units"][1:]]}
+    assert refusals.unstarted(obs(500, 0, 5, 12), seven, peasants, set(), ref, "human") == {}
     assert refusals.unstarted(obs(500, 0, 5, 12), obs(500, 0, 5, 12), peasants, {0}, ref, "human") == {}
     capped = obs(1245, 300, 18, 18)
     assert refusals.unstarted(capped, capped, [train(78, "Hamg")], set(), ref, "human") == {

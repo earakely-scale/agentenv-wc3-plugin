@@ -247,10 +247,13 @@ def test_the_bundles_mirror_duels_are_what_the_generator_writes_and_each_is_wc3a
     assert by_id["slot-opponent"]["game_settings"] == {"faction": "orc", "autocast": True, "omniscient": True}
     assert by_id["agent"]["a2a_agent_id"] == "wc3-llm" and by_id["opponent"]["env_vars"]["SCRIPT_EVERY_SECONDS"] == "3"
     ops = by_id["stage"]["directives"][0]["args"]["ops"]
-    assert [o["op"] for o in ops[:2]] == ["formation", "formation"] and ops[0]["army"] == ops[1]["army"]
+    assert ops[0] == {"op": "formation", "player": ["wc3", "opponent"], "army": duels.army("orc"),
+                      "as": ["army", "enemy"]}
     assert ops[0]["army"][:2] == [["Ofar", 1, 150, 5], ["Otch", 1, 150, 3]]
     assert {o["type"] for o in ops if o["op"] == "research"} == {raw for raw, _ in duels.upgrades("orc", ref)}
-    assert [o["op"] for o in ops[-7:]] == ["learn", "learn", "autocast", "autocast", "mana", "mana", "clear"]
+    both = ["army", "enemy"]
+    assert [(o["op"], o.get("unit")) for o in ops[-4:]] == [("learn", both), ("autocast", both), ("mana", both),
+                                                           ("clear", None)]
     assert "40% of the other's strength" in by_id["play"]["prompt"] and by_id["grade"]["verifier_id"] == "duel"
     baseline = {s["id"]: s for s in made["mirror-orc-baseline"]}
     assert baseline["agent"]["a2a_agent_id"] == "wc3-scripted" and "model" not in baseline["play"]

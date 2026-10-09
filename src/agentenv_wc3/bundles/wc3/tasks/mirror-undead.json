@@ -111,7 +111,10 @@
           "ops": [
             {
               "op": "formation",
-              "player": "wc3",
+              "player": [
+                "wc3",
+                "opponent"
+              ],
               "army": [
                 [
                   "Udea",
@@ -161,61 +164,10 @@
                   560
                 ]
               ],
-              "as": "army"
-            },
-            {
-              "op": "formation",
-              "player": "opponent",
-              "army": [
-                [
-                  "Udea",
-                  1,
-                  150,
-                  5
-                ],
-                [
-                  "Ulic",
-                  1,
-                  150,
-                  3
-                ],
-                [
-                  "ugho",
-                  4,
-                  0
-                ],
-                [
-                  "uabo",
-                  2,
-                  0
-                ],
-                [
-                  "ucry",
-                  3,
-                  280
-                ],
-                [
-                  "ugar",
-                  2,
-                  280
-                ],
-                [
-                  "unec",
-                  2,
-                  420
-                ],
-                [
-                  "uban",
-                  2,
-                  420
-                ],
-                [
-                  "umtw",
-                  1,
-                  560
-                ]
-              ],
-              "as": "enemy"
+              "as": [
+                "army",
+                "enemy"
+              ]
             },
             {
               "op": "research",
@@ -435,28 +387,24 @@
             },
             {
               "op": "learn",
-              "unit": "army"
-            },
-            {
-              "op": "learn",
-              "unit": "enemy"
-            },
-            {
-              "op": "autocast",
-              "unit": "army"
+              "unit": [
+                "army",
+                "enemy"
+              ]
             },
             {
               "op": "autocast",
-              "unit": "enemy"
+              "unit": [
+                "army",
+                "enemy"
+              ]
             },
             {
               "op": "mana",
-              "unit": "army",
-              "value": 100000
-            },
-            {
-              "op": "mana",
-              "unit": "enemy",
+              "unit": [
+                "army",
+                "enemy"
+              ],
               "value": 100000
             },
             {

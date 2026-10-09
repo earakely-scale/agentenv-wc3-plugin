@@ -595,11 +595,17 @@ Harness time, not the agents': `apply_server_config` sends the ops in order, aft
   (`paused`), `research` (`type`, `level`), `invulnerable`, `alliance` and `destructable`.
 - **The env's own:**
   - `formation`: `army` `[[type, n, row, level?], ...]` in rows `row` deep behind a front line `gap` (750) from the
-    middle of the starts, toward the player's own, spread `spacing` (100) apart, each unit nudged up to `jitter`
-    (40) by `seed` (the match's by default). Two formations with one seed are mirror images: wc3agent's duel layout.
+    middle of the starts, toward the player's own (`swapped`: the other's; an odd seed's by default, so a sweep over
+    seeds gives each player each ground), spread `spacing` (100) apart, each unit nudged up to `jitter` (40) by
+    `seed` (the match's by default). Formations with one seed are mirror images: wc3agent's duel layout. Given a
+    list of players (and one `as` handle each), it makes their armies unit by unit, alternating which of a mirror
+    pair comes first.
   - `learn`: a handle's heroes spend every skill point, the same way for every player (the deepest skill open now, a
-    tie to the first the hero lists).
+    tie to the first the hero lists), counting the skills already ordered, since the observation can trail them.
   - `autocast`: every autocast ability of a handle's units on.
+  - **Staging two sides fairly:** an op's `unit` may be a list of handles, which it stages in the same steps. A side
+    staged wholly after the other won about seven Human mirror duels in ten, so the mirror duels make both armies
+    in one `formation` and give `learn`, `autocast` and `mana` both handles.
   - `clear`: remove every creep any player can see.
 - **`player`:** an agent's name, `opponent` (the first player not on the first agent's team), or a player number; the
   first agent by default.

@@ -863,12 +863,14 @@ async def test_two_formations_from_one_seed_are_mirror_images_trading_places_on_
 
         env.bridge.call = call
         army = [["Hamg", 1, 150, 5], ["hfoo", 3, 0], ["hrif", 2, 280]]
-        result = await env.stage(ops=[{"op": "formation", "player": "wc3", "army": army, "as": "army"},
-                                      {"op": "formation", "player": "rival", "army": army, "as": "enemy"}])
+        result = await env.stage(ops=[{"op": "formation", "player": ["wc3", "rival"], "army": army,
+                                       "as": ["army", "enemy"]}])
     finally:
         await env.close()
+    assert [a["player"] for a in spawned] == [0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0]   # neither side made all first
     assert result["handles"] == {"army": 6, "enemy": 6} and levels == [{"unit_id": 1, "level": 5},
-                                                                      {"unit_id": 7, "level": 5}]
+                                                                      {"unit_id": 2, "level": 5}]
+    spawned = [a for a in spawned if a["player"] == 0] + [a for a in spawned if a["player"] == 1]
     home, other = env.metrics.starts[0], env.metrics.starts[1]
     middle = ((home["x"] + other["x"]) / 2, (home["y"] + other["y"]) / 2)
     length = math.dist((home["x"], home["y"]), (other["x"], other["y"]))
@@ -887,6 +889,35 @@ async def test_two_formations_from_one_seed_are_mirror_images_trading_places_on_
     assert behind < -100
     assert sorted(round(-(a["x"] - middle[0]) * along[1] + (a["y"] - middle[1]) * along[0]) // 50
                   for a in mine if a["type_id"] == "hfoo") != [0, 0, 0]
+
+
+async def test_heroes_learn_each_point_once_though_the_observation_trails_the_orders(env_vars):
+    env = WC3Env()
+    try:
+        await new_game(env, [{"agent": "wc3", "race": "human"}, {"agent": "rival", "race": "orc"}],
+                       time_limit_seconds=120)
+        real, steps = env.bridge.call, []
+        hero = {"type_id": "Hamg", "hero": True, "level": 5, "abilities": [], "x": 0, "y": 0, "hp": 500,
+                "max_hp": 500}
+
+        async def call(cmd, **args):
+            if cmd == "step":
+                steps.append(args["actions"])
+            if cmd in ("step", "observe"):   # skills never show: every learn trails
+                obs = await real("observe")
+                for slot, unit_id in (("0", 50), ("1", 60)):
+                    obs["observations"][slot]["units"].append({**hero, "unit_id": unit_id, "owner": int(slot)})
+                return obs
+            return await real(cmd, **args)
+
+        env.bridge.call = call
+        await env._learn([50, 60])
+    finally:
+        await env.close()
+    assert all(set(step) == {"0", "1"} for step in steps)   # both sides learn in the same steps
+    for slot in ("0", "1"):
+        assert [a["arguments"]["ability_id"] for step in steps for a in step[slot]] == [
+            "AHbz", "AHbz", "AHbz", "AHab", "AHab"]
 
 
 def test_heroes_spend_their_points_on_the_deepest_skill_open_now():

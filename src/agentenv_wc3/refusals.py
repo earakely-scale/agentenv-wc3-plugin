@@ -4,6 +4,8 @@ agent otherwise doesn't."""
 
 from __future__ import annotations
 
+from collections import Counter
+
 from .frames import HALLS
 from .prompts import SUPPLY
 from .render import Reference
@@ -27,7 +29,7 @@ def unstarted(before: dict, after: dict, batch: list[dict], refused: set[int], r
     queued = [q for u in mine.values() for q in u.get("queue") or () if (ref.units.get(q) or {}).get("hero")]
     had = {h["type_id"]: h for h in heroes}
     count = len(had) + len(queued)
-    out = {}
+    paid, out = Counter(), {}
     for i, action in enumerate(batch):
         made = (action.get("arguments") or {}).get("type_id")
         if i in refused or action["command"] not in ("train", "research", "build") or not isinstance(made, str):
@@ -64,10 +66,11 @@ def unstarted(before: dict, after: dict, batch: list[dict], refused: set[int], r
             lacks.append(f"{nth}requires {', '.join(ref.name(r) for r in missing)}")
         if not lacks:
             gold, lumber, free = gold - g, lumber - w, free - f
+            paid[action["unit_id"], made] += 1
             if (ref.units.get(made) or {}).get("hero"):
                 count += 1
                 queued.append(made)
-        elif not _started(action, made, mine, after):
+        elif not _started(action, made, mine, after, paid[action["unit_id"], made], ref):
             out[i] = "didn't start: " + "; ".join(lacks)
     return out
 
@@ -78,13 +81,16 @@ def _built(required: str, have: set[str]) -> bool:
     return required in have or tier is not None and any(have & halls for halls in HALLS[tier:])
 
 
-def _started(action: dict, made: str, mine: dict[int, dict], after: dict) -> bool:
+def _started(action: dict, made: str, mine: dict[int, dict], after: dict, paid: int, ref: Reference) -> bool:
+    """Whether the order left a trace beyond the `paid` orders before it for the same unit and type: more of the
+    type in the unit's queue or new on the map than before them, the upgrade under way, the builder going to build."""
     now = {u["unit_id"]: u for u in after.get("units") or ()}
-    if any(u["type_id"] == made for uid, u in now.items() if uid not in mine):
-        return True
-    unit = now.get(action["unit_id"])
+    new = sum(u["type_id"] == made for uid, u in now.items() if uid not in mine)
+    unit, was = now.get(action["unit_id"]), mine.get(action["unit_id"]) or {}
     if unit is None:
-        return False
+        return new > paid
     if action["command"] == "build":
-        return (unit.get("order") or {}).get("name") == made
-    return made in (unit.get("queue") or ()) or unit["type_id"] == made or unit.get("state") == "upgrading"
+        return (unit.get("order") or {}).get("name") == made or new > paid
+    if made in ((ref.units.get(was.get("type_id")) or {}).get("upgrades_to") or ()):
+        return unit["type_id"] == made or unit.get("state") == "upgrading"
+    return list(unit.get("queue") or ()).count(made) + new > list(was.get("queue") or ()).count(made) + paid

@@ -111,7 +111,10 @@
           "ops": [
             {
               "op": "formation",
-              "player": "wc3",
+              "player": [
+                "wc3",
+                "opponent"
+              ],
               "army": [
                 [
                   "Edem",
@@ -166,66 +169,10 @@
                   560
                 ]
               ],
-              "as": "army"
-            },
-            {
-              "op": "formation",
-              "player": "opponent",
-              "army": [
-                [
-                  "Edem",
-                  1,
-                  150,
-                  5
-                ],
-                [
-                  "Emoo",
-                  1,
-                  150,
-                  3
-                ],
-                [
-                  "esen",
-                  3,
-                  0
-                ],
-                [
-                  "edoc",
-                  2,
-                  0
-                ],
-                [
-                  "emtg",
-                  1,
-                  0
-                ],
-                [
-                  "earc",
-                  3,
-                  280
-                ],
-                [
-                  "ehip",
-                  1,
-                  280
-                ],
-                [
-                  "edry",
-                  2,
-                  420
-                ],
-                [
-                  "edot",
-                  2,
-                  420
-                ],
-                [
-                  "ebal",
-                  1,
-                  560
-                ]
-              ],
-              "as": "enemy"
+              "as": [
+                "army",
+                "enemy"
+              ]
             },
             {
               "op": "research",
@@ -493,28 +440,24 @@
             },
             {
               "op": "learn",
-              "unit": "army"
-            },
-            {
-              "op": "learn",
-              "unit": "enemy"
-            },
-            {
-              "op": "autocast",
-              "unit": "army"
+              "unit": [
+                "army",
+                "enemy"
+              ]
             },
             {
               "op": "autocast",
-              "unit": "enemy"
+              "unit": [
+                "army",
+                "enemy"
+              ]
             },
             {
               "op": "mana",
-              "unit": "army",
-              "value": 100000
-            },
-            {
-              "op": "mana",
-              "unit": "enemy",
+              "unit": [
+                "army",
+                "enemy"
+              ],
               "value": 100000
             },
             {

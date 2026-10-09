@@ -5,7 +5,8 @@ full mana and the same skills, both player slots casting on their own. The oppon
 to 0.4 of the other's strength, and is a draw after 150 seconds. `mirror-<race>` puts a model (wc3-llm) against it;
 `mirror-<race>-baseline` puts the scripted fighter on both sides, Warcraft against Warcraft, the duel's floor.
 The match's seed nudges every unit and, odd or even, puts each army on either side of the middle, so sweeping seeds
-varies the fight and gives each player each ground while both armies stay mirror images."""
+varies the fight and gives each player each ground while both armies stay mirror images. Both sides are staged
+together, never one after the other (stage_ops)."""
 
 from __future__ import annotations
 
@@ -72,14 +73,16 @@ def upgrades(race: str, ref: Reference) -> list[tuple[str, int]]:
 
 
 def stage_ops(race: str, ref: Reference) -> list[dict]:
+    """Both sides staged together, never one after the other: the side staged second won duels it should have
+    split, so the armies are made interleaved and learn, switch on autocast and fill mana in the same steps."""
+    both = ["army", "enemy"]
     researched = [{"op": "research", "player": player, "type": raw, "level": level}
                   for player in ("wc3", "opponent") for raw, level in upgrades(race, ref)]
-    return [{"op": "formation", "player": "wc3", "army": army(race), "as": "army"},
-            {"op": "formation", "player": "opponent", "army": army(race), "as": "enemy"},
+    return [{"op": "formation", "player": ["wc3", "opponent"], "army": army(race), "as": both},
             *researched,
-            {"op": "learn", "unit": "army"}, {"op": "learn", "unit": "enemy"},
-            {"op": "autocast", "unit": "army"}, {"op": "autocast", "unit": "enemy"},
-            {"op": "mana", "unit": "army", "value": FULL_MANA}, {"op": "mana", "unit": "enemy", "value": FULL_MANA},
+            {"op": "learn", "unit": both},
+            {"op": "autocast", "unit": both},
+            {"op": "mana", "unit": both, "value": FULL_MANA},
             {"op": "clear"}]
 
 
