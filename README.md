@@ -484,6 +484,8 @@ agent-env's model endpoint serves that calls tools. The `vs-ai` tasks use it, an
     each turn pays for its history once.
 - **Spectators** see its model as its name, what it writes between tool calls as its plan, and its running cost.
 - **The result** reports the turns, tool calls, tokens and cost. Its trajectory is the conversation.
+- **The transcript:** every message untrimmed (what each tool returned, every order), left with the match as
+  `wc3-llm-transcript.json` (`agent_files`), so a reader can see what the model read and did.
 
 | Setting | Where | Default |
 |---|---|---|
@@ -652,7 +654,7 @@ artifact, listed in the run's `metadata["match_files"][<step id>]`.
 | Kind | What | Default |
 |---|---|---|
 | `replay` | The game's native replay (`.w3g`), once the game has reached its end, and beside it the startup options wc3env wrote for playing it back (`.w3g.json`: the match setup, AI level and AI slots) | yes |
-| `agent_files` | The files each player left with the match through `urn:rts:file/v1`: `wc3-macro-micro` leaves wc3agent's `report.html` and its session, zipped | yes |
+| `agent_files` | The files each player left with the match through `urn:rts:file/v1`: `wc3-macro-micro` leaves wc3agent's `report.html` and its session, zipped; `wc3-llm` its transcript | yes |
 | `map_video` | An MP4 of the map, a frame per step | yes |
 | `html_replay` | The spectator page with the whole game embedded, which plays in any browser | yes |
 | `timeline` | The timeline as JSON: every frame's units, events and notes | yes |

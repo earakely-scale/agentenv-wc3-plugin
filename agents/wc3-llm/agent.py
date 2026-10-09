@@ -47,6 +47,7 @@ NUDGES, KEEP, TRIM_CHARS, MAX_TOKENS, RETRIES = 3, 6, 120_000, 4096, 4
 MODEL_SECONDS = 180   # one model turn; a call that hangs longer is retried
 STEP_WAIT_SECONDS = 900   # a tool call; longer than lockstep's stall_seconds (600), which an advance can wait out
 TRAJECTORY_LIMIT = 2000
+TRANSCRIPT = "wc3-llm-transcript.json"   # every message untrimmed, left with the match's agent_files
 
 
 class LLMConfig(AgentConfig):
@@ -126,7 +127,12 @@ class Player:
         self.stats = {"turns": 0, "tool_calls": 0, "nudges": 0, "input_tokens": 0, "output_tokens": 0,
                       "cached_tokens": 0, "cost_usd": 0.0, "stopped_at_cost_cap": False}
         self.chat: list[dict] = []
+        self.transcript: list[dict] = []   # copies: trim shortens the chat's own messages
         self.reply, self.named = "", False
+
+    def say(self, message: dict) -> None:
+        self.chat.append(message)
+        self.transcript.append(dict(message))
 
     async def note(self, kind: str, text: str = "", data: dict | None = None) -> None:
         try:
@@ -142,7 +148,22 @@ class Player:
         return bool(state["done"]), state.get("result") or ""
 
     async def play(self, prompt: str) -> None:
-        self.chat = [{"role": "user", "content": prompt}]
+        try:
+            await self._play(prompt)
+        finally:
+            await self.keep()
+
+    async def keep(self) -> None:
+        """The whole conversation, untrimmed, left with the match, so a reader sees what the model read and did."""
+        body = json.dumps({"model": self.model, "stats": self.stats, "messages": self.transcript}).encode()
+        try:
+            await asyncio.to_thread(self.session.file, TRANSCRIPT, body, "application/json")
+        except SessionError as e:
+            log.info("transcript not kept: %s", e)
+
+    async def _play(self, prompt: str) -> None:
+        self.chat, self.transcript = [], []
+        self.say({"role": "user", "content": prompt})
         headers = self.server.get("headers") or {}
         model_timeout = httpx.Timeout(MODEL_SECONDS, connect=30)
         tool_timeout = httpx.Timeout(STEP_WAIT_SECONDS, connect=30)
@@ -159,7 +180,7 @@ class Player:
                 self.count(usage, cost)
                 calls = message.get("tool_calls") or []
                 text = (message.get("content") or "").strip()
-                self.chat.append({"role": "assistant", "content": message.get("content"), **({"tool_calls": [
+                self.say({"role": "assistant", "content": message.get("content"), **({"tool_calls": [
                     {"id": c["id"], "type": "function", "function": {"name": c["function"]["name"],
                                                                      "arguments": c["function"]["arguments"]}}
                     for c in calls]} if calls else {})})
@@ -171,11 +192,11 @@ class Player:
                     if (await self.over())[0] or self.stats["nudges"] >= NUDGES:
                         break
                     self.stats["nudges"] += 1
-                    self.chat.append({"role": "user", "content": NUDGE})
+                    self.say({"role": "user", "content": NUDGE})
                     continue
                 for call in calls:
-                    self.chat.append({"role": "tool", "tool_call_id": call["id"],
-                                      "content": await self.call(mcp, call["function"])})
+                    self.say({"role": "tool", "tool_call_id": call["id"],
+                              "content": await self.call(mcp, call["function"])})
                 trim(self.chat)
                 if not self.named:   # after its first tool calls, which start the game if none has
                     self.named = True

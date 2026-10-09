@@ -47,11 +47,16 @@ async def test_a_model_plays_the_game_through_the_tools(env_vars):
         return message, {"prompt_tokens": 1000, "completion_tokens": 20, "cache_read_input_tokens": 900}, 0.01
 
     agent.complete = complete
-    async with deployed(WC3Env()) as record:
+    env = WC3Env()
+    async with deployed(env) as record:
         player = agent.Player("anthropic/claude-haiku-4-5", {"url": record.environment_url + "/mcp"}, ENDPOINT, 50)
         await player.play("Win the game.")
         over, result = await player.over()
+        kept = (await env.kept(["agent_files"])).files
+        transcript = json.loads(next(f.file for f in kept if f.name.endswith(agent.TRANSCRIPT)).read_text())
     assert over and result == "time_limit"
+    assert [m["role"] for m in transcript["messages"]][:3] == ["user", "assistant", "tool"]
+    assert transcript["messages"][0]["content"] == "Win the game." and transcript["stats"]["turns"] == len(sent)
     assert player.stats["nudges"] == 1 and player.stats["tool_calls"] == 3 and player.reply.startswith("The game ended")
     assert player.stats["cached_tokens"] == 900 * player.stats["turns"] and player.stats["cost_usd"] > 0
     assert {"get_state", "act", "advance"} <= offered
