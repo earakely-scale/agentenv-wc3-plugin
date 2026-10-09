@@ -200,3 +200,14 @@ def test_get_state_lists_each_hero_with_its_items_by_the_slot_use_item_takes():
     assert "Heroes:\n  7 Paladin (Hpal)" in text and items in text
     listed = render.units_list(obs, ref, who="own", type_filter=None, near=None, radius=None, details=False, limit=9)
     assert items in listed
+
+
+def test_get_state_shows_a_heros_skills_and_the_points_it_has_to_spend():
+    ref = render.Reference.load()
+    hero = {"unit_id": 7, "type_id": "Hamg", "x": 0, "y": 0, "hp": 500, "max_hp": 500, "mana": 300, "max_mana": 300,
+            "hero": True, "level": 3, "order": None, "abilities": [{"ability_id": "AHbz", "level": 1}]}
+    text = render.state({"units": [hero], "player": {}}, ref, me=0, race="human", map_name="(2)EchoIsles.w3x",
+                        limit=600, queued=0, result="", events=[])
+    assert "skills Blizzard (AHbz) 1 · 2 skill points to spend: learn AHbz or AHab or AHwe" in text
+    spent = {**hero, "abilities": [{"ability_id": "AHbz", "level": 2}, {"ability_id": "AHab", "level": 1}]}
+    assert render.skills_text(spent, ref) == "skills Blizzard (AHbz) 2, Brilliance Aura (AHab) 1"

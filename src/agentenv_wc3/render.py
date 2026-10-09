@@ -155,22 +155,37 @@ def order_text(order: dict | None, ref: Reference) -> str:
     return name + target
 
 
+def hero_skills(hero: dict, ref: Reference) -> tuple[dict[str, int], int, list[str]]:
+    """A hero's learned skills by level, its skill points left to spend (its level less the levels learned), and the
+    skills it can learn now."""
+    options = (ref.units.get(hero["type_id"]) or {}).get("potential_hero_abilities") or []
+    learned = {a["ability_id"]: a.get("level", 0) for a in hero.get("abilities") or () if a["ability_id"] in options}
+    left = max(0, (hero.get("level") or 0) - sum(learned.values()))
+
+    def open_now(raw: str) -> bool:
+        ability, have = ref.abilities.get(raw) or {}, learned.get(raw, 0)
+        return (have < (ability.get("max_level") or 3) and (hero.get("level") or 0)
+                >= (ability.get("required_level") or 1) + (ability.get("level_skip") or 2) * have)
+
+    return learned, left, [raw for raw in options if left and open_now(raw)]
+
+
+def skills_text(hero: dict, ref: Reference) -> str:
+    """`skills Blizzard (AHbz) 1 · 2 skill points to spend: learn AHab or AHwe`, for get_state and list_units."""
+    learned, left, ready = hero_skills(hero, ref)
+    text = "skills " + (", ".join(f"{ref.label(k)} {v}" for k, v in learned.items()) if learned else "none")
+    if left:
+        text += (f" · {left} skill point{'s' if left > 1 else ''} to spend"
+                 + (f": learn {' or '.join(ready)}" if ready else ""))
+    return text
+
+
 def skill_to_learn(hero: dict, ref: Reference) -> str | None:
     """The skill a hero spends its next point on: the deepest it can learn now, a tie to the first it lists; None
     with no point left (its level less the levels learned) or nothing open. A skill's next level needs hero level
     required_level + level_skip (the game's 2 when the data says 0) per level learned."""
+    learned, _, ready = hero_skills(hero, ref)
     options = (ref.units.get(hero["type_id"]) or {}).get("potential_hero_abilities") or []
-    learned = {a["ability_id"]: a.get("level", 0) for a in hero.get("abilities") or () if a["ability_id"] in options}
-    level = hero.get("level") or 0
-    if level <= sum(learned.values()):
-        return None
-
-    def open_now(raw: str) -> bool:
-        ability, have = ref.abilities.get(raw) or {}, learned.get(raw, 0)
-        return (have < (ability.get("max_level") or 3)
-                and level >= (ability.get("required_level") or 1) + (ability.get("level_skip") or 2) * have)
-
-    ready = [raw for raw in options if open_now(raw)]
     return max(ready, key=lambda raw: (learned.get(raw, 0), -options.index(raw)), default=None)
 
 
@@ -219,6 +234,8 @@ def unit_line(u: dict, ref: Reference, *, own: bool, details: bool = False, item
         parts.append(order_text(u.get("order"), ref))
     if u.get("buffs"):
         parts.append("buffs " + ", ".join(ref.name(b) for b in u["buffs"]))
+    if own and u.get("hero"):
+        parts.append(skills_text(u, ref))
     if items:
         parts.append(items_text(items, ref))
     line = " · ".join(parts)
