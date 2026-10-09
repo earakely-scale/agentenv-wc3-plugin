@@ -69,7 +69,8 @@
     "player_name": "wc3",
     "game_settings": {
       "faction": "night_elf",
-      "autocast": true
+      "autocast": true,
+      "omniscient": true
     },
     "depends_on": [
       "match",

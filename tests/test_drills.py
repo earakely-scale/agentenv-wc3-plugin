@@ -254,6 +254,7 @@ def test_the_bundles_mirror_duels_are_what_the_generator_writes_and_each_is_wc3a
     assert "40% of the other's strength" in by_id["play"]["prompt"] and by_id["grade"]["verifier_id"] == "duel"
     baseline = {s["id"]: s for s in made["mirror-orc-baseline"]}
     assert baseline["agent"]["a2a_agent_id"] == "wc3-scripted" and "model" not in baseline["play"]
+    assert baseline["slot-wc3"]["game_settings"]["omniscient"] is True
     for race, army in duels.ARMIES.items():
         assert all(ref.units[raw]["hero"] == raw[0].isupper() for raw, _, _ in army), race
         assert duels.upgrades(race, ref), race

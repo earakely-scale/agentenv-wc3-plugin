@@ -69,7 +69,8 @@
     "player_name": "wc3",
     "game_settings": {
       "faction": "undead",
-      "autocast": true
+      "autocast": true,
+      "omniscient": true
     },
     "depends_on": [
       "match",
