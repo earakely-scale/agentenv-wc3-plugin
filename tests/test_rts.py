@@ -615,7 +615,7 @@ async def test_staging_places_units_by_name_and_names_them(env_vars):
     env = WC3Env()
     try:
         await new_game(env, [{"agent": "wc3", "race": "human"}, {"computer": "normal", "race": "orc"}],
-                       time_limit_seconds=120)
+                       time_limit_seconds=600)
         real, calls = env.bridge.call, []
 
         async def call(cmd, **args):
@@ -626,7 +626,7 @@ async def test_staging_places_units_by_name_and_names_them(env_vars):
 
         env.bridge.call = call
         home = env.metrics.home(env.obs[0])
-        result = await env.stage(warmup_seconds=2, ops=[
+        result = await env.stage(warmup_seconds=130, ops=[   # past wc3env's 60 s step, so in steps
             {"op": "ai", "player": "opponent", "paused": True},
             {"op": "resources", "player": "wc3", "gold": 1500, "lumber": 800},
             {"op": "spawn", "player": "wc3", "type": "hfoo", "n": 2, "at": "home", "dx": -1150, "as": "army"},
@@ -638,7 +638,8 @@ async def test_staging_places_units_by_name_and_names_them(env_vars):
             await env.stage(ops=[{"op": "teleport"}])
     finally:
         await env.close()
-    assert result["handles"] == {"army": 2, "enemy": 2} and env.stats["staged_seconds"] == 2
+    assert result["handles"] == {"army": 2, "enemy": 2} and env.stats["staged_seconds"] == 130
+    assert result["game_time_seconds"] >= 130
     assert calls[0] == ("ai", {"paused": 1, "player": 1}) and calls[1] == ("resources", {
         "gold": 1500, "lumber": 800, "player": 0})
     assert calls[2] == ("spawn", {"type_id": "hfoo", "player": 0, "n": 2, "x": home["x"] - 1150, "y": float(home["y"])})

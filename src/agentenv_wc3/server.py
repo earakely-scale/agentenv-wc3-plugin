@@ -1289,10 +1289,12 @@ class WC3Env(AgentEnvGameEnv):
         async with self.lock:
             await self._session_game()
             try:
-                if warmup_seconds:
-                    result = await self.bridge.call("step", actions={}, ms=int(warmup_seconds) * 1000)
-                    self._observed(result)
-                    self.stats["staged_seconds"] += int(warmup_seconds)
+                left = int(warmup_seconds) * 1000
+                while left > 0:   # wc3env steps at most MAX_ADVANCE_SECONDS at a time
+                    ms = min(left, MAX_ADVANCE_SECONDS * 1000)
+                    self._observed(await self.bridge.call("step", actions={}, ms=ms))
+                    left -= ms
+                self.stats["staged_seconds"] += int(warmup_seconds)
                 handles: dict[str, list[int]] = {}
                 for i, op in enumerate(ops):
                     try:
