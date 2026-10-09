@@ -686,11 +686,18 @@ and orders only its own side; an `omniscient` slot's session observes every play
   research the unit can't do is refused at `act`, naming the units that can ("Town Hall can't build Farm; your
   Peasant can").
 - `advance` sends them and reports what the game refused, the sites it chose for buildings, and what happened.
+- The game drops an order it can't carry out without telling wc3env, as it shows a player "Not enough gold." on
+  screen. `advance` names a train, research or build that never started with what it lacked when it was sent: gold,
+  lumber or food (spent down the batch in order), the buildings it requires, or the hero rules (one of each hero,
+  a second needs the tier 2 hall and a third the tier 3 hall). It names one only when the order left no trace after
+  the step, so an order the game took is never reported.
+- The game's observation drops a dead hero. The env remembers every hero a player has had, and `get_state` lists a
+  dead one with its revive order (`revive {"target_id": ...}` on an altar), as a player sees its portrait.
 - A program's batch is checked the same way. Orders that no longer apply are reported as rejected, by their index.
 
 | Tool | What it does |
 |---|---|
-| `get_state` | Who you play and against whom, game time and limit, gold, lumber, food, units by type, idle workers, every structure and its production, enemies in view, nearby gold mines, start locations, the last step's events |
+| `get_state` | Who you play and against whom, game time and limit, gold, lumber, food, units by type, heroes (dead ones too, with their revive order), idle workers, every structure and its production, enemies in view, nearby gold mines, start locations, the last step's events |
 | `list_units` | One line per unit (yours, enemies, neutrals, or yours inside mines and buildings): id, type, position, hp, order; `details` adds what each can train, build, research and cast |
 | `resources` | Gold mines, the nearest trees and items on the ground |
 | `lookup` | Any unit, building, upgrade, item or ability: cost, time, stats, requirements, what it trains or researches, cast orders |
