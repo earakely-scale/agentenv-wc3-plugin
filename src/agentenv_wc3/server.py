@@ -166,8 +166,8 @@ class Action(BaseModel):
         description='The command\'s arguments, e.g. {"x": 100, "y": -200} for move, {"target_id": 1234} for '
                     'attack or harvest, {"type_id": "Footman"} for train, {"type_id": "Farm", "x": .., "y": .., '
                     '"auto_place": true} for build, {"order": "Blizzard", "x": .., "y": ..} for cast, '
-                    '{"ability_id": "AHbz"} for learn (a hero spending a skill point). Type names or ids both work. Add "queued": true to append to the unit\'s orders instead of replacing '
-                    "them.")] = {}
+                    '{"ability_id": "AHbz"} for learn (a hero spending a skill point). Type names or ids both work. '
+                    'Add "queued": true to append to the unit\'s orders instead of replacing them.')] = {}
 
 
 class LockstepSettings(BaseModel):
