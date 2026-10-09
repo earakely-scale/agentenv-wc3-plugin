@@ -689,7 +689,11 @@ and orders only its own side; an `omniscient` slot's session observes every play
 
 **How orders are checked:**
 - Orders given with `act` are checked against wc3env's own rules: the unit is yours, the target is in view, and the
-  arguments are well formed.
+  arguments are well formed. Each order is checked on its own: one that fails is left out with why, and the rest
+  are queued.
+- wc3env takes a unit inside a gold mine, building or transport for no unit of the player's, and the game takes no
+  order there. A miner spends part of each trip inside, so such an order is queued and kept back by `advance` until
+  the unit is out, for one advance.
 - A type given by name resolves to the one the ordering unit makes. That matters because names are shared: a
   Peasant's "Barracks" is the Human one, and an Altar's "Archmage" is not a campaign version. A build, train or
   research the unit can't do is refused at `act`, naming the units that can ("Town Hall can't build Farm; your

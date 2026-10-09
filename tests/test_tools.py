@@ -184,8 +184,28 @@ async def test_orders_that_stopped_applying_are_dropped_not_blocking(tools, env)
                                 {"unit_id": PEASANT + 1, "command": "move", "arguments": {"x": 0, "y": 0}}])
     env.queue[0][1]["unit_id"] = 4242   # as if the second Peasant had died since: an id the game no longer has
     report = await tools("advance", seconds=1)
-    assert "Dropped 1 queued order that no longer applied:\n  4242 move at (0,0)" in report
+    assert "Dropped 1 queued order that no longer applied:\n  4242 move at (0,0): no unit of yours has that" in report
     assert "Sent 1 order." in report
+
+
+async def test_one_bad_order_doesnt_sink_the_batch_and_a_unit_inside_waits_for_its_order(tools, env):
+    queued = await tools("act", actions=[{"unit_id": PEASANT, "command": "stop"},
+                                         {"unit_id": ENEMY_HALL, "command": "stop"}])
+    assert queued.startswith("Queued 1 order: 1001 Peasant stop.")
+    assert "Not queued, 1:\n  2000 Great Hall stop: not your unit" in queued
+    await tools("act", clear=True, actions=[{"unit_id": PEASANT, "command": "stop"}])
+    miner = {"unit_id": 1999, "type_id": "hpea", "owner": 0, "x": 0, "y": 0, "hp": 220, "max_hp": 220}
+    env.obs[0]["inside"] = [miner]   # in a gold mine, where wc3env takes it for no unit of ours
+    env.names.see(env.obs[0])
+    queued = await tools("act", actions=[{"unit_id": 1999, "command": "move", "arguments": {"x": 0, "y": 0}}])
+    assert "1999 is inside a gold mine, building or transport now" in queued and "2 in the queue" in queued
+    report = await tools("advance", seconds=1)
+    assert "Sent 1 order." in report and "Kept 1 order back for your next advance" in report
+    assert [a["unit_id"] for a in env.queue[0]] == [1999]
+    env.obs[0]["inside"] = [miner]
+    report = await tools("advance", seconds=1)
+    assert "1999 Peasant move at (0,0): still inside a gold mine, building or transport" in report
+    assert env.queue[0] == []
 
 
 def test_get_state_lists_each_hero_with_its_items_by_the_slot_use_item_takes():

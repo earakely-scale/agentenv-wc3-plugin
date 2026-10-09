@@ -412,6 +412,7 @@ class WC3Env(AgentEnvGameEnv):
         self.players = players_of(self.scenario)
         self.lead = self.players[0]["slot"]
         self.queue: dict[int, list[dict]] = {}
+        self.held: dict[int, list[dict]] = {}   # orders an advance kept back for a unit inside, once
         self.recent: dict[int, list[str]] = {}
         self.step_info: dict[int, dict] = {}
         self.orders_sent: dict[int, int] = {}
@@ -479,7 +480,7 @@ class WC3Env(AgentEnvGameEnv):
         self.lead = next(x["slot"] for x in players if x["computer"] is None)
         self.obs = {int(k): v for k, v in result["observations"].items()}
         agents = [x["slot"] for x in players if x["computer"] is None]
-        self.queue, self.recent = {x: [] for x in agents}, {x: [] for x in agents}
+        self.queue, self.recent, self.held = {x: [] for x in agents}, {x: [] for x in agents}, {}
         self.orders_sent, self.orders_refused, self.step_info = {x: 0 for x in agents}, {x: 0 for x in agents}, {}
         self.result, self.failed, self.done = "", None, False
         self.lockstep = (Lockstep(agents, scenario["lockstep"]["stall_seconds"], self._chunk, self._seconds,
@@ -880,11 +881,24 @@ class WC3Env(AgentEnvGameEnv):
             if self._out(slot):
                 raise WorkerError("game_over", f"the game is over ({self._result_of(slot) or 'ended'})")
             batch = [self._resolve(slot, a.model_dump()) for a in actions]
-            await self.bridge.call("validate", slot=slot, actions=batch)
-            self.queue[slot] = batch if clear else self.queue.get(slot, []) + batch
-            return (f"Queued {len(batch)} order{'s' if len(batch) != 1 else ''}: "
-                    + "; ".join(self._describe(a) for a in batch)
-                    + f". {len(self.queue[slot])} in the queue, sent with your next advance.\n" + self._footer(slot))
+            inside = self._inside(slot)
+            kept, dropped = await self._still_valid(slot, [a for a in batch if a["unit_id"] not in inside])
+            taken = [a for a in batch if a["unit_id"] in inside or any(a is k for k in kept)]
+            if not taken:
+                raise WorkerError("bad_actions", "; ".join(f"{self._describe(a)}: {why}" for a, why in dropped))
+            self.queue[slot] = taken if clear else self.queue.get(slot, []) + taken
+            waiting = [a for a in taken if a["unit_id"] in inside]
+            lines = [f"Queued {len(taken)} order{'s' if len(taken) != 1 else ''}: "
+                     + "; ".join(self._describe(a) for a in taken)
+                     + f". {len(self.queue[slot])} in the queue, sent with your next advance."]
+            if waiting:
+                lines.append(f"{', '.join(str(a['unit_id']) for a in waiting)} {'is' if len(waiting) == 1 else 'are'} "
+                             "inside a gold mine, building or transport now, where the game takes no orders: an "
+                             "advance keeps such an order back until the unit is out, for one advance.")
+            if dropped:
+                lines.append(f"Not queued, {len(dropped)}:")
+                lines += [f"  {self._describe(a)}: {why}" for a, why in dropped]
+            return "\n".join([*lines, self._footer(slot)])
         return await self._run(body)
 
     @tool()
@@ -901,13 +915,19 @@ class WC3Env(AgentEnvGameEnv):
                 raise WorkerError("game_over", f"the game is over ({self._result_of(slot) or 'ended'}); get_state "
                                                "shows the end")
             extra = [self._resolve(slot, a.model_dump()) for a in actions or ()]
-            if extra:
-                await self.bridge.call("validate", slot=slot, actions=extra)
-            batch, dropped = await self._still_valid(slot, self.queue.get(slot, []) + extra)
-            self.queue[slot] = []
-            return slot, batch, dropped, self._seconds(), self._me(slot)
+            inside, before_held = self._inside(slot), self.held.get(slot, [])
+            queued, held, dropped = self.queue.get(slot, []) + extra, [], []
+            for a in queued:
+                if a["unit_id"] in inside:
+                    if any(a is h for h in before_held):
+                        dropped.append((a, "still inside a gold mine, building or transport"))
+                    else:
+                        held.append(a)
+            batch, gone = await self._still_valid(slot, [a for a in queued if a["unit_id"] not in inside])
+            self.queue[slot], self.held[slot] = list(held), list(held)
+            return slot, batch, held, dropped + gone, self._seconds(), self._me(slot)
 
-        slot, batch, dropped, start, sent_at = await self._run(before)
+        slot, batch, held, dropped, start, sent_at = await self._run(before)
         try:
             info = await self._play(slot, batch, seconds * 1000)
         except WorkerError as e:
@@ -921,6 +941,10 @@ class WC3Env(AgentEnvGameEnv):
                 lines.append(f"Dropped {len(dropped)} queued order{'s' if len(dropped) != 1 else ''} that no longer "
                              "applied:")
                 lines += [f"  {self._describe(a)}: {why}" for a, why in dropped]
+            if held:
+                lines.append(f"Kept {len(held)} order{'s' if len(held) != 1 else ''} back for your next advance, "
+                             "the unit being inside a gold mine, building or transport:")
+                lines += [f"  {self._describe(a)}" for a in held]
             if batch:
                 race = next(x["race"] for x in self.players if x["slot"] == slot)
                 unstarted = refusals.unstarted(sent_at, me, batch, {r.get("index") for r in rejected}, self.ref, race,
@@ -951,9 +975,24 @@ class WC3Env(AgentEnvGameEnv):
 
     # ---- orders ----
 
+    def _inside(self, slot: int) -> set[int]:
+        """The player's units inside a gold mine, building or transport, which wc3env takes for no unit of theirs."""
+        return {u["unit_id"] for u in self._me(slot).get("inside") or ()}
+
+    def _why(self, slot: int, action: dict, message: str) -> str:
+        """wc3env's reason for refusing an order, said for the unit it names."""
+        if "uncontrolled unit" not in message:
+            return message
+        unit = action["unit_id"]
+        if any(u["unit_id"] == unit for u in self._me(slot).get("visible_enemies") or ()):
+            return "not your unit"
+        if unit in self.names.types:
+            return "that unit is gone: it died, or is no longer yours"
+        return "no unit of yours has that id (list_units shows them)"
+
     async def _still_valid(self, slot: int, batch: list[dict]) -> tuple[list[dict], list[tuple[dict, str]]]:
-        """The batch without the orders that stopped applying since they were queued (the unit died, the target
-        went out of view): wc3env refuses a whole batch for one of them. Returns it and the dropped orders."""
+        """The batch without the orders that don't apply (the unit died, the target went out of view), each with
+        why: wc3env refuses a whole batch for one of them. Returns it and the dropped orders."""
         if not batch:
             return batch, []
         try:
@@ -970,7 +1009,7 @@ class WC3Env(AgentEnvGameEnv):
             except WorkerError as e:
                 if e.code != "bad_actions":
                     raise
-                dropped.append((action, e.message))
+                dropped.append((action, self._why(slot, action, e.message)))
         return kept, dropped
 
     def _unit(self, slot: int, unit_id: int) -> dict:
