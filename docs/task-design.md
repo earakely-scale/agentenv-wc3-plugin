@@ -2,7 +2,7 @@
 
 How Warcraft III tasks are built. Phases 1 to 3 below are implemented and were run end to end on the real game
 (2026-10-05): `smoke` (1.0), `drill-fight-even` (0.6), `drill-creep-easy` (0.67) and `duel-quick` (0.41 and 0.35, one
-score per player). Phase 4, the task-set generator, is `agent-env wc3 sweep` (README, Sweeps).
+score per player, under the first full-game rubric, which phase 8 replaced). Phase 4, the task-set generator, is `agent-env wc3 sweep` (README, Sweeps).
 
 ## Principles
 
@@ -110,8 +110,8 @@ or `drawn`) and scores (`score`, `units_killed`, `army`).
 - **For the record:** `finish_match` keeps the final match in the run's `metadata["game_match"]`, and `rts_grade` adds
   a row of information saying how it ended.
 
-**Not in the match:** the rubric and the time-limit tiebreak (`rts_grade`), a drill's staging (the stage step) and its
-goal (the prompt).
+**Not in the match:** the rubric, which counts a game nobody won by its time limit as a draw (`rts_grade`), a drill's
+staging (the stage step) and its goal (the prompt).
 
 ## Staging: `urn:wc3:stage/v1`
 
@@ -219,11 +219,10 @@ Today's top-level fields (`result`, `score`, `opponent_score`, ...) stay for com
 |---|---|---|
 | `env_id` | string | required |
 | `player_names` | agent names | every agent |
-| `rubric` | `melee`, `dense`, `checks`, `smoke` | `melee` |
+| `rubric` | `outcome`, `dense`, `checks`, `smoke` | `outcome` |
 | `weights` | `{criterion: weight}`; 0 drops one | the preset's |
 | `targets` | `{criterion: full-credit value}` | the preset's |
 | `checks` | `[{metric, op, value, weight}]` | for `checks`; added to any rubric |
-| `at_time_limit` | `score`, `draw`, `loss` | `draw`: a win is a conquest; a lead in score earns `outscore` |
 | `gates` | `game_ran`, `agent_played` | both |
 | `verifier_id` | string | the step's id |
 
@@ -231,10 +230,8 @@ Today's top-level fields (`result`, `score`, `opponent_score`, ...) stay for com
 
 | Criterion | Credit | Rubrics | Weight |
 |---|---|---|---|
-| `reached_end` | the game reached a result or the time limit | melee, dense | 1 |
-| `win` | won, or won the tiebreak at the limit (per `at_time_limit`) | melee, dense | 3 |
-| `survive` | not defeated | melee, dense | 1 |
-| `outscore` | my score / the best opponent's, at most 1 | melee, dense | 1 |
+| `outcome` | a win 1, a draw 0.5, a loss 0; a game nobody won by the time limit is a draw | outcome, dense | 1 |
+| `outscore` | my score / the best opponent's, at most 1 | dense | 1 |
 | `army_ratio` | my army / the strongest enemy's, toward a target | dense | 1 |
 | `kills_ratio` | units killed / (killed + lost) | dense | 1 |
 | `buildings_destroyed` | the share of the enemy's buildings | dense | 1 |
@@ -244,6 +241,11 @@ Today's top-level fields (`result`, `score`, `opponent_score`, ...) stay for com
 | each check | a metric against a value | checks | 1 each |
 | `ran_to_limit`, `played_out` | the game ran to its limit; `finish_match` played it out | smoke | 1 |
 | gates `game_ran`, `agent_played` | failing zeroes the player's grade | all | -100 |
+
+Under `outcome`, rows with no weight report the score, army and kills against the enemies'. A rubric with `outcome`
+raises `VoidMatch` for a match that has none (cancelled, failed, or its engine down): the step fails, and the run
+with it, so a void match never reads as a loss. A full game's play steps set `fail_task_on_error: false`, so an agent
+that fails mid-game has its game played out and graded.
 
 **Output:** one verification per graded player, `context.metadata["verifications"]["<verifier_id>:<agent>"] =
 {results, score}`, scored with agent-env's `aggregate_score`, so `agent-env run`, evals and the hub read it as they
@@ -257,7 +259,9 @@ read `env_outcome_verifier`'s. Every criterion records its evidence (`army 2715 
    `user_overrides.step_params.<step id>`, so a runner changes the seed, map or opponent without new tasks.
 3. **Generated sets:** `agent-env wc3 sweep generate SPEC OUT` crosses a template task over the models, maps, races,
    opponents and seeds a TOML spec names into named tasks (`first-eval-gpt-5.4-mini-terenasstand-s2`) and an eval of
-   them; `sweep run` plays them under a spend budget and `sweep report` tabulates them. Drills are not crossed yet.
+   them; `sweep run` plays them under a spend budget and `sweep report` tabulates them: full games by outcome, AI
+   level (the ladder: the highest level beaten, three in four games won) and map, drills by skill. A template may be
+   a glob of bundled tasks (`drill-*`), and an axis the spec leaves out keeps each template's own.
 
 ## More examples
 
@@ -305,8 +309,10 @@ with a `prompt_agent` step per agent, after `start`, then `finish_match` and `{"
 
 ## Compatibility
 
-`rts_grade`'s `melee` and `smoke` give the grades `wc3-verifier` and `smoke-verifier` gave (0.5s stay 0.5), with
-`finish_match` in place of the idle extension. The players moved from the old `wc3_match` step (`seats`, and its
+`rts_grade`'s `smoke` gives the grades `smoke-verifier` gave, with `finish_match` in place of the idle extension.
+Its first full-game rubric, `melee`, which gave the grades `wc3-verifier` gave, blended the outcome with the game's
+score (a win 3, reaching the end, surviving and outscoring 1 each), so a game nobody won scored 0.33 to 0.50; the
+`outcome` rubric replaced it, and `at_time_limit` with it. The players moved from the old `wc3_match` step (`seats`, and its
 shorthand `race`, `opponent_race`, `ai_difficulty` and `labels`) to the lobby, and its match settings to
 agentenv-game-env's `open_lobby`. Its license is agentenv-game-env's `add_license`, which replaced `wc3_license`. A
 one-agent game's verification keeps its name (`<verifier_id>`); several agents' are `<verifier_id>:<agent>`.
@@ -356,6 +362,7 @@ one-agent game's verification keeps its name (`<verifier_id>`); several agents' 
 | 5 | Players as the lobby's slots: `AgentEnvGameEnv` and `urn:game:lobby/v1` from agentenv-game-env, `add_player_slot`; `rts_seat_agents` and the shorthand removed | done |
 | 6 | agentenv-game-env 0.3.0: player slots by `player_id`, settings as models, each player slot's env card; the match (`urn:game:match/v1`: its start gate, `finish_match`, each player's outcome and scores) in place of `rts_finish` and the hold, finish and idle extensions; `rts_broadcast` live before the prompts, with `save_rts_broadcast` | done |
 | 7 | agentenv-game-env 0.4.0: the spectator view (`/live?view`) and the match's files (`@match_files`) in place of `urn:rts:recording/v1` and `urn:wc3:replay/v1`; `start_broadcast`, `save_broadcast` and `save_match_files` in place of the plugin's streamer, casters and steps | done |
+| 8 | Grading on outcomes: the `outcome` rubric in place of `melee`, void matches, the ladder over the AI's levels in sweeps; drills by skill, played by `wc3-llm`, in sweeps | done; not yet run on the real game |
 
 ## Decisions taken
 
@@ -363,5 +370,6 @@ one-agent game's verification keeps its name (`<verifier_id>`); several agents' 
 2. A player slot's default `faction` is `random`.
 3. Each player sees only its own observation; `omniscient` is for harness opponents.
 4. MCP prompts can be generic: the briefing opens `get_state`. The existing prompts keep their matchup and opening.
-5. `rts_grade`'s `at_time_limit` defaults to `draw`: a win is a conquest, and a lead in score earns `outscore`.
+5. A game is graded on its outcome: a win 1, a draw 0.5, a loss 0. A game nobody won by its time limit is a draw (a
+   win is a conquest), and the game's score is evidence, not grade. A match with no outcome is void, not a loss.
 6. Every match is played out (`finish_match`) before it is graded; a forfeit is not a game event.

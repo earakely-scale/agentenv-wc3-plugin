@@ -1,5 +1,10 @@
 # first-eval: four low-cost models against the easy AI
 
+> **Graded before outcome grading.** The grades below are from the first full-game rubric, which blended the outcome
+> with the game's score, so a game nobody won scored 0.33 to 0.50. On outcomes (a win 1, a draw 0.5, a loss 0), all 48
+> games of both runs were draws at the 5-minute limit: every model 0 / 6 / 0, 0.50 points. The ranking below is then
+> the score share's, the tiebreak.
+
 [sweeps/first-eval.toml](../../sweeps/first-eval.toml), played on the real game on 2026-10-06:
 - `vs-ai-quick` crossed over four models, two 1v1 maps (Echo Isles, Terenas Stand) and seeds 1 to 3: 24 games;
 - each game is `wc3-llm` as Human against the game's easy Orc AI, for 5 minutes of game time;

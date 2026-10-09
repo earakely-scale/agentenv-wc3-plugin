@@ -17,10 +17,11 @@ Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once),
 `wc3-llm` plays with any chat model agent-env's model endpoint serves: the `prompt_agent` step's `model`, or
 `agent-env run --model`. `agent-env wc3 setup --agent` builds and registers it with the other agents.
 
-`rts_grade` (rubric `melee`) grades a game: a win counts three times as much as not being defeated or outscoring the
-AI on the game's own score total (an undecided game is no win: `rts_grade`'s `at_time_limit` is `draw`), and two gates zero the grade:
-the game stopped working, or the agent gave no orders (or the harness played part of its game). `smoke` is graded
-by the `smoke` rubric.
+`rts_grade` (rubric `outcome`) grades a game on its outcome: a win 1, a draw 0.5, a loss 0, where a game nobody has
+won by the time limit is a draw. The game's score, army and kills are reported beside it with no weight. A gate zeroes
+the grade when the agent gave no orders, and a match with no outcome (cancelled, failed, or its engine down) is void:
+the grade step fails rather than reading as a loss. A full game's play step tolerates a failed agent, so its game is
+still played out and graded. `smoke` is graded by the `smoke` rubric.
 
 - `macro-micro-quick`, `macro-micro` and `macro-micro-realtime`: the `wc3-macro-micro` agent (wc3env's wc3agent:
   a macro model plans, a micro model controls the army) plays through the env's `urn:rts` session, Haiku 4.5 for both
@@ -49,9 +50,25 @@ units at named places (`home`, `toward:nearest_camp:900`, `camp:9`, ...) under h
 the summary's `army_kept_percent` and `enemy_army_destroyed_percent` read), the drill's goal as the prompt, and
 `rts_grade` with the scenario's own checks (`rubric: checks`). The opponent is the game's AI, paused by the stage in
 all but the full game, or `wc3-scripted`, an agent that attack-moves at your army (`attack`) or at your workers,
-else your hall (`raid`). `wc3-macro-micro` plays your side, Haiku 4.5 for both models.
+else your hall (`raid`). `wc3-llm` plays your side with Haiku 4.5, the drill's goal followed by how to play through
+the tools (as the full games' prompt has it, for the drill's race).
 
-| Task | Skill | Minutes | Opponent | Dropped |
+Each drill tests one of seven skills, and the bundle has an eval per skill (`evals/drills-<skill>.toml`):
+`agent-env run wc3 --eval drills-combat` plays that skill's drills. The evals share no drill, so `agent-env run wc3`
+with neither a task nor an eval plays every drill once. To compare models on them, sweep them
+(`sweeps/drills.toml` in the repo).
+
+| Skill | Drills |
+|---|---|
+| economy | `build-supply` (and its `-orc`, `-undead`, `-nightelf`), `build-production`, `spend-and-tech`, `opening`, `build-repair` |
+| map-control | `expansion`, `scouting` |
+| defence | `defend-base` (and its `-human`, `-orc`, `-undead`, `-nightelf`), `build-towers` |
+| combat | `fight-even`, `fight-outnumbered`, `hero-in-danger` |
+| creeping | `creep-easy`, `creep-hard` |
+| hero-and-items | `hero-revive`, `loot`, `shopping` |
+| full-game | `full-game-easy` |
+
+| Task | What it asks | Minutes | Opponent | Dropped |
 |---|---|---|---|---|
 | `drill-build-production` | Second Barracks and a Blacksmith | 4 | computer, paused | |
 | `drill-build-repair` | Repairing a battered base | 2.5 | computer, paused | |
@@ -79,7 +96,7 @@ else your hall (`raid`). `wc3-macro-micro` plays your side, Haiku 4.5 for both m
 | `drill-shopping` | Buying items | 2, after a 460 s warm-up | computer, paused | finish at `items_bought >= 3` |
 | `drill-spend-and-tech` | Spending a big bank and teching | 4 | computer, paused | |
 
-Run one with `agent-env run wc3 --task drill-fight-even`. Every drill needs `wc3-macro-micro` (`agent-env wc3 setup
+Run one with `agent-env run wc3 --task drill-fight-even`. Every drill needs `wc3-llm` (`agent-env wc3 setup
 --agent`); the ones against `wc3-scripted` need that agent registered too. A drill's time limit is its minutes plus
 any warm-up: `drill-shopping` lets 460 game seconds pass first so the shops stock up.
 

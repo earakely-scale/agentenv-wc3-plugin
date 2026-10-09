@@ -20,6 +20,9 @@ AI agents play Warcraft III: The Frozen Throne through [wc3env](https://github.c
   - a scripted opponent (`wc3-scripted`).
 - **How you set it up:** one task JSON says who plays, on which map, with which races and teams, how the game starts,
   what is staged first and how it is graded, all without code.
+- **How it's graded:** on the outcome: a win 1, a draw 0.5, a loss 0, where a game nobody has won by its time limit is
+  a draw. A sweep plays each model against the game's AI at its three levels and reports the highest level it beats;
+  each drill tests one skill.
 
 Every game is graded, saved as a native `.w3g` replay and recorded. You can watch it live in the game's own picture,
 with the agents' plans beside it, and broadcast it to Twitch or X, or only record the broadcast.
@@ -201,14 +204,14 @@ While a game plays, the env serves a spectator view at `/live`: `agent-env wc3 w
 | Task | Who plays | Game | Measured on the real game |
 |---|---|---|---|
 | `smoke` | nobody: `finish_match` plays the game out | 2 minutes | 40 s, $0 |
-| `broadcast-smoke` | two `wc3-scripted` agents (attack and raid), staged armies, a recorded broadcast in the game's own picture | 2 minutes, stepped in lockstep, graded per player | 4 min, $0; red 0.25, blue 0.43, the same every time it ran; a 1080p broadcast of about 2 minutes |
-| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); 0.42: survived to the limit, outscored 8.7k to 4.8k. In `first-eval`, 6 games: 0.44 ± 0.01, $0.11 a game |
+| `broadcast-smoke` | two `wc3-scripted` agents (attack and raid), staged armies, a recorded broadcast in the game's own picture | 2 minutes, stepped in lockstep, graded per player (`dense`) | 4 min, $0; the same game every time it ran, a draw at the limit; a 1080p broadcast of about 2 minutes |
+| `vs-ai-quick` | `wc3-llm`: Haiku 4.5 through the MCP tools, Human | 5 minutes against the easy Orc AI | 3 min, $0.10 (52 model turns, prompt-cached); a draw: survived to the limit, outscored by the AI 8.7k to 4.8k. In `first-eval`, 6 games: 6 draws, $0.11 a game |
 | `vs-ai` | `wc3-llm`: Sonnet 5.5 through the MCP tools, Human | 20 minutes against the normal Orc AI | not yet measured |
 | `macro-micro-quick` | wc3agent: Haiku 4.5 macro, Haiku 4.5 micro | 5 minutes against the easy AI, stepped | ~10 min, $2.40 |
 | `macro-micro` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 20 minutes against the normal AI, stepped | not yet measured |
 | `macro-micro-realtime` | wc3agent: Sonnet 5.5 macro, Haiku 4.5 micro | 10 minutes against the normal AI, in realtime, with the game's picture | 11 min, ~$11 |
-| `duel-quick` | two wc3agents, Haiku 4.5 for both models, Human against Orc | 5 minutes, stepped in lockstep, graded per player (`dense`) | 19 min, $4.70; Orc 0.41, Human 0.35 |
-| `drill-*` (25) | wc3agent with Haiku 4.5, against the AI or the scripted `wc3-scripted` | wc3agent's 25 scenarios as drills: 1.5 to 10 minutes, graded by their checks | `drill-fight-even` 11 min, $2.30, 0.6; `drill-creep-easy` 10 min, $1.90, 0.67 |
+| `duel-quick` | two wc3agents, Haiku 4.5 for both models, Human against Orc | 5 minutes, stepped in lockstep, graded per player (`dense`) | 19 min, $4.70 |
+| `drill-*` (25) | `wc3-llm` with Haiku 4.5, against the AI or the scripted `wc3-scripted` | wc3agent's 25 scenarios as drills, one skill each: 1.5 to 10 minutes, graded on the share of their checks met | played by wc3agent before the drills moved to `wc3-llm`: `drill-fight-even` 11 min, $2.30, 0.6; `drill-creep-easy` 10 min, $1.90, 0.67 |
 
 `agent-env run wc3 --task <task>` runs one, and `--model <model>` plays it on another model without editing it (for
 wc3-macro-micro, the macro model). The costs are model spend at list prices. On the fake game, `macro-micro-quick`
@@ -218,20 +221,25 @@ costs about $1.20 (there is nothing to fight, so the micro model is never asked)
   `duel-quick`). Any stock map, race, seed and mix of players is a few lines of JSON away:
   [Write your own task](#write-your-own-task).
 - **Drills:** all but `drill-full-game-easy` stage their start (`urn:wc3:stage/v1`), and each is graded by its checks.
-  The bundle's [README](src/agentenv_wc3/bundles/wc3/README.md) lists the 25 drills;
-  [docs/task-design.md](docs/task-design.md) is the design.
+  Each tests one of seven skills: economy, map control, defence, combat, creeping, hero and items, and a full game.
+  The bundle has an eval per skill (`agent-env run wc3 --eval drills-combat`), and `agent-env run wc3` with neither a
+  task nor an eval plays every drill once. The bundle's [README](src/agentenv_wc3/bundles/wc3/README.md) lists the 25
+  drills; [docs/task-design.md](docs/task-design.md) is the design.
 - **What every task saves** (`save_match_files`): the `.w3g` replay, an MP4 of the map, a self-contained HTML replay
   and the timeline as JSON, to recut or analyse a game without playing it again. `macro-micro-realtime` keeps the
   game's own video, with chapters, and a highlight reel in place of the timeline; its HTML replay plays the video
   beside the map once `agent-env wc3 recordings` puts both in one folder.
-- **Grading:** `rts_grade` grades each agent. The full games use the `melee` rubric:
-  - a win counts three times as much as not being defeated or as outscoring the opponent;
-  - an undecided game at the time limit is a draw, so outscoring the opponent earns its part, but a win needs every
-    enemy building destroyed;
-  - the grade is 0 if the game stopped working, or if the agent gave no orders.
+- **Grading:** `rts_grade` grades each agent. The full games use the `outcome` rubric:
+  - a win 1, a draw 0.5, a loss 0; a win needs every enemy defeated, and a game nobody has won by the time limit is
+    a draw;
+  - the game's score, army and kills are kept beside the grade, for the record, but don't count;
+  - the grade is 0 if the agent gave no orders;
+  - a match with no outcome (cancelled, failed, or its game engine down) is void: the grade step fails, so the run
+    shows failed rather than a loss;
+  - an agent that fails mid-game has its game played out, and keeps its outcome.
 
-  `duel-quick` and `broadcast-smoke` add army, kills, buildings, tier, expansions and hero level (`dense`); drills use
-  their own checks; `smoke` checks that the game ran to its limit and was played out.
+  `duel-quick` and `broadcast-smoke` add the score, army, kills, buildings, tier, expansions and hero level
+  (`dense`); drills use their own checks; `smoke` checks that the game ran to its limit and was played out.
 
 ## Write your own task
 
@@ -357,12 +365,12 @@ A stage step puts units at named places, relative to the first agent's start, an
    {"metric": "hero_alive", "op": "==", "value": true}], "depends_on": ["play"]}
 ```
 
-Grades mix freely. For example, a full game that rewards an early Keep twice as much as a win does, ignores
-expansions, and settles a game at the time limit on score:
+Grades mix freely. For example, a full game that weighs the outcome three times as much as each other criterion,
+ignores expansions, and rewards an early Keep twice as much as the outcome:
 
 ```json
-{"id": "grade", "type": "rts_grade", "env_id": "wc3", "rubric": "dense", "at_time_limit": "score",
- "weights": {"win": 3, "expansions": 0}, "targets": {"hero_level": 3},
+{"id": "grade", "type": "rts_grade", "env_id": "wc3", "rubric": "dense",
+ "weights": {"outcome": 3, "expansions": 0}, "targets": {"hero_level": 3},
  "checks": [{"metric": "first_time:hkee", "op": "<=", "value": 300, "weight": 6}], "depends_on": ["play"]}
 ```
 
@@ -407,63 +415,63 @@ and keeps its video as a file artifact of the run:
   listed in the run's `metadata["broadcasts"]`.
 - **An example:** `broadcast-smoke` records two scripted players in the game's own picture, at no model cost.
 
-## Sweeps: one task across models, maps and seeds
+## Sweeps: one task across models, maps, seeds and AI levels
 
-A sweep crosses a template task over the axes you name, plays every combination under a spend budget and tabulates
-the grades. The spec is a TOML file, e.g. [sweeps/first-eval.toml](sweeps/first-eval.toml):
+A sweep crosses template tasks over the axes you name, plays every combination under a spend budget and reports the
+outcomes. The spec is a TOML file. The ladder, [sweeps/ladder.toml](sweeps/ladder.toml), plays each model against the
+game's AI at all three levels:
 
 ```toml
-name = "first-eval"
-template = "vs-ai-quick"          # a bundled task, or a path to a task file
-models = ["anthropic/claude-haiku-4-5", "openai/gpt-5.4-mini", "gemini/gemini-3.8-flash", "fireworks_ai/deepseek-v4p1-flash"]
+name = "ladder"
+template = "vs-ai"                # a bundled task, a glob of them (drill-*), or a path to a task file
+models = ["fireworks_ai/deepseek-v4p1-flash", "anthropic/claude-haiku-4-5", "openai/gpt-5.4-mini"]
 maps = ["(2)EchoIsles.w3x", "(2)TerenasStand.w3x"]
-seeds = [1, 2, 3]
-max_cost_usd = 0.5                # a game's cap: wc3-llm stops playing there
+opponents = [{computer = "easy", race = "orc"}, {computer = "normal", race = "orc"}, {computer = "insane", race = "orc"}]
+seeds = [1, 2]
+time_limit_seconds = 1800         # games won or lost end sooner
+max_cost_usd = 2.0                # a game's cap: wc3-llm stops playing there
 ```
 
 ```bash
-agent-env wc3 sweep generate sweeps/first-eval.toml runs/first-eval   # 24 tasks, an eval and sweep.json
-agent-env wc3 sweep run runs/first-eval --budget 5 --parallel 2
-agent-env wc3 sweep report runs/first-eval --out docs/evals/first-eval.md
+agent-env wc3 sweep generate sweeps/ladder.toml runs/ladder   # 36 tasks, an eval and sweep.json
+agent-env wc3 sweep run runs/ladder --budget 20 --parallel 2
+agent-env wc3 sweep report runs/ladder --out docs/evals/ladder.md
 ```
 
 - **Generate** writes a bundle folder:
-  - one task per combination (`first-eval-gpt-5.4-mini-terenasstand-s2`), with that map, seed, race and opponent on
-    the match, and on the player's steps that model, a prompt for that race and map, and the cap
+  - one task per combination (`ladder-gpt-5.4-mini-terenasstand-vs-normal-orc-s2`), with that map, seed, race and
+    opponent on the match, and on the player's steps that model, a prompt for that race and map, and the cap
     (`WC3_MAX_COST_USD`);
-  - an eval of all of them, which `agent-env run runs/first-eval` plays like any bundle's;
+  - an eval of all of them, which `agent-env run runs/ladder` plays like any bundle's;
   - `sweep.json`, each task's axes.
 - **Axes:** `models`, `maps`, `races` (`human`, `orc`, `undead`, `night_elf`), `opponents` (`{computer = "easy",
-  race = "orc"}`; `easy`, `normal` or `insane`) and `seeds`. Also `time_limit_seconds`, `player_step` (the
-  `prompt_agent` step that gets the model, `play` by default) and `prompt`, a template with `{race}`, `{map}`,
-  `{players}`, `{difficulty}`, `{opponent}`, `{minutes}`, `{worker}` and `{supply}`.
+  race = "orc"}`; `easy`, `normal` or `insane`, the game's only levels) and `seeds`. An axis left out keeps each
+  template's own. Also `time_limit_seconds`, `player_step` (the `prompt_agent` step that gets the model, `play` by
+  default) and `prompt`, a template with `{race}`, `{map}`, `{players}`, `{difficulty}`, `{opponent}`, `{minutes}`,
+  `{worker}` and `{supply}`. Drills keep their own prompts: a drill sweep sets `prompt = ""`
+  ([sweeps/drills.toml](sweeps/drills.toml) plays all 25 with three models).
 - **Run** plays the games one `agent-env run` each, logged under `logs/`. It starts a game only while the spend so
   far plus `max_cost_usd` for every game in play fits `--budget`, so the budget holds even if every game hits its cap
-  (a game can pass its cap by its last model call). Each finished game is a line of `results.jsonl`: grade, result,
-  score against the opponent's, orders, model turns and spend, read from the run's stored summary. Run it again to
-  play the rest.
-- **Report** ranks the models by mean grade. For each it gives W / limit / L, the score against the opponent's, the
-  cost and turns a game and how many games hit the cap, then each map's grades seed by seed.
+  (a game can pass its cap by its last model call). Each finished game is a line of `results.jsonl`: grade, outcome
+  (or why it was void), score against the opponent's, orders, model turns, spend, and the agent's error if it failed
+  mid-game, read from the run's stored summary. Run it again to play the rest.
+- **Report**, for full games, ranks the models on points (a win 1, a draw 0.5, a loss 0), then on their share of the
+  game's score. For each it gives won / drawn / lost, void games, the score against the opponent's, the cost and turns
+  a game and how many games hit the cap; then won-drawn-lost at each AI level and the highest level beaten (at least
+  three in four games won); then each map's points seed by seed. For drills it gives each model's drills passed
+  (every check met) and share of checks met, by skill and by drill.
 
-**The first sweep** ([docs/evals/first-eval.md](docs/evals/first-eval.md)): `first-eval` on the real game, 24 games
-for $4.12. The ranking, by mean grade, the same in both runs:
-
-1. Gemini 3.8 Flash, 0.49 (it hit the $0.50 cap in every game, and is the only one that attacks);
-2. DeepSeek V4.1 Flash, 0.45, for $0.01 a game;
-3. Haiku 4.5, 0.44;
-4. GPT-5.4 mini, 0.43.
-
-Every game reached the 5-minute limit, so the grades are score ratios. The sd across seeds was 0.01 to 0.02.
-
-The first run's post-mortem found a harness bug: a type name shared by several types, such as "Barracks" or a hero's
-name, went to the game unresolved, and the game refused it. Since the fix (887d7f8), refused orders are under one a
-game. Armies come 50 to 100 s sooner, but the grades held: in 5 minutes against the easy AI, only fighting moves the
-score.
-
-**Against the normal AI** ([docs/evals/vs-normal.md](docs/evals/vs-normal.md)): `vs-normal` is three of those models
-for 12 minutes against the normal Orc AI, 12 games for $1.45. Here games are decided: three ended in defeat, all on
-Echo Isles. DeepSeek V4.1 Flash came first at 0.41, surviving all four games and giving the most attack orders by
-far. Haiku 4.5 came second at 0.35 with one defeat, and GPT-5.4 mini third at 0.30 with two. No model won.
+**The first sweeps** ran before outcome grading, and their write-ups quote the grades of then, which blended the
+outcome with the game's score. On outcomes:
+- **[first-eval](docs/evals/first-eval.md):** four low-cost models against the easy AI, 24 five-minute games, run
+  twice for about $4 each. Every game was a draw at the limit. On score share the order was the same in both runs:
+  Gemini 3.8 Flash (it hit its $0.50 cap in every game, and is the only one that attacks), DeepSeek V4.1 Flash (for
+  $0.01 a game), Haiku 4.5, GPT-5.4 mini. The first run's post-mortem found a harness bug: a type name shared by
+  several types, such as "Barracks" or a hero's name, went to the game unresolved. Since the fix (887d7f8), refused
+  orders are under one a game and armies come 50 to 100 s sooner.
+- **[vs-normal](docs/evals/vs-normal.md):** three of those models for 12 minutes against the normal Orc AI, 12 games
+  for $1.45. DeepSeek V4.1 Flash 0 / 4 / 0 (0.50 points), Haiku 4.5 0 / 3 / 1 (0.38), GPT-5.4 mini 0 / 2 / 2 (0.25).
+  No model has won a game yet, which is why the ladder plays 30-minute games.
 
 ## The agents
 
@@ -584,17 +592,19 @@ Harness time, not the agents': `apply_server_config` sends the ops in order, aft
 
 ### Grading: `rts_grade`
 
-- **`rubric`:** `melee` (the default), `dense`, `checks` or `smoke`.
+- **`rubric`:** `outcome` (the default), `dense`, `checks` or `smoke`.
 - **`weights`:** reweigh any criterion; 0 drops it, and weighing another rubric's criterion adds it. The criteria are
-  `reached_end`, `win`, `survive` and `outscore` (`melee`); `army_ratio`, `kills_ratio`, `buildings_destroyed`,
-  `tier`, `expansions` and `hero_level` (which `dense` adds); `ran_to_limit` and `played_out` (`smoke`).
+  `outcome` (a win 1, a draw 0.5, a loss 0; a game nobody has won by the time limit is a draw); `outscore`,
+  `army_ratio`, `kills_ratio`, `buildings_destroyed`, `tier`, `expansions` and `hero_level` (which `dense` adds);
+  `ran_to_limit` and `played_out` (`smoke`). Under `outcome`, rows for the score, army and kills report them with no
+  weight. A rubric with `outcome` raises on a match that has none (cancelled, failed, or its engine down), failing
+  the step: such a match is void, not lost.
 - **`targets`:** full credit for `army_ratio` (default 1), `buildings_destroyed` (5), `tier` (3), `expansions` (1) and
   `hero_level` (5).
 - **`checks`:** each is `{metric, op, value, weight}` on wc3agent's metric names, with `op` one of `>=`, `<=`, `==`,
   `>` and `<`; a check without `op` only reports its metric. For example: `units_lost`, `army_kept_percent`,
   `camp_cleared_time`, `supply_blocked_seconds`, `idle_worker_seconds` and `hero_level`, or per type, `count:<type>`,
   `first_time:<type>` and `present_seconds:<type>`.
-- **`at_time_limit`:** how an undecided game counts: `draw` (the default), `score` (the higher score wins) or `loss`.
 - **`gates`:** `game_ran` and `agent_played`, both by default. A failed gate zeroes the grade.
 - **`player_names`:** which agents to grade; every agent by default.
 - **`verifier_id`:** the grade's name, the step's id by default; with several agents graded, each is
@@ -689,7 +699,7 @@ and orders only its own side; an `omniscient` slot's session observes every play
 | `recording.py` | A match's recording by kind: the MP4 of the map from the timeline (Pillow and ffmpeg), the HTML replay, the timeline, the game's video and highlights, written to a folder for the env's match files |
 | `display.py` | The game's own picture from an X display: one ffmpeg writes the match's video and the live JPEG stream |
 | `highlights.py` | A match's major moments on its video's clock: chapters embedded in the video and a highlight reel (ffmpeg) |
-| `grade.py` | `rts_grade`: grades each agent from the env's `data/get` summary with a rubric set in the task (`melee`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets, time-limit rule and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
+| `grade.py` | `rts_grade`: grades each agent from the env's `data/get` summary with a rubric set in the task (`outcome`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 
 A game supplies an adapter from its observations to the timeline (here `agentenv_wc3/frames.py`), serves the session
@@ -701,8 +711,6 @@ extensions and `/live`, gives agentenv-game-env its spectator card and match fil
 - **Casters.** The plugin's AI casters went with its own streamer; they come back in agentenv-game-env's broadcast.
   [An earlier broadcast with them](docs/media/broadcast-clip.mp4) (45 s, with sound): Claude Sonnet 5.5 and Haiku 4.5
   reach tier 2 against the normal Orc AI in `macro-micro-realtime` while two AI casters call it.
-- **Drills in sweeps:** a sweep crosses a full-game template; drills, each with its own staged board, are not crossed
-  over races or seeds yet.
 - **The harness's endpoints are open to agents.** An agent whose own tools can make HTTP requests (a shell, say)
   could reach the env's base address. There it could stage the game, start a new one, or see the whole map through
   `data/get`, the root session and `/live`. The agents here don't: they reach only their player slot's tools or

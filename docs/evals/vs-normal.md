@@ -1,5 +1,9 @@
 # vs-normal: three low-cost models against the normal AI
 
+> **Graded before outcome grading.** The grades below are from the first full-game rubric, which blended the outcome
+> with the game's score. On outcomes (a win 1, a draw 0.5, a loss 0): DeepSeek V4.1 Flash 0 / 4 / 0, 0.50 points;
+> Haiku 4.5 0 / 3 / 1, 0.38; GPT-5.4 mini 0 / 2 / 2, 0.25. The ranking is the same.
+
 [sweeps/vs-normal.toml](../../sweeps/vs-normal.toml), played on the real game on 2026-10-06 (env v18, main b4e602a):
 - `vs-ai-quick` crossed over three models, two 1v1 maps (Echo Isles, Terenas Stand) and seeds 1 and 2: 12 games;
 - each game is `wc3-llm` as Human against the game's normal Orc AI, for 12 minutes of game time;
