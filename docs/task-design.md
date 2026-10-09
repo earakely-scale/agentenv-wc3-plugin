@@ -218,7 +218,7 @@ Today's top-level fields (`result`, `score`, `opponent_score`, ...) stay for com
 | State at the end | `total` (the game's score), `army` (its value), `workers`, `count:<type>`, `hero_alive`, `hero_level`, `hero_health_percent`, `items_carried`, `structure_health_percent`, `unspent_skill_points`, `tier`, `expansions` |
 | Counts over the game | `units_trained`, `units_killed`, `units_lost`, `workers_lost`, `structures_lost`, `buildings_destroyed`, `gold_mined`, `lumber_total`, `items_picked_up`, `items_used`, `items_bought`, `researches_done` |
 | When it first happened (game seconds) | `first_time:<type>`, `hero_time`, `expansion_started_time`, `upgrade_started_time`, `enemy_base_seen_time` |
-| Over time | `idle_worker_seconds`, `supply_blocked_seconds`, `average_unspent_gold`, `present_seconds:<type>`, `uprooted_seconds`, `fewest_workers` |
+| Over time | `idle_worker_seconds`, `supply_blocked_seconds`, `average_unspent_gold`, `present_seconds:<type>`, `uprooted_seconds` (an ancient walking: the game keeps it a structure), `fewest_workers` |
 | On handles | `army_kept_percent` (the player's `army` and `hero`), `enemy_army_destroyed_percent` (`enemy`), `camp_cleared`, `camp_cleared:camp:<n>` |
 
 ## `rts_grade`: judgement

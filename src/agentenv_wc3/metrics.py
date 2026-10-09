@@ -69,6 +69,7 @@ class Metrics:
         self.deaths: set[int] = set()
         self.handles: dict[str, dict] = {}   # name -> {"slot", "ids", "strength"}
         self.enemies: dict[int, set[int]] = {s: set() for s in slots}
+        self.spots: dict[int, dict[int, tuple[float, float]]] = {s: {} for s in slots}
 
     def facts(self, type_id: str) -> dict:
         return self.ref.units.get(type_id) or {}
@@ -96,8 +97,7 @@ class Metrics:
                 "idle_workers": sum(w.get("order") is None for w in workers), "workers_outside": len(workers),
                 "workers": len(workers) + sum(1 for u in obs.get("inside") or ()
                                               if self.facts(u["type_id"]).get("builds")),
-                "uprooted": sum(1 for u in units
-                                if not u.get("structure") and self.facts(u["type_id"]).get("structure"))})
+                "uprooted": sum(self._walking(slot, u) for u in units)})
             for u in units:
                 if not (u.get("structure") and u.get("state") == "constructing"):
                     self.first_seen[slot].setdefault(u["type_id"], now)
@@ -139,6 +139,15 @@ class Metrics:
         if hall is None or not self.starts:
             return None
         return min(self.starts, key=lambda s: math.dist((s["x"], s["y"]), (hall["x"], hall["y"])))
+
+    def _walking(self, slot: int, u: dict) -> bool:
+        """A building on the move: an uprooted Night Elf ancient. The game keeps such a unit a structure, so it shows
+        by walking: it stands somewhere else than at the last observation."""
+        facts = self.facts(u["type_id"])
+        if not facts.get("structure") or not facts.get("base_move_speed"):
+            return False
+        last, self.spots[slot][u["unit_id"]] = self.spots[slot].get(u["unit_id"]), (u["x"], u["y"])
+        return not u.get("structure") or last is not None and math.dist(last, (u["x"], u["y"])) > 1
 
     def _dt(self, slot: int, test) -> float:
         s = self.samples[slot]

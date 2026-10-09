@@ -676,6 +676,17 @@ def test_metrics_measure_a_player_slot_over_the_game():
     assert got["total"] == 900 and got["hero_alive"] is False and got["units_lost"] == 0
 
 
+def test_an_ancient_counts_as_uprooted_while_it_walks_though_the_game_keeps_it_a_structure():
+    ref = render.Reference({"units": {"eaom": {"name": "Ancient of War", "structure": True, "base_move_speed": 40},
+                                      "emow": {"name": "Moon Well", "structure": True}}})
+    m = metrics.Metrics(ref, {"start_locations": [{"x": 0, "y": 0}]}, [0])
+    well = {"unit_id": 2, "type_id": "emow", "structure": True, "hp": 600, "max_hp": 600, "x": 0, "y": 0}
+    for t, x in ((0.0, 500), (5.0, 500), (10.0, 560), (15.0, 640), (20.0, 640)):
+        ancient = {"unit_id": 1, "type_id": "eaom", "structure": True, "hp": 1000, "max_hp": 1000, "x": x, "y": 0}
+        m.see({0: {"game_time_seconds": t, "units": [ancient, well], "player": {}}})
+    assert m.of(0, {"units": []})["uprooted_seconds"] == 10.0
+
+
 def test_the_timeline_keeps_a_frame_per_half_second_and_every_event():
     timeline = Timeline({"game": "g"})
     for t in (0.0, 0.1, 0.2, 0.3, 0.6):
