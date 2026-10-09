@@ -47,7 +47,7 @@ INSTANCE = re.compile(r"(\d+(?:\.\d+)?)s, instance (\S+)")
 @dataclass
 class Spec:
     name: str
-    template: str
+    template: str | list[str]
     models: list[str]
     maps: list[str] | None = None
     races: list[str] | None = None
@@ -84,12 +84,17 @@ class Spec:
         return spec
 
     def templates(self) -> dict[str, list[dict]]:
-        """The template tasks' steps by name: a task file, or the bundled tasks the template names or matches."""
-        path = Path(self.template)
-        if path.suffix == ".json":
-            return {path.stem: json.loads(path.read_text())}
-        names = sorted(p.stem for p in TASKS.glob("*.json") if fnmatch.fnmatchcase(p.stem, self.template))
-        return {n: json.loads((TASKS / f"{n}.json").read_text()) for n in names}
+        """The template tasks' steps by name: for each of `template` (one, or a list), a task file, or the bundled
+        tasks it names or matches."""
+        out = {}
+        for given in [self.template] if isinstance(self.template, str) else self.template:
+            path = Path(given)
+            if path.suffix == ".json":
+                out[path.stem] = json.loads(path.read_text())
+                continue
+            for name in sorted(p.stem for p in TASKS.glob("*.json") if fnmatch.fnmatchcase(p.stem, given)):
+                out[name] = json.loads((TASKS / f"{name}.json").read_text())
+        return out
 
     def combinations(self) -> list[dict]:
         """In rounds: every model plays a seed before any plays the next, so a budget that runs out cuts evenly. An
@@ -127,7 +132,7 @@ def task_name(spec: Spec, c: dict) -> str:
     """The task's name, from the templates and axes the sweep varies."""
     parts = [spec.name]
     if len(spec.templates()) > 1:
-        parts.append(c["template"].removeprefix("drill-"))
+        parts.append(c["template"].removeprefix("drill-").removeprefix("mirror-"))
     if len(spec.models) > 1:
         parts.append(short(c["model"]))
     if len(spec.maps or ()) > 1:

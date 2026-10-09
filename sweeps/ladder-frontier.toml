@@ -1,0 +1,13 @@
+# The ladder's top rungs for two frontier models: the normal and insane Orc AI on Echo Isles, two seeds each, in
+# 30-minute games: 8 games. A level is beaten when at least three of its four games are won; with two seeds a level
+# here needs both.
+# agent-env wc3 sweep generate sweeps/ladder-frontier.toml runs/ladder-frontier
+# agent-env wc3 sweep run runs/ladder-frontier --budget <dollars>
+name = "ladder-frontier"
+template = "vs-ai"
+models = ["anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5"]
+maps = ["(2)EchoIsles.w3x"]
+opponents = [{computer = "normal", race = "orc"}, {computer = "insane", race = "orc"}]
+seeds = [1, 2]
+time_limit_seconds = 1800
+max_cost_usd = 5.0

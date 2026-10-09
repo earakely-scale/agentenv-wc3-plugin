@@ -263,3 +263,16 @@ def test_the_report_gives_drills_by_model_and_skill(tmp_path, monkeypatch):
     assert "| Model | combat | creeping | full-game |" in text
     assert "| m2 | 0 of 2, 50% | 2 of 2, 100% | 0 of 1, 50% |" in text
     assert "| creep-hard | creeping | 1.00 | 1.00 |" in text and "Won-drawn-lost" not in text
+
+
+def test_a_sweep_takes_a_list_of_templates_and_duels_keep_their_own_boards(tmp_path):
+    (tmp_path / "spec.toml").write_text('name = "duels"\ntemplate = ["mirror-orc", "mirror-human"]\n'
+                                        'models = ["m1"]\nseeds = [1, 2]\nprompt = ""\n')
+    spec = sweep.Spec.load(tmp_path / "spec.toml")
+    names = sweep.generate(spec, tmp_path / "sweep")
+    assert names == ["duels-orc-s1", "duels-human-s1", "duels-orc-s2", "duels-human-s2"]
+    made = {s["id"]: s for s in json.loads((tmp_path / "sweep/tasks/duels-orc-s2.json").read_text())}
+    assert made["match"]["game_settings"]["seed"] == 2 and made["match"]["game_settings"]["decide_ratio"] == 0.4
+    assert made["play"]["model"] == "m1" and "40% of the other's strength" in made["play"]["prompt"]
+    assert "Won-drawn-lost" not in sweep.games_report([{"model": "m1", "map": "x", "seed": 1, "grade": 1.0,
+                                                         "outcome": "win", "opponent": None}], 0.5)

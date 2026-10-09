@@ -1,0 +1,16 @@
+# The mirror duels with a model: each race's two identical armies, three low-cost models through wc3-llm, four
+# seeds (each nudges the armies and shuffles the starts). A duel is decided once one army is down to 40% of the other's
+# strength, a draw after 150 s. The baselines (mirror-<race>-baseline, Warcraft against Warcraft) need no model:
+# play them with `agent-env run wc3 --task mirror-orc-baseline` and a seed override.
+# agent-env wc3 sweep generate sweeps/duels.toml runs/duels
+# agent-env wc3 sweep run runs/duels --budget <dollars>
+name = "duels"
+template = ["mirror-human", "mirror-orc", "mirror-undead", "mirror-nightelf"]
+models = [
+  "fireworks_ai/deepseek-v4p1-flash",
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.4-mini",
+]
+seeds = [1, 2, 3, 4]
+prompt = ""
+max_cost_usd = 0.5
