@@ -1381,10 +1381,10 @@ class WC3Env(AgentEnvGameEnv):
                                               ms=STAGE_STEP_MS))
 
     async def _learn(self, units: list[int]) -> None:
-        """Heroes spend every skill point the same way, whoever owns them, all in the same steps: each point on the
-        deepest skill open now, a tie to the first the hero lists (wc3agent's skill_to_learn without its per-hero
-        builds). The observation can trail a learn just sent, so as in wc3agent's duel a skill counts at the more of
-        its seen and sent levels, or it is learned twice."""
+        """Heroes spend every skill point the same way, whoever owns them, all in the same steps: wc3agent's
+        skill_to_learn, its standard build for the hero, else the deepest skill open now. The observation can trail a
+        learn just sent, so as in wc3agent's duel a skill counts at the more of its seen and sent levels, or it is
+        learned twice."""
         sent: dict[int, dict[str, int]] = {}
         self._observed(await self.bridge.call("observe"))
         for _ in range(LEARN_ROUNDS):

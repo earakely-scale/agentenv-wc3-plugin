@@ -928,7 +928,7 @@ async def test_heroes_learn_each_point_once_though_the_observation_trails_the_or
     assert all(set(step) == {"0", "1"} for step in steps)   # both sides learn in the same steps
     for slot in ("0", "1"):
         assert [a["arguments"]["ability_id"] for step in steps for a in step[slot]] == [
-            "AHbz", "AHbz", "AHbz", "AHab", "AHab"]
+            "AHwe", "AHab", "AHwe", "AHab", "AHwe"]
 
 
 def test_heroes_spend_their_points_on_the_deepest_skill_open_now():
@@ -943,7 +943,9 @@ def test_heroes_spend_their_points_on_the_deepest_skill_open_now():
         levels = {a["ability_id"]: a["level"] for a in hero["abilities"]}
         levels[raw] = levels.get(raw, 0) + 1
         hero["abilities"] = [{"ability_id": k, "level": v} for k, v in levels.items()]
-    assert taken == ["AHbz", "AHbz", "AHbz", "AHab", "AHab"]
+    assert taken == ["AHwe", "AHab", "AHwe", "AHab", "AHwe"]   # wc3agent's standard Archmage build
+    lich = {"type_id": "Ulic", "level": 3, "hero": True, "abilities": [{"ability_id": "AUfn", "level": 2}]}
+    assert render.skill_to_learn(lich, ref) == "AUdr"   # the build's first step it hasn't taken
     assert render.skill_to_learn({"type_id": "Hamg", "level": 1, "abilities": [{"ability_id": "AHbz", "level": 1}]},
                                  ref) is None
     assert render.autocast_orders({"abilities": [{"ability_id": "Ahea"}, {"ability_id": "AHbz"}]}, ref)

@@ -16,6 +16,10 @@ COMMAND_ORDERS = {"harvest", "repair", "move", "attack", "stop", "smart"}   # or
 RESULTS = {"victory": "VICTORY", "defeat": "DEFEAT", "draw": "DRAW", "time_limit": "TIME LIMIT",
            "finished": "FINISHED (the drill's goal was met)"}
 NEUTRAL_HOSTILE = {12}   # the creeps' player
+HERO_BUILDS = Path(__file__).with_name("hero_builds.json")
+# wc3agent's skill order where it differs from the hero's listed one: Water Elemental, Brilliance Aura, Storm Bolt,
+# Feral Spirit, Carrion Swarm, Fan of Knives.
+PREFERRED_SKILLS = ("AHwe", "AHab", "AHtb", "AOsf", "AUcs", "AEfk")
 
 
 class Reference:
@@ -180,13 +184,30 @@ def skills_text(hero: dict, ref: Reference) -> str:
     return text
 
 
+@cache
+def hero_builds() -> dict[str, list[str]]:
+    """{hero type: [skill learned at level 1, 2, ...]}: wc3agent's standard melee builds (hero_builds.json)."""
+    return json.loads(HERO_BUILDS.read_text(encoding="utf-8"))["builds"]
+
+
 def skill_to_learn(hero: dict, ref: Reference) -> str | None:
-    """The skill a hero spends its next point on: the deepest it can learn now, a tie to the first it lists; None
+    """wc3agent's skill for a hero's next point: the next step of its standard build (hero_builds) when that is
+    open now, else the deepest skill open now, a tie to the first in PREFERRED_SKILLS, then the first it lists; None
     with no point left (its level less the levels learned) or nothing open. A skill's next level needs hero level
     required_level + level_skip (the game's 2 when the data says 0) per level learned."""
     learned, _, ready = hero_skills(hero, ref)
+    if not ready:
+        return None
+    taken: dict[str, int] = {}
+    for raw in hero_builds().get(hero["type_id"], []):
+        taken[raw] = taken.get(raw, 0) + 1
+        if taken[raw] > learned.get(raw, 0):   # the build's first step not yet learned
+            if raw in ready:
+                return raw
+            break
     options = (ref.units.get(hero["type_id"]) or {}).get("potential_hero_abilities") or []
-    return max(ready, key=lambda raw: (learned.get(raw, 0), -options.index(raw)), default=None)
+    return max(ready, key=lambda raw: (learned.get(raw, 0), -(PREFERRED_SKILLS.index(raw) if raw in PREFERRED_SKILLS
+                                                              else len(PREFERRED_SKILLS)), -options.index(raw)))
 
 
 def autocast_orders(u: dict, ref: Reference) -> list[str]:

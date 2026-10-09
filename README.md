@@ -600,8 +600,9 @@ Harness time, not the agents': `apply_server_config` sends the ops in order, aft
     `seed` (the match's by default). Formations with one seed are mirror images: wc3agent's duel layout. Given a
     list of players (and one `as` handle each), it makes their armies unit by unit, alternating which of a mirror
     pair comes first.
-  - `learn`: a handle's heroes spend every skill point, the same way for every player (the deepest skill open now, a
-    tie to the first the hero lists), counting the skills already ordered, since the observation can trail them.
+  - `learn`: a handle's heroes spend every skill point, the same way for every player: wc3agent's standard build for
+    the hero (`hero_builds.json`), else the deepest skill open now. It counts the skills already ordered, since the
+    observation can trail them.
   - `autocast`: every autocast ability of a handle's units on.
   - **Staging two sides fairly:** an op's `unit` may be a list of handles, which it stages in the same steps. A side
     staged wholly after the other won about seven Human mirror duels in ten, so the mirror duels make both armies
@@ -761,8 +762,7 @@ extensions and `/live`, gives agentenv-game-env its spectator card and match fil
   - Replay playback: the `.w3g` and its startup options are kept, but playing one back to re-observe it isn't wired.
   - wc3env's binary observations, its `StepPool` and vector rollouts (many games per host, for RL), and its Modal VM
     and GCP runners.
-  - The mirror duels run on Echo Isles, with the creeps in sight cleared, not on wc3agent's flat arena map. Their
-    heroes learn by one rule for every hero, not by wc3agent's per-hero builds.
+  - The mirror duels run on Echo Isles, with the creeps in sight cleared, not on wc3agent's flat arena map.
   - A human player slot; wc3agent's commander feedback and its decision-panel replay.
 - **Battle.net on the Linux host.** Its installer and launcher run under Wine in a container, but on a host with no
   GPU the login page's embedded browser doesn't draw (its renderer restarts in a loop, with Mesa's software Vulkan
