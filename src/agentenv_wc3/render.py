@@ -300,6 +300,31 @@ class Names:
         return f"{unit_id} {ref.name(type_id)}" if type_id else str(unit_id)
 
 
+class Heroes:
+    """Every hero each player has had. A dead hero leaves the game's observation, yet it is still the player's: the
+    one hero of its type the player may have, counted for the hero limit, and an altar revives it by its id. Another
+    unit of a type a player already has a hero of is an illusion (Mirror Image) and not counted."""
+
+    def __init__(self):
+        self.known: dict[int, dict[int, dict]] = {}
+
+    def see(self, slot: int, obs: dict) -> None:
+        mine = self.known.setdefault(slot, {})
+        alive = set()
+        for u in [*(obs.get("units") or ()), *(obs.get("inside") or ())]:
+            if not u.get("hero"):
+                continue
+            if u["unit_id"] in mine or all(h["type_id"] != u["type_id"] for h in mine.values()):
+                mine[u["unit_id"]] = {**u, "dead": False}
+                alive.add(u["unit_id"])
+        for unit_id, hero in mine.items():
+            if unit_id not in alive and not hero["dead"]:
+                mine[unit_id] = {**hero, "dead": True}
+
+    def of(self, slot: int) -> list[dict]:
+        return list(self.known.get(slot, {}).values())
+
+
 def event_line(e: dict, ref: Reference, names: Names, me: int) -> str:
     kind, who = e.get("kind", "?"), names.of(e.get("unit_id"), ref)
     t = e.get("type_id")
@@ -339,7 +364,7 @@ def events_text(events: list[dict], ref: Reference, names: Names, me: int, limit
 
 
 def state(obs: dict, ref: Reference, *, me: int, race: str | None, map_name: str, limit: float | None,
-          queued: int, result: str, events: list[str]) -> str:
+          queued: int, result: str, events: list[str], fallen: list[dict] = ()) -> str:
     """get_state: the whole situation on one page."""
     units = obs.get("units") or []
     structures = [u for u in units if u.get("structure")]
@@ -356,9 +381,12 @@ def state(obs: dict, ref: Reference, *, me: int, race: str | None, map_name: str
     counts = Counter(ref.name(u["type_id"]) for u in army)
     lines.append(f"Units ({len(army)}): " + (", ".join(f"{n} {name}" for name, n in counts.most_common()) or "none"))
     held = inventories(obs)
-    if heroes := [u for u in army if u.get("hero")]:
+    heroes = [u for u in army if u.get("hero")]
+    if heroes or fallen:
         lines.append("Heroes:")
         lines += [f"  {unit_line(u, ref, own=True, items=held.get(u['unit_id']))}" for u in heroes]
+        lines += [f"  {h['unit_id']} {ref.label(h['type_id'])} level {h.get('level', 0)}: DEAD; an altar revives it: "
+                  f"revive {{\"target_id\": {h['unit_id']}}}" for h in fallen]
     if inside := obs.get("inside"):
         held = ", ".join(f"{u['unit_id']} {ref.name(u['type_id'])}" for u in inside[:8])
         lines.append(f"Inside mines, buildings or transports: {len(inside)} ({held}"
@@ -471,6 +499,11 @@ def _entry(table: str, type_id: str, ref: Reference) -> str:
                  + (f", speed {u['base_move_speed']:.0f}" if u.get("base_move_speed") else "")]
         if u.get("requires"):
             lines.append("requires: " + ", ".join(ref.label(r) for r in u["requires"]))
+        if u.get("hero"):
+            tiers = [f"your {n} hero needs {', '.join(ref.name(r) for r in needs)}" for n, needs in
+                     zip(("second", "third"), (u.get("requires_by_count") or [])[1:], strict=False) if needs]
+            lines.append("one of each hero; a dead one is revived at an altar, not trained again"
+                         + (f"; {'; '.join(tiers)}" if tiers else ""))
         for key in ("trains", "builds", "researches", "upgrades_to", "sells_items", "sells_units"):
             if u.get(key):
                 lines.append(f"{key.replace('_', ' ')}: " + ", ".join(cost_label(t, ref) for t in u[key]))

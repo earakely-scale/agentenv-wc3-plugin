@@ -422,7 +422,7 @@ class WC3Env(AgentEnvGameEnv):
         self.played_out_from: float | None = None
         self.metrics: metrics.Metrics | None = None
         self.done = False
-        self.names = render.Names()
+        self.names, self.heroes = render.Names(), render.Heroes()
         self.result = ""
         self.failed: str | None = None
         self.timeline: Timeline | None = None
@@ -491,9 +491,10 @@ class WC3Env(AgentEnvGameEnv):
                 await self.bridge.call("debug", op="waitfloor", args={"ms": WAIT_FLOOR_MS})
             except WorkerError as e:
                 log.warning("the clock stays at its speed: %s", e.message)
-        self.names = render.Names()
-        for o in self.obs.values():
+        self.names, self.heroes = render.Names(), render.Heroes()
+        for slot, o in self.obs.items():
             self.names.see(o)
+            self.heroes.see(slot, o)
         self.stats["games"] += 1
         labels = {**{x["slot"]: x["agent"] for x in players if x["agent"]},
                   **{int(k): v for k, v in (scenario["labels"] or {}).items()}}
@@ -692,6 +693,8 @@ class WC3Env(AgentEnvGameEnv):
         """A step's observations become the game's state: whether the game says it is over, and the first agent
         player slot's result (or the time limit), which today's summary reports."""
         self.obs = {int(k): v for k, v in result["observations"].items()}
+        for slot, o in self.obs.items():
+            self.heroes.see(slot, o)
         self.done = self.done or bool(result.get("done"))
         if self.metrics is not None:
             self.metrics.see(self.obs)
@@ -810,7 +813,8 @@ class WC3Env(AgentEnvGameEnv):
             return self._briefing(slot) + "\n" + render.state(
                 self._me(slot), self.ref, me=slot, race=player["race"], map_name=self.scenario["map"],
                 limit=self.scenario["time_limit_seconds"], queued=len(self.queue.get(slot, ())),
-                result=self._result_of(slot), events=self.recent.get(slot, []))
+                result=self._result_of(slot), events=self.recent.get(slot, []),
+                fallen=[h for h in self.heroes.of(slot) if h["dead"]])
         return await self._run(body)
 
     @tool()
@@ -916,7 +920,8 @@ class WC3Env(AgentEnvGameEnv):
                 lines += [f"  {self._describe(a)}: {why}" for a, why in dropped]
             if batch:
                 race = next(x["race"] for x in self.players if x["slot"] == slot)
-                unstarted = refusals.unstarted(sent_at, me, batch, {r.get("index") for r in rejected}, self.ref, race)
+                unstarted = refusals.unstarted(sent_at, me, batch, {r.get("index") for r in rejected}, self.ref, race,
+                                               self.heroes.of(slot))
                 refused = len(rejected) + len(unstarted)
                 lines.append(f"Sent {len(batch)} order{'s' if len(batch) != 1 else ''}"
                              + (f"; the game refused {refused}:" if refused else "."))

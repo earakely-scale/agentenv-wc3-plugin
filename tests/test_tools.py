@@ -234,12 +234,34 @@ def test_an_order_the_game_dropped_says_what_it_lacked_and_one_it_took_says_noth
     queued = {**capped, "units": [capped["units"][0], {"unit_id": 78, "type_id": "halt", "structure": True,
                                                        "queue": ["Hamg"]}]}
     assert refusals.unstarted(capped, queued, [train(78, "Hamg")], set(), ref, "human") == {}
-    archmage = {"unit_id": 5, "type_id": "Hamg", "hero": True}
+    archmage = {"unit_id": 5, "type_id": "Hamg", "hero": True, "dead": False}
     second = refusals.unstarted(obs(900, 300, 10, 30, archmage), obs(900, 300, 10, 30, archmage),
-                                [train(78, "Hmkg")], set(), ref, "human")
+                                [train(78, "Hmkg")], set(), ref, "human", [archmage])
     assert second == {0: "didn't start: a second hero requires Keep"}
     castle = obs(900, 300, 10, 30, archmage, {"unit_id": 6, "type_id": "hcas", "structure": True})
-    assert refusals.unstarted(castle, castle, [train(78, "Hmkg")], set(), ref, "human") == {}
+    assert refusals.unstarted(castle, castle, [train(78, "Hmkg")], set(), ref, "human", [archmage]) == {}
     knights = refusals.unstarted(obs(900, 300, 10, 30), obs(900, 300, 10, 30), [train(1000, "hkni")], set(), ref,
                                  "human")
     assert knights == {0: "didn't start: requires Lumber Mill, Castle, Blacksmith"}
+
+
+def test_a_dead_hero_stays_the_players_to_revive_and_an_illusion_is_not_a_hero():
+    ref, heroes = render.Reference.load(), render.Heroes()
+    archmage = {"unit_id": 5, "type_id": "Hamg", "hero": True, "level": 3, "x": 0, "y": 0, "hp": 500, "max_hp": 500}
+    heroes.see(0, {"units": [archmage, {**archmage, "unit_id": 9}]})
+    heroes.see(0, {"units": []})
+    assert [(h["unit_id"], h["dead"]) for h in heroes.of(0)] == [(5, True)]
+    text = render.state({"units": [], "player": {}}, ref, me=0, race="human", map_name="(2)EchoIsles.w3x",
+                        limit=None, queued=0, result="", events=[], fallen=heroes.of(0))
+    assert 'Heroes:\n  5 Archmage (Hamg) level 3: DEAD; an altar revives it: revive {"target_id": 5}' in text
+    hall = {"unit_id": 1000, "type_id": "htow", "structure": True}
+    altar = {"unit_id": 78, "type_id": "halt", "structure": True}
+    seen = {"player": {"gold": 5600, "lumber": 1500, "food_used": 10, "food_cap": 30}, "units": [hall, altar]}
+    orders = [{"unit_id": 78, "command": "train", "arguments": {"type_id": t}} for t in ("Hamg", "Hpal")]
+    assert refusals.unstarted(seen, seen, orders, set(), ref, "human", heroes.of(0)) == {
+        0: 'didn\'t start: you have one Archmage already, dead: revive it at an altar with revive {"target_id": 5}',
+        1: "didn't start: a second hero requires Keep"}
+    heroes.see(0, {"units": [archmage]})
+    assert heroes.of(0)[0]["dead"] is False
+    assert ("one of each hero; a dead one is revived at an altar, not trained again; your second hero needs Keep; "
+            "your third hero needs Castle") in render.lookup("Archmage", ref)
