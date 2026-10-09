@@ -234,7 +234,7 @@ def outcome(task: str, axes: dict, agent: str | None, instance: str | None, wall
             "outcome": None if void else OUTCOMES.get(me.get("result")), "void": void, "agent_error": agent_error,
             "score": mine.get("total"),
             "opponent_score": theirs.get("total"), "units_killed": mine.get("units_killed"),
-            "orders": me.get("orders_sent"), "decisions": spend.get("decisions"),
+            "orders": me.get("orders_sent"), "refused": me.get("orders_refused"), "decisions": spend.get("decisions"),
             "cost_usd": spend.get("cost_usd"), "game_seconds": summary.get("game_time_seconds"),
             "error": summary.get("error")}
 
@@ -325,7 +325,8 @@ def games_report(rows: list[dict], cap: float) -> list[str]:
     models, maps = list(dict.fromkeys(r["model"] for r in rows)), list(dict.fromkeys(r["map"] for r in rows))
     levels = [d for d in DIFFICULTIES if any((r.get("opponent") or {}).get("computer") == d for r in rows)]
     lines = ["| Model | Games | Points (mean ± sd) | Won / drawn / lost | Void | Score share | Score vs opponent "
-             f"| Cost a game | At the ${cap:.2f} cap | Turns a game |", "|---|---|---|---|---|---|---|---|---|---|"]
+             f"| Cost a game | At the ${cap:.2f} cap | Turns a game | Orders a game (refused) |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     ranked = sorted(models, key=lambda m: (-(mean(r["grade"] for r in rows if r["model"] == m) or 0),
                                            -(share([r for r in rows if r["model"] == m]) or 0)))
     for m in ranked:
@@ -338,9 +339,12 @@ def games_report(rows: list[dict], cap: float) -> list[str]:
         ratio, mean_points = share(mine), "–" if not points else f"{mean(points):.2f} ± {sd(points):.2f}"
         paid, turns = mean(r.get("cost_usd") for r in mine) or 0, mean(r.get("decisions") for r in mine) or 0
         capped = sum((r.get("cost_usd") or 0) >= cap for r in mine)
+        counted = [r for r in mine if r.get("orders") and r.get("refused") is not None]
+        refused = sum(r["refused"] for r in counted) / sum(r["orders"] for r in counted) if counted else 0
+        orders = f"{mean(r['orders'] for r in counted):.0f} ({refused:.0%})" if counted else "–"
         lines.append(f"| {m} | {len(mine)} | {mean_points} | {won_drawn_lost(mine, ' / ')} | {len(mine) - len(played)} "
                      f"| {'–' if ratio is None else f'{ratio:.0%}'} | {versus} | ${paid:.3f} | {capped} "
-                     f"| {turns:.0f} |")
+                     f"| {turns:.0f} | {orders} |")
     if levels:
         lines += ["", "Won-drawn-lost against each AI level, and the highest level beaten (three in four games won):",
                   "", "| Model | " + " | ".join(levels) + " | Highest level beaten |",

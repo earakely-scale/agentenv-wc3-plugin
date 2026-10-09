@@ -415,6 +415,7 @@ class WC3Env(AgentEnvGameEnv):
         self.recent: dict[int, list[str]] = {}
         self.step_info: dict[int, dict] = {}
         self.orders_sent: dict[int, int] = {}
+        self.orders_refused: dict[int, int] = {}   # by wc3env, or dropped by the game (refusals.unstarted)
         self.lockstep: Lockstep | None = None
         self.started = asyncio.Event()
         self.created, self.begun = time.monotonic(), False
@@ -479,7 +480,7 @@ class WC3Env(AgentEnvGameEnv):
         self.obs = {int(k): v for k, v in result["observations"].items()}
         agents = [x["slot"] for x in players if x["computer"] is None]
         self.queue, self.recent = {x: [] for x in agents}, {x: [] for x in agents}
-        self.orders_sent, self.step_info = {x: 0 for x in agents}, {}
+        self.orders_sent, self.orders_refused, self.step_info = {x: 0 for x in agents}, {x: 0 for x in agents}, {}
         self.result, self.failed, self.done = "", None, False
         self.lockstep = (Lockstep(agents, scenario["lockstep"]["stall_seconds"], self._chunk, self._seconds,
                                   self._out)
@@ -666,9 +667,11 @@ class WC3Env(AgentEnvGameEnv):
                 info = self.step_info.setdefault(slot, {"rejected": [], "placements": [], "sent": len(batch)})
                 info["rejected"] += (result.get("rejected") or {}).get(str(slot), [])
                 info["placements"] += (result.get("placements") or {}).get(str(slot), [])
+                rejected = len((result.get("rejected") or {}).get(str(slot), []))
                 self.orders_sent[slot] = self.orders_sent.get(slot, 0) + len(batch)
+                self.orders_refused[slot] = self.orders_refused.get(slot, 0) + rejected
                 self.stats["orders_sent"] += len(batch)
-                self.stats["orders_rejected"] += len((result.get("rejected") or {}).get(str(slot), []))
+                self.stats["orders_rejected"] += rejected
             for o in self.obs.values():
                 self.names.see(o)
             for slot in self.recent:
@@ -923,6 +926,7 @@ class WC3Env(AgentEnvGameEnv):
                 unstarted = refusals.unstarted(sent_at, me, batch, {r.get("index") for r in rejected}, self.ref, race,
                                                self.heroes.of(slot))
                 refused = len(rejected) + len(unstarted)
+                self.orders_refused[slot] = self.orders_refused.get(slot, 0) + len(unstarted)
                 lines.append(f"Sent {len(batch)} order{'s' if len(batch) != 1 else ''}"
                              + (f"; the game refused {refused}:" if refused else "."))
                 lines += [f"  #{r['index'] + 1} {self._describe(batch[r['index']])}: {r['reason']}"
@@ -1067,6 +1071,7 @@ class WC3Env(AgentEnvGameEnv):
                 "player_slots": [{**player_slot(x),
                            "result": self._result_of(x["slot"]) if self.obs else "",
                            "orders_sent": self.orders_sent.get(x["slot"], 0),
+                           "orders_refused": self.orders_refused.get(x["slot"], 0),
                            "stalls": self.lockstep.stalls.get(x["slot"], 0) if self.lockstep else 0,
                            "last_move_seconds": self.last_move.get(x["slot"]),
                            "spend": self.agents.get(x["slot"]) or {},

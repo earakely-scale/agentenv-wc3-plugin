@@ -89,7 +89,7 @@ def summary(cost: float | None, score: int) -> dict:
     return {"verifications": {"wc3": {"score": 0.4}}, "rts_summary": {"wc3": {
         "game_time_seconds": 300, "player_slots": [
         {"player_id": "0", "player_kind": "agent", "player_name": None, "team": 1, "result": "time_limit",
-         "orders_sent": 40, "spend": spend, "metrics": {"total": score, "units_killed": 3}},
+         "orders_sent": 40, "orders_refused": 4, "spend": spend, "metrics": {"total": score, "units_killed": 3}},
         {"player_id": "1", "player_kind": "ai", "player_name": None, "ai_level": "easy", "team": 2,
          "result": "time_limit", "orders_sent": 0, "spend": {}, "metrics": {"total": 1000}}]}}}
 
@@ -106,7 +106,7 @@ def test_the_runner_stops_before_a_game_could_take_the_spend_past_the_budget_and
     assert (rows[0]["grade"], rows[0]["cost_usd"], rows[0]["score"], rows[0]["opponent_score"]) == (0.4, 0.3, 500, 1000)
     assert (rows[0]["result"], rows[0]["outcome"], rows[0]["void"], rows[0]["agent_error"]) == ("time_limit", "draw",
                                                                                                 None, None)
-    assert (rows[0]["orders"], rows[0]["decisions"]) == (40, 30)
+    assert (rows[0]["orders"], rows[0]["refused"], rows[0]["decisions"]) == (40, 4, 30)
     assert said[-1].startswith("stopped: another game could take the spend past $1.00")
     rows = sweep.run(out, budget=10.0, parallel=3, agent_env=fake_agent_env(tmp_path), echo=said.append)
     assert sorted(r["task"] for r in rows) == sorted(names) and len(sweep.results(out)) == 8
@@ -146,7 +146,8 @@ def test_the_report_ranks_the_models_and_shows_each_seed(generated, tmp_path, mo
     ranking = [line.split(" | ")[0] for line in text.splitlines() if line.startswith("| openai") or
                line.startswith("| anthropic")]
     assert ranking[:2] == ["| openai/gpt-5.4-mini", "| anthropic/claude-haiku-4-5"]
-    assert "| openai/gpt-5.4-mini | 4 | 0.60 ± 0.00 | 0 / 4 / 0 | 0 | 75% | 3.0k vs 1.0k | $0.100 | 0 | 30 |" in text
+    row = "| openai/gpt-5.4-mini | 4 | 0.60 ± 0.00 | 0 / 4 / 0 | 0 | 75% | 3.0k vs 1.0k | $0.100 | 0 | 30 | 40 (10%) |"
+    assert row in text
     assert "| openai/gpt-5.4-mini | 0-4-0 | none |" in text
     assert "| anthropic/claude-haiku-4-5 | 0.20 0.20 | 0.20 0.20 | 0.00 |" in text
 
