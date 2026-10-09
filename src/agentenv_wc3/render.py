@@ -152,7 +152,21 @@ def order_text(order: dict | None, ref: Reference) -> str:
     return name + target
 
 
-def unit_line(u: dict, ref: Reference, *, own: bool, details: bool = False) -> str:
+def inventories(obs: dict) -> dict[int, list[dict]]:
+    """Each own unit's items by its unit id, in slot order."""
+    held: dict[int, list[dict]] = {}
+    for item in obs.get("inventory") or ():
+        held.setdefault(item["unit_id"], []).append(item)
+    return {unit: sorted(items, key=lambda i: i["slot"]) for unit, items in held.items()}
+
+
+def items_text(items: list[dict], ref: Reference) -> str:
+    """`items: slot 0 Potion of Healing (phea) x1, slot 1 ...`, the slots use_item and drop_item take."""
+    return "items: " + ", ".join(f"slot {i['slot']} {ref.label(i['type_id'])}"
+                                 + (f" x{i['charges']}" if i.get("charges") else "") for i in items)
+
+
+def unit_line(u: dict, ref: Reference, *, own: bool, details: bool = False, items: list[dict] | None = None) -> str:
     parts = [f"{u['unit_id']} {ref.label(u['type_id'])} {at(u)} hp {u['hp']:.0f}/{u['max_hp']:.0f}"]
     if u.get("max_mana"):
         parts[0] += f" mana {u['mana']:.0f}/{u['max_mana']:.0f}"
@@ -174,6 +188,8 @@ def unit_line(u: dict, ref: Reference, *, own: bool, details: bool = False) -> s
         parts.append(order_text(u.get("order"), ref))
     if u.get("buffs"):
         parts.append("buffs " + ", ".join(ref.name(b) for b in u["buffs"]))
+    if items:
+        parts.append(items_text(items, ref))
     line = " · ".join(parts)
     if details and own:
         line += "".join("\n    " + s for s in unit_details(u, ref))
@@ -291,6 +307,10 @@ def state(obs: dict, ref: Reference, *, me: int, race: str | None, map_name: str
         lines.append(f"GAME OVER: {RESULTS.get(result, result.upper())}")
     counts = Counter(ref.name(u["type_id"]) for u in army)
     lines.append(f"Units ({len(army)}): " + (", ".join(f"{n} {name}" for name, n in counts.most_common()) or "none"))
+    held = inventories(obs)
+    if heroes := [u for u in army if u.get("hero")]:
+        lines.append("Heroes:")
+        lines += [f"  {unit_line(u, ref, own=True, items=held.get(u['unit_id']))}" for u in heroes]
     if inside := obs.get("inside"):
         held = ", ".join(f"{u['unit_id']} {ref.name(u['type_id'])}" for u in inside[:8])
         lines.append(f"Inside mines, buildings or transports: {len(inside)} ({held}"
@@ -354,8 +374,9 @@ def units_list(obs: dict, ref: Reference, *, who: str, type_filter: str | None, 
     if not pool:
         return f"No {who} units match."
     shown = pool[:limit]
-    own = who in ("own", "inside")
-    lines = [unit_line(u, ref, own=own, details=details) if "max_hp" in u else
+    own, held = who in ("own", "inside"), inventories(obs)
+    lines = [unit_line(u, ref, own=own, details=details, items=held.get(u["unit_id"]) if own else None)
+             if "max_hp" in u else
              f"{u['unit_id']} {ref.label(u['type_id'])} {at(u)} · {order_text(u.get('order'), ref)}" for u in shown]
     if len(pool) > limit:
         lines.append(f"... and {len(pool) - limit} more (narrow with type, near or radius)")

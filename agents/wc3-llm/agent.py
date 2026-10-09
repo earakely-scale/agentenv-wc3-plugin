@@ -45,6 +45,7 @@ NUDGE = "The game is not over yet: keep playing through the tools until it is."
 TRIMMED = "[An earlier result, trimmed to save room: get_state shows the game as it is now.]"
 NUDGES, KEEP, TRIM_CHARS, MAX_TOKENS, RETRIES = 3, 6, 120_000, 4096, 4
 MODEL_SECONDS = 180   # one model turn; a call that hangs longer is retried
+STEP_WAIT_SECONDS = 900   # a tool call; longer than lockstep's stall_seconds (600), which an advance can wait out
 TRAJECTORY_LIMIT = 2000
 
 
@@ -144,7 +145,8 @@ class Player:
         self.chat = [{"role": "user", "content": prompt}]
         headers = self.server.get("headers") or {}
         model_timeout = httpx.Timeout(MODEL_SECONDS, connect=30)
-        async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(300, connect=30)) as mcp_http, \
+        tool_timeout = httpx.Timeout(STEP_WAIT_SECONDS, connect=30)
+        async with httpx.AsyncClient(headers=headers, timeout=tool_timeout) as mcp_http, \
                 streamable_http_client(self.server["url"], http_client=mcp_http) as (read, write, _), \
                 ClientSession(read, write) as mcp, httpx.AsyncClient(timeout=model_timeout) as http:
             await mcp.initialize()

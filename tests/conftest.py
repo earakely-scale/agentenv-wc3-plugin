@@ -22,9 +22,10 @@ ONE_AGENT = [{"agent": "wc3", "race": "human", "team": 1}, {"computer": "normal"
 
 
 def slot_request(index: int, player: dict) -> SlotRequest:
-    """A player, {agent | computer, race, team, label, ai_assist, omniscient}, as the fill of player slot `index`."""
+    """A player, {agent | computer, race, team, label, ai_assist, autocast, omniscient}, as the fill of player slot
+    `index`."""
     given = {"faction": player.get("race", "random"),
-             **{k: player[k] for k in ("team", "label", "ai_assist", "omniscient") if k in player}}
+             **{k: player[k] for k in ("team", "label", "ai_assist", "autocast", "omniscient") if k in player}}
     if "computer" in player:
         return SlotRequest(player_id=str(index), player_kind="ai",
                            game_settings={**given, "ai_level": player["computer"]})

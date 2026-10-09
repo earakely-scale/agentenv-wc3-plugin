@@ -27,7 +27,8 @@ RETRIES = 2
 
 def chat(base_url: str, api_key: str, model: str, system: str, user: str, *, max_tokens: int = MAX_TOKENS,
          timeout: float = 30.0) -> tuple[str, dict]:
-    """One completion from an OpenAI-compatible endpoint: (text, usage)."""
+    """One completion from an OpenAI-compatible endpoint: (text, usage), the usage with `litellm_cost`, the call's
+    dollars, when the endpoint is LiteLLM's and says."""
     url = urlparse(base_url.rstrip("/"))
     path = url.path.rstrip("/")
     path = (path if path.endswith("/v1") else path + "/v1") + "/chat/completions"
@@ -41,6 +42,7 @@ def chat(base_url: str, api_key: str, model: str, system: str, user: str, *, max
                                                              "Content-Type": "application/json"})
             response = connection.getresponse()
             raw = response.read().decode(errors="replace")
+            cost = response.getheader("x-litellm-response-cost")
         except (OSError, http.client.HTTPException):
             if attempt == RETRIES:
                 raise
@@ -56,7 +58,10 @@ def chat(base_url: str, api_key: str, model: str, system: str, user: str, *, max
         raise RuntimeError(f"HTTP {response.status}: {raw.replace(api_key, '[REDACTED]')[:300]}")
     reply = json.loads(raw)
     message = reply["choices"][0]["message"]
-    return message.get("content") or "", reply.get("usage") or {}
+    usage = dict(reply.get("usage") or {})
+    if cost:
+        usage["litellm_cost"] = float(cost)
+    return message.get("content") or "", usage
 
 
 def fallback(criteria: dict[str, str]) -> str:
@@ -97,7 +102,8 @@ def jev_shaped(model: str, questions: dict[str, dict], chosen: dict[str, str], u
                            "confidence": 1.0}
                     for name, label in chosen.items()},
         "usage": {"input_tokens": int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0),
-                  "output_tokens": int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)},
+                  "output_tokens": int(usage.get("completion_tokens") or usage.get("output_tokens") or 0),
+                  **({"litellm_cost": usage["litellm_cost"]} if "litellm_cost" in usage else {})},
     }
 
 

@@ -6,10 +6,12 @@ endpoint."""
 import asyncio
 import http.server
 import importlib.util
+import io
 import json
 import re
 import sys
 import threading
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -18,7 +20,7 @@ from agentenv_protocol.a2a_agent import TaskOutcome, TaskRequest, TextPart
 from test_steps import deployed, fill_and_close, open_match
 
 from agentenv_rts import choices
-from agentenv_rts.session import DEBUG, NOTE, OBSERVE, STEP
+from agentenv_rts.session import DEBUG, FILE, NOTE, OBSERVE, STEP
 from agentenv_wc3.server import WC3Env
 
 pytest.importorskip("wc3agent")
@@ -36,11 +38,13 @@ def player():
 
 
 class Models:
-    """An OpenAI-compatible endpoint: the macro model replies `plan` (by default prose, no orders), the micro model
-    picks each unit's first choice."""
+    """An OpenAI-compatible endpoint as LiteLLM's: the macro model replies `plan` (by default prose, no orders), the
+    micro model picks each unit's first choice, and each call's cost is in the x-litellm-response-cost header."""
+
+    MACRO_COST, MICRO_COST = 0.002, 0.0001
 
     def __init__(self, plan="Plan: keep the workers on gold and scout the enemy start."):
-        self.calls, self.macro = [], []
+        self.calls, self.macro, self.bodies = [], [], []
         models = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -48,17 +52,20 @@ class Models:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 system = body["messages"][0]["content"]
                 if system == choices.SYSTEM:
+                    cost = Models.MICRO_COST
                     asked = json.loads(body["messages"][1]["content"])["questions"]
                     text = json.dumps({"answers": {q: next(iter(v["choices"])) for q, v in asked.items()}})
                     models.calls.append(("micro", body["model"]))
                 else:
-                    text = plan
+                    cost, text = Models.MACRO_COST, plan
                     models.calls.append(("macro", body["model"], body.get("reasoning_effort")))
                     models.macro.append(json.dumps(body["messages"]))
+                    models.bodies.append(body)
                 reply = json.dumps({"choices": [{"message": {"content": text}}],
                                     "usage": {"prompt_tokens": 1000, "completion_tokens": 50}}).encode()
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(reply)))
+                self.send_header("x-litellm-response-cost", str(cost))
                 self.end_headers()
                 self.wfile.write(reply)
 
@@ -79,18 +86,27 @@ async def test_wc3agent_plays_the_game_through_the_rts_session(env_vars, tmp_pat
                # realtime plays in wall time: a few seconds of it; stepping plays the match to its time limit
                **({"WC3_MAX_GAME_SECONDS": "4"} if mode == "realtime" else {})}
     monkeypatch.setattr(agent.os, "environ", dict(agent.os.environ))
-    async with deployed(WC3Env()) as record:
+    env = WC3Env()
+    async with deployed(env) as record:
         await fill_and_close(await open_match(record, time_limit_seconds=60, mode=mode))
         config = agent.WC3Config(model="anthropic/claude-sonnet-5-5")
         servers = {"wc3": {"url": record.mcp_url}}
         summary = await asyncio.to_thread(agent.play_game, config, servers, environ, tmp_path / "session")
         data = (await client.get_data(record.mcp_url.removesuffix("/mcp"))).parts[0].data
+        kept = {f.name.split("-p0-")[-1]: f.file.read_bytes() for f in (await env.kept(["agent_files"])).files}
     assert summary["result"] == "time_limit" and summary["turns"] >= 1
+    assert summary["kept"] == ["wc3agent-report.html", "wc3agent-session.zip"] and set(kept) == set(summary["kept"])
+    assert b"<html" in kept["wc3agent-report.html"][:400].lower()
+    assert {"calls.jsonl", "summary.json"} <= set(zipfile.ZipFile(io.BytesIO(kept["wc3agent-session.zip"])).namelist())
+    first = models.bodies[0]["messages"]
+    assert first[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert first[-1]["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert ("macro", "anthropic/claude-sonnet-5-5", "low") in models.calls
     assert data["harness"]["session_steps"] > 0 and data["mode"] == mode
     assert data["game_over"] is (mode == "stepping")
     cost = summary["cost"]["by_model"]["anthropic/claude-sonnet-5-5"]
     assert cost["calls"] == summary["turns"] and cost["input"] == 1000 * summary["turns"]
+    assert cost["dollars"] == pytest.approx(Models.MACRO_COST * summary["turns"]) and cost["priced"]
     result = agent.result_of(summary, tmp_path / "session")
     text = " ".join(getattr(p, "text", "") for p in result.parts)
     assert result.outcome is TaskOutcome.SUCCEEDED and "macro turns (anthropic/claude-sonnet-5-5)" in text
@@ -98,18 +114,37 @@ async def test_wc3agent_plays_the_game_through_the_rts_session(env_vars, tmp_pat
     assert result.native_trajectory is not None
 
 
+async def test_wc3agent_stops_at_its_cost_cap_and_the_env_plays_on(env_vars, tmp_path, monkeypatch):
+    agent = player()
+    models = Models()
+    environ = {"LITELLM_BASE_URL": models.url, "LITELLM_API_KEY": "sk-test", "WC3_MICRO_MODEL": "off",
+               "WC3_MAX_COST_USD": "0.003"}
+    monkeypatch.setattr(agent.os, "environ", dict(agent.os.environ))
+    async with deployed(WC3Env()) as record:
+        await fill_and_close(await open_match(record, time_limit_seconds=120))
+        config = agent.WC3Config(model="openai/gpt-6-luna")
+        summary = await asyncio.to_thread(agent.play_game, config, {"wc3": {"url": record.mcp_url}}, environ,
+                                          tmp_path / "session")
+        data = (await client.get_data(record.mcp_url.removesuffix("/mcp"))).parts[0].data
+    assert summary["result"] == "cost_cap" and summary["turns"] == 2 and not data["game_over"]
+    assert "cache_control" not in json.dumps(models.bodies[0])
+    result = agent.result_of(summary, tmp_path / "session")
+    assert "stopped at its cost cap" in result.parts[0].text and result.usage.cost_usd == pytest.approx(0.004)
+
+
 class SlotEnv:
     """A stand-in env serving one player slot as an env serves it: every request comes in under /players/1, the player
     is player 1 (wc3env's fake world, with a peon beside the orc hall) and sees only its own observation, and three
     seconds in one of the other side's peasants dies."""
 
-    ENDPOINTS = {OBSERVE: "/rts/observe", STEP: "/rts/step", DEBUG: "/rts/debug", NOTE: "/rts/note"}
+    ENDPOINTS = {OBSERVE: "/rts/observe", STEP: "/rts/step", DEBUG: "/rts/debug", NOTE: "/rts/note",
+                 FILE: "/rts/file"}
 
     def __init__(self, seconds=30):
         self.world, self.seconds = fake_server.SyntheticWorld.echo_isles_start(), seconds
         self.world.units[2001] = {**self.world.units[1001], "unit_id": 2001, "type_id": "opeo", "owner": 1,
                                   "x": 5000.0, "y": -2800.0}
-        self.paths, self.steps, self.notes = [], [], []
+        self.paths, self.steps, self.notes, self.files = [], [], [], {}
         env = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -141,6 +176,9 @@ class SlotEnv:
         if name == "note":
             self.notes.append(body)
             return {}
+        if name == "file":
+            self.files[body["name"]] = body["content_type"]
+            return {"name": body["name"]}
         if name == "debug":
             return {"ignored": True}
         if name == "observe":
@@ -183,6 +221,7 @@ async def test_wc3agent_plays_its_player_slot_with_the_prompt_as_its_goal(monkey
     moved = [a for actions in slot.steps for a in actions["1"] if a["command"] == "move"]
     assert moved and moved[0]["unit_id"] == 2001 and moved[0]["arguments"]["x"] == 0
     assert slot.notes and {n["slot"] for n in slot.notes} == {1}
+    assert slot.files == {"wc3agent-report.html": "text/html", "wc3agent-session.zip": "application/zip"}
     assert all(f"THIS GAME IS A TEST OF ONE THING. {goal}" in m for m in models.macro)
     assert any(re.search(r"enemy peasant\d+ died", m) for m in models.macro)
     assert not any(re.search(r"your peasant\d+ died", m) for m in models.macro)

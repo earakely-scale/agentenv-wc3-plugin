@@ -4,12 +4,15 @@ unit, at most once a second per group. It plays the game the task's close_lobby 
 env's urn:rts session (remote.py), stepped or in realtime as the match says; at its slot's address
 (`<env>/players/<player_id>/mcp`, which add_player_slot gives it), it plays that slot.
 
-Models come from agent-env's model endpoint (LITELLM_BASE_URL, LITELLM_API_KEY):
-- macro: the prompt_agent step's model, e.g. anthropic/claude-sonnet-5-5; WC3_MACRO_REASONING (default low).
+Models come from agent-env's model endpoint (LITELLM_BASE_URL, LITELLM_API_KEY), priced as LiteLLM prices each call:
+- macro: the prompt_agent step's model, e.g. anthropic/claude-sonnet-5-5; WC3_MACRO_REASONING (default low). A Claude
+  model's system prompt and newest message are cached, as wc3agent caches them on Anthropic's own API.
 - micro: WC3_MICRO_MODEL, default anthropic/claude-haiku-4-5, asked through the same endpoint; `jev` (or a
   `jev-...` model name) plays TypeSafe's Jev instead, with TYPESAFE_API_KEY; `off` plays without micro.
 WC3_TURN_SECONDS (default 5, at least 5) is the game time between macro requests; WC3_MAX_GAME_SECONDS stops
-playing that much game time from now (default: the match's time limit).
+playing that much game time from now (default: the match's time limit); WC3_MAX_COST_USD stops once the game has cost
+that much (the task's finish_match then plays it out). Its report (wc3agent's report.html) and session (calls,
+actions, outcomes, transcript, summary) go to the env (urn:rts:file/v1), whose match files keep them.
 
 With WC3_GOAL=prompt the prompt is wc3agent's goal (a drill's), which wc3agent pins first in every macro request as
 "THIS GAME IS A TEST OF ONE THING"; without it wc3agent plays the whole game, as it does in a melee. The game's setup
@@ -21,11 +24,13 @@ running cost and decisions.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import re
 import tempfile
+import zipfile
 from pathlib import Path
 
 from agentenv_protocol.a2a_agent import (
@@ -40,7 +45,7 @@ from agentenv_protocol.a2a_agent import (
     Usage,
     a2a_agent,
 )
-from remote import RemoteGameSession, chat_micro
+from remote import COST_CAP, RemoteGameSession, chat_micro, litellm_chat, litellm_priced
 
 from agentenv_rts.session import RemoteSession, SessionError, player_number
 from agentenv_rts.timeline import model_name
@@ -59,6 +64,7 @@ RATES = {
     "openai/gpt-6-luna": {"input": 0.10, "cached": 0.01, "cache_write": 0.125, "output": 0.50},
 }
 TRAJECTORY_LIMIT = 3000
+STEP_WAIT_SECONDS = 900   # longer than lockstep's stall_seconds (600): a step waits for the slowest player's move
 
 
 class WC3Config(AgentConfig):
@@ -109,10 +115,14 @@ def player_name(macro: str, micro: str) -> str:
     return f"{big} + {small.removeprefix(family + ' ') if small.startswith(family + ' ') else small}"
 
 
-def telling(run_log, remote: RemoteSession, slot: int):
+def telling(run_log, remote: RemoteSession, slot: int, made: dict):
     """wc3agent's RunLog that also tells the env's spectators each macro plan and the running cost (notes are best
-    effort: the game goes on without them)."""
+    effort: the game goes on without them); the one the run makes is `made["log"]`, whose ledger the cost cap reads."""
     class SpectatorLog(run_log):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made["log"] = self
+
         def calls(self, records):
             super().calls(records)
             plans = [plan_of(r.get("reply")) for r in records if r["kind"] == "macro"]
@@ -139,8 +149,33 @@ def playing(agent_class, goal: str, slot: int):
     return agent
 
 
+def keep(remote: RemoteSession, out: Path) -> list[str]:
+    """Leave wc3agent's report and its session folder, zipped, with the env's match (best effort); the names kept."""
+    from wc3agent.report import report
+
+    try:
+        report(out)
+    except Exception as e:   # a report is a convenience: the session is the record
+        log.warning("wc3agent's report: %s", e)
+    zipped = io.BytesIO()
+    with zipfile.ZipFile(zipped, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(p for p in out.rglob("*") if p.is_file() and p.name != "report.html"):
+            archive.write(path, path.relative_to(out))
+    files = [("wc3agent-session.zip", zipped.getvalue(), "application/zip")]
+    if (out / "report.html").is_file():
+        files.insert(0, ("wc3agent-report.html", (out / "report.html").read_bytes(), "text/html"))
+    kept = []
+    for name, content, content_type in files:
+        try:
+            remote.file(name, content, content_type)
+            kept.append(name)
+        except SessionError as e:
+            log.warning("%s not kept: %s", name, e)
+    return kept
+
+
 def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Path, goal: str = "") -> dict:
-    """Play the env's game to its end with wc3agent; wc3agent's summary of it."""
+    """Play the env's game to its end with wc3agent; wc3agent's summary of it, with the files kept in the env."""
     from wc3agent import play as runner
     from wc3agent.agent import Agent
     from wc3agent.micro import agent as micro
@@ -149,13 +184,16 @@ def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Pa
     from wc3agent.recording import RunLog
 
     server = next(iter(servers.values()))
-    remote = RemoteSession(server["url"].rstrip("/").removesuffix("/mcp"), headers=server.get("headers"))
+    remote = RemoteSession(server["url"].rstrip("/").removesuffix("/mcp"), timeout=STEP_WAIT_SECONDS,
+                           headers=server.get("headers"))
     state = remote.observe()
     you = player_number(state)
     scenario, me = state["scenario"], state["observations"][you]
     base_url, key = endpoint(environ)
     cost.RATES.update(RATES)
-    macro = ChatModel("openai", config.model, key, base_url, reasoning=environ.get("WC3_MACRO_REASONING", "low"))
+    cost.cost = litellm_priced(cost.cost)
+    macro = litellm_chat(ChatModel, config.model, key, base_url, environ.get("WC3_MACRO_REASONING", "low"))
+    cap, made = float(environ.get("WC3_MAX_COST_USD") or "inf"), {}
     micro_model = environ.get("WC3_MICRO_MODEL") or DEFAULT_MICRO
     if micro_model.startswith("jev"):
         os.environ["TYPESAFE_DEFAULT_MODEL"] = "jev-latest" if micro_model == "jev" else micro_model
@@ -164,9 +202,10 @@ def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Pa
         os.environ["TYPESAFE_DEFAULT_MODEL"] = micro_model
         os.environ["TYPESAFE_API_KEY"] = "" if micro_model == "off" else "chat-model"
         micro.timed_call = chat_micro(base_url, key, micro_model)
-    runner.GameSession = lambda game_config: RemoteGameSession(game_config, remote)
+    runner.GameSession = lambda game_config: RemoteGameSession(
+        game_config, remote, capped=lambda: "log" in made and made["log"].ledger.total() >= cap)
     runner.Agent = playing(Agent, goal, you)
-    runner.RunLog = telling(RunLog, remote, you)
+    runner.RunLog = telling(RunLog, remote, you, made)
     try:
         remote.note("player", player_name(config.model, micro_model), slot=you)
     except SessionError as e:
@@ -181,7 +220,7 @@ def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Pa
         max_game_minutes=max(remaining, 1.0) / 60, turn_interval_seconds=float(environ.get("WC3_TURN_SECONDS", 5)),
         hidden=True, realtime=scenario.get("mode") == "realtime", out=out)
     summary = runner.play(melee, model=macro)
-    return {**summary, "micro_model": micro_model, "macro_model": config.model}
+    return {**summary, "micro_model": micro_model, "macro_model": config.model, "kept": keep(remote, out)}
 
 
 def usage_of(summary: dict, calls: int) -> Usage:
@@ -201,7 +240,8 @@ def result_of(summary: dict, out: Path) -> TaskResult:
     turns, micro_calls = summary.get("turns", 0), summary.get("micro_calls", 0)
     usage = usage_of(summary, turns + micro_calls)
     priced = f", ${usage.cost_usd:.2f}" if usage.cost_usd is not None else ""
-    text = (f"{summary.get('result', 'unknown')} after {summary.get('game_seconds', 0):.0f} s of game time: "
+    ended = ("stopped at its cost cap" if summary.get("result") == COST_CAP else summary.get("result", "unknown"))
+    text = (f"{ended} after {summary.get('game_seconds', 0):.0f} s of game time: "
             f"{turns} macro turns ({summary['macro_model']}), {micro_calls} micro calls ({summary['micro_model']})"
             f"{priced}.")
     builder = TaskResult.builder()

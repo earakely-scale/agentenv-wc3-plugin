@@ -17,6 +17,7 @@ agent image and in agents whose game loops are threaded rather than async.
 
 from __future__ import annotations
 
+import base64
 import json
 import urllib.error
 import urllib.request
@@ -26,6 +27,7 @@ STEP = "urn:rts:step/v1"
 DEBUG = "urn:rts:debug/v1"
 NOTE = "urn:rts:note/v1"
 NOTE_KINDS = ("plan", "player", "stats")
+FILE = "urn:rts:file/v1"
 CARD_PATH = "/.well-known/agent-env.json"
 
 
@@ -84,6 +86,11 @@ class RemoteSession:
 
     def note(self, kind: str, text: str = "", slot: int = 0, data: dict | None = None) -> dict:
         return self.call(NOTE, {"slot": slot, "kind": kind, "text": text, "data": data or {}})
+
+    def file(self, name: str, content: bytes, content_type: str = "application/octet-stream") -> dict:
+        """Leave a file with the match (its agent's report, say), which the match's files then keep."""
+        return self.call(FILE, {"name": name, "base64": base64.b64encode(content).decode(),
+                                "content_type": content_type})
 
     def call(self, uri: str, params: dict) -> dict:
         endpoint = self.endpoints().get(uri)

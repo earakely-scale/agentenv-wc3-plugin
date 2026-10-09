@@ -28,9 +28,10 @@ from agentenv_rts.grade import RTSGradeTaskStep, VoidMatch
 from agentenv_rts.lockstep import Lockstep
 from agentenv_rts.session import RemoteSession, SessionError
 from agentenv_rts.timeline import Timeline, model_name
-from agentenv_wc3 import frames, metrics, render
+from agentenv_wc3 import frames, metrics, render, server
 from agentenv_wc3.bridge import WorkerError
 from agentenv_wc3.server import WC3Env, check_scenario, players_of
+from agentenv_wc3.worker import Worker
 
 pytestmark = pytest.mark.anyio
 
@@ -772,3 +773,67 @@ async def test_cancel_match_leaves_the_game_where_it_stopped(env_vars):
     assert metadata["game_match"]["status"] == "cancelled" and "status_detail" not in metadata["game_match"]
     assert void == "grade: no outcome to grade, the match was cancelled" and "verifications" not in metadata
     assert late["done"] and late["elapsed_ms"] == 0   # over for its players too: a move changes nothing
+
+
+async def test_a_player_leaves_files_with_its_match_which_keeps_them(env_vars, monkeypatch):
+    env = WC3Env()
+    async with deployed(env) as record:
+        await match(record)
+        session = RemoteSession(base(record) + "/players/0")
+        kept = await asyncio.to_thread(session.file, "report.html", b"<html></html>", "text/html")
+        assert kept == {"name": "report.html", "bytes": 13}
+        with pytest.raises(SessionError, match="a file's name"):
+            await asyncio.to_thread(session.file, "../escape", b"x")
+        monkeypatch.setattr(server, "AGENT_FILE_BYTES", 20)
+        with pytest.raises(SessionError, match="would pass"):
+            await asyncio.to_thread(session.file, "session.zip", b"x" * 10)
+        [report] = (await env.kept(["agent_files"])).files
+        assert report.file.read_bytes() == b"<html></html>"
+    assert report.name == "wc3-2EchoIsles-g-1-p0-report.html"
+    assert (report.kind, report.content_type) == ("agent_files", "text/html")
+    assert "agent_files" in server.DEFAULT_FILE_KINDS
+
+
+async def test_the_env_owns_the_clock_and_steps_the_matchs_own_step_ms(env_vars):
+    async with deployed(WC3Env()) as record:
+        await match(record, step_ms=500)
+        session = RemoteSession(base(record) + "/players/0")
+        speed = await asyncio.to_thread(session.debug, "speed", factor=8.0)
+        stepped = await asyncio.to_thread(session.step, {0: []})
+    assert speed["ignored"] is True and "the env sets the game clock" in speed["reason"]
+    assert stepped["elapsed_ms"] == 500
+
+
+async def test_autocast_is_an_agents_setting_and_the_game_gets_it_as_a_computer_agent(env_vars):
+    env = WC3Env()
+    async with deployed(env) as record:
+        await match(record, players=[{"agent": "wc3", "race": "human", "autocast": True},
+                                     {"computer": "normal", "race": "orc"}])
+        assert [bool(p.get("autocast")) for p in env.players] == [True, False]
+    with pytest.raises(Exception, match="autocast and omniscient are an agent's settings"):
+        async with deployed(WC3Env()) as record:
+            await match(record, players=[{"agent": "wc3", "race": "human"},
+                                         {"computer": "normal", "race": "orc", "autocast": True}])
+    worker = Worker(fake=True)
+    try:
+        worker.start("(2)EchoIsles.w3x", [{"slot": 0, "race": "human"}, {"slot": 1, "race": "orc",
+                                                                       "control": "computer"}],
+                     computer_agents=[0])
+        assert worker.session.config.computer_agents == (0,)
+    finally:
+        worker.close()
+
+
+def test_a_replay_comes_with_the_startup_options_that_play_it_back():
+    class Saved:
+        done = True
+
+        def save_replay(self, path):
+            path.write_bytes(b"W3G")
+            path.with_name(path.name + ".json").write_text('{"ai_difficulty": 1}')
+            return path
+
+    worker = Worker(fake=True)
+    worker.session = Saved()
+    assert worker.replay() == {"name": "game.w3g", "base64": base64.b64encode(b"W3G").decode(),
+                               "startup": {"ai_difficulty": 1}}

@@ -25,7 +25,8 @@ opened plays its default game: an agent at the env's own address against the gam
 from __future__ import annotations
 
 import asyncio
-import base64
+import binascii
+import json
 import logging
 import math
 import os
@@ -36,6 +37,7 @@ import sys
 import tempfile
 import textwrap
 import time
+from base64 import b64decode
 from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -96,7 +98,7 @@ from agentenv_rts import display as rts_display
 from agentenv_rts import live as rts_live
 from agentenv_rts import recording as rts_recording
 from agentenv_rts.lockstep import Lockstep
-from agentenv_rts.session import DEBUG, NOTE, NOTE_KINDS, OBSERVE, STEP
+from agentenv_rts.session import DEBUG, FILE, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
 
 from . import frames, metrics, render
@@ -117,7 +119,7 @@ DEFAULT_SCENARIO = {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race":
                     "seed": None, "randomize_starts": False, "time_limit_seconds": 1200, "mode": "stepping",
                     "allow_debug": False, "client_view": False, "labels": None, "players": None, "step_ms": 1000,
                     "lockstep": {"stall_seconds": 600}}
-PLAYER_KEYS = ("agent", "computer", "race", "team", "slot", "ai_assist", "omniscient")
+PLAYER_KEYS = ("agent", "computer", "race", "team", "slot", "ai_assist", "omniscient", "autocast")
 OUTCOMES = {"victory": "won", "defeat": "lost", "draw": "drawn"}
 AGENT_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MODES = ("stepping", "realtime")
@@ -132,11 +134,17 @@ WINDOW = [int(n) for n in os.environ.get("WC3_WINDOW", "1288x754").split("x")]
 CLIENT_DIR = Path(os.environ.get("WC3_CLIENT_DIR", "/tmp/wc3-client"))
 PAN_SECONDS, PAN_STEPS, PAN_MAX = 0.6, 8, 4000.0   # the camera eases over this; farther than PAN_MAX it cuts
 NOTE_CHARS = 400
+AGENT_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
+AGENT_FILE_BYTES = 64 * 1024 * 1024   # a player's files together, kept until the next game
+# A stepped game's clock, as wc3env's own pools run it: waits scale down 2048x and last at least 1 ms. A tick is the
+# same tick at any speed; only the wall time between them shrinks. Realtime and the game's picture keep 1.
+CLOCK_SPEED, WAIT_FLOOR_MS = 2048.0, 1
 OVERLAY = {"x": -1.0, "y": 1.0, "seconds": 9}   # a plan shows top left in the game's picture, under its resources
 
-FILE_KINDS = (*rts_recording.KINDS, "replay")
-"""What a finished match keeps (README: Reference): the recording's kinds, and the game's native replay (.w3g)."""
-DEFAULT_FILE_KINDS = ("map_video", "html_replay", "timeline", "replay")
+FILE_KINDS = (*rts_recording.KINDS, "replay", "agent_files")
+"""What a finished match keeps (README: Reference): the recording's kinds, the game's native replay (.w3g) with the
+startup options that play it back (.w3g.json), and the files its players left (urn:rts:file/v1)."""
+DEFAULT_FILE_KINDS = ("map_video", "html_replay", "timeline", "replay", "agent_files")
 STAGE_EXTENSION = "urn:wc3:stage/v1"
 STAGE_OPS = ("spawn", "level", "give", "item", "hp", "mana", "kill", "remove", "resources", "ai", "research",
              "invulnerable", "alliance", "destructable")
@@ -187,8 +195,8 @@ class MatchSettings(BaseModel):
 
 
 class SlotSettings(BaseModel):
-    """A player slot's settings: faction, team and label for every player; ai_assist and omniscient for an agent;
-    ai_level for the game's AI."""
+    """A player slot's settings: faction, team and label for every player; ai_assist, autocast and omniscient for an
+    agent; ai_level for the game's AI."""
 
     model_config = ConfigDict(extra="forbid", use_attribute_docstrings=True)
     faction: Literal[RACES] = "random"
@@ -198,6 +206,9 @@ class SlotSettings(BaseModel):
     """Its name on the live page and the broadcast."""
     ai_assist: bool = False
     """An agent: the game's AI plays its units beside it."""
+    autocast: bool = False
+    """An agent: its units cast their spells on their own, as the game has a computer player's do (wc3env's
+    computer_agents), so a fight against the AI or creeps is even."""
     omniscient: bool = False
     """An agent: it sees every player's observation."""
     ai_level: Literal[tuple(DIFFICULTIES)] | None = None
@@ -283,7 +294,7 @@ def players_of(s: dict) -> list[dict]:
             raise ValueError(f"player {i}: race must be one of {', '.join(RACES)}, got {race!r}")
         players.append({"slot": player.get("slot", i), "agent": agent, "computer": computer, "race": race,
                       "team": player.get("team", i + 1), "ai_assist": bool(player.get("ai_assist")),
-                      "omniscient": bool(player.get("omniscient"))})
+                      "autocast": bool(player.get("autocast")), "omniscient": bool(player.get("omniscient"))})
     slots, names = [x["slot"] for x in players], [x["agent"] for x in players if x["agent"]]
     if len(set(slots)) != len(slots) or not all(isinstance(x, int) and 0 <= x <= 11 for x in slots):
         raise ValueError("players need distinct slots from 0 to 11")
@@ -305,7 +316,8 @@ def scenario_of(lobby: Lobby) -> dict:
         given = s.game_settings
         player = {"slot": int(s.player_id), "race": given["faction"], "team": team_of(s)}
         if s.player_kind is PlayerKind.AGENT:
-            player.update(agent=s.player_name, ai_assist=given["ai_assist"], omniscient=given["omniscient"])
+            player.update(agent=s.player_name, ai_assist=given["ai_assist"], autocast=given["autocast"],
+                          omniscient=given["omniscient"])
         else:
             player["computer"] = given["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"]
         players.append(player)
@@ -389,6 +401,7 @@ class WC3Env(AgentEnvGameEnv):
         self.feed: frames.Feed | None = None
         self.notes: list[dict] = []
         self.agents: dict[int, dict] = {}
+        self.agent_files: dict[int, dict[str, tuple[bytes, str]]] = {}   # slot → name → (content, content type)
         self.stats = {"games": 0, "tool_calls": 0, "invalid_calls": 0, "advances": 0, "orders_sent": 0,
                       "orders_rejected": 0, "extension_calls": 0, "session_steps": 0, "staged_seconds": 0,
                       "finish_seconds": 0}
@@ -421,6 +434,7 @@ class WC3Env(AgentEnvGameEnv):
                                         seed=scenario["seed"], randomize_starts=scenario["randomize_starts"],
                                         ai_difficulty=DIFFICULTIES[level],
                                         ai_agents=[x["slot"] for x in players if x["ai_assist"]],
+                                        computer_agents=[x["slot"] for x in players if x.get("autocast")],
                                         mode=scenario["mode"], render=scenario["client_view"],
                                         visible=scenario["client_view"],
                                         window=WINDOW if scenario["client_view"] else None)
@@ -437,6 +451,12 @@ class WC3Env(AgentEnvGameEnv):
                                   self._out)
                          if scenario["mode"] == "stepping" and len(agents) > 1 else None)
         await self._ally(players)
+        if scenario["mode"] == "stepping" and not scenario["client_view"] and not self.fake:
+            try:
+                await self.bridge.call("debug", op="speed", args={"factor": CLOCK_SPEED})
+                await self.bridge.call("debug", op="waitfloor", args={"ms": WAIT_FLOOR_MS})
+            except WorkerError as e:
+                log.warning("the clock stays at its speed: %s", e.message)
         self.names = render.Names()
         for o in self.obs.values():
             self.names.see(o)
@@ -451,6 +471,7 @@ class WC3Env(AgentEnvGameEnv):
         self.metrics = metrics.Metrics(self.ref, render.map_info(scenario["map"]), [x["slot"] for x in players])
         self.metrics.see(self.obs)
         self.camera, self.director, self.notes, self.agents = None, frames.Director(self.lead), [], {}
+        self.agent_files = {}
         if scenario["client_view"]:
             await self._start_capture()
         self._record()
@@ -1022,8 +1043,8 @@ class WC3Env(AgentEnvGameEnv):
 
     @check_player_slot
     def slot_rules(self, slot: PlayerSlot, lobby: Lobby) -> None:
-        """A player_id is one of the map's player numbers; ai_assist and omniscient are an agent's, and ai_level the
-        game's AI's, one level for every AI player slot, since the game has one."""
+        """A player_id is one of the map's player numbers; ai_assist, autocast and omniscient are an agent's, and
+        ai_level the game's AI's, one level for every AI player slot, since the game has one."""
         starts = map_players(lobby.game_settings["map"])
         if slot.player_id not in {str(n) for n in range(starts)}:
             raise GameError("bad_slot", f"a player slot is a player number of {lobby.game_settings['map']}, \"0\" "
@@ -1033,8 +1054,8 @@ class WC3Env(AgentEnvGameEnv):
             if given["ai_level"] is not None:
                 raise ValueError("ai_level is the game's AI's setting, not an agent's")
             return
-        if given["ai_assist"] or given["omniscient"]:
-            raise ValueError("ai_assist and omniscient are an agent's settings, not the game's AI's")
+        if given["ai_assist"] or given["autocast"] or given["omniscient"]:
+            raise ValueError("ai_assist, autocast and omniscient are an agent's settings, not the game's AI's")
         level = given["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"]
         levels = {s.game_settings["ai_level"] or DEFAULT_SCENARIO["ai_difficulty"] for s in lobby.player_slots
                   if s.player_kind is PlayerKind.AI} - {level}
@@ -1045,9 +1066,10 @@ class WC3Env(AgentEnvGameEnv):
     @player_slot_card
     def player_card(self, slot: PlayerSlot) -> EnvironmentCard:
         """An agent's player slot: its MCP tools, and the urn:rts session a program plays it through (observe, step,
-        debug, note), both at the slot's address."""
+        debug, note, file), both at the slot's address."""
         card = self._served_card()
-        session = [e for e in card.capabilities.extensions or () if e.uri in (OBSERVE, STEP, DEBUG, NOTE)]
+        session = [e for e in card.capabilities.extensions or ()
+                   if e.uri in (OBSERVE, STEP, DEBUG, NOTE, FILE)]
         return EnvironmentCard(name=f"{card.name}/{slot.player_id}",
                                additionalInterfaces=[EnvironmentInterface(url=MCP_PATH, transport=MCP_TRANSPORT)],
                                capabilities=EnvironmentCapabilities(operations=[], extensions=session))
@@ -1263,18 +1285,18 @@ class WC3Env(AgentEnvGameEnv):
             return self._session_state(self._session_player())
 
     @extension(STEP, description="Send raw wc3env actions ({slot: [action]}; at a player slot's address, its own "
-                                 "player number's) and step the game `ms` milliseconds (default 1000; with several "
-                                 "agents, the game moves when every one has stepped; in realtime the game runs on its "
-                                 "own clock and this only sends and observes). Orders that no longer apply are "
-                                 "dropped and reported as rejected, like the game's own refusals, by their index in "
-                                 "the batch.")
+                                 "player number's) and step the game `ms` milliseconds (default the match's "
+                                 "step_ms; with several agents, the game moves when every one has stepped; in "
+                                 "realtime the game runs on its own clock and this only sends and observes). Orders "
+                                 "that no longer apply are dropped and reported as rejected, like the game's own "
+                                 "refusals, by their index in the batch.")
     async def session_step(self, actions: dict | None = None, ms: int | None = None) -> dict:
         self.stats["extension_calls"] += 1
-        ms = DEFAULT_STEP_MS if ms is None else int(ms)
-        if not 25 <= ms <= MAX_ADVANCE_SECONDS * 1000:
+        if ms is not None and not 25 <= int(ms) <= MAX_ADVANCE_SECONDS * 1000:
             raise ValueError(f"ms must be 25 to {MAX_ADVANCE_SECONDS * 1000}")
         async with self.lock:
             await self._session_game()
+            ms = self.scenario["step_ms"] if ms is None else int(ms)
             player = self._session_player()
             if self._out(player["slot"]) if player else self._ended():
                 return {**self._session_state(player), "rejected": {}, "placements": {}, "elapsed_ms": 0}
@@ -1316,8 +1338,9 @@ class WC3Env(AgentEnvGameEnv):
         return {**self._session_state(player), "rejected": rejected, "placements": placements,
                 "elapsed_ms": round((self._seconds() - before) * 1000)}
 
-    @extension(DEBUG, description="A wc3env debug op ({op, args}). speed, camera, overlay and render are always "
-                                  "allowed; ops that stage the game (resources, spawn, ai, ...) only in a match "
+    @extension(DEBUG, description="A wc3env debug op ({op, args}). camera, overlay and render are always allowed, "
+                                  "and speed is accepted and left to the env, which sets the game clock's for every "
+                                  "player; ops that stage the game (resources, spawn, ai, ...) only in a match "
                                   "started with allow_debug.")
     async def session_debug(self, op: str, args: dict | None = None) -> dict:
         self.stats["extension_calls"] += 1
@@ -1325,6 +1348,8 @@ class WC3Env(AgentEnvGameEnv):
             await self._session_game()
             if op not in VIEW_DEBUG_OPS and not self.scenario["allow_debug"]:
                 raise ValueError(f"debug op {op!r} stages the game: the match must allow it (allow_debug)")
+            if op == "speed":
+                return {"ignored": True, "reason": "the env sets the game clock's speed, one for every player"}
             if self.fake and op in VIEW_DEBUG_OPS:
                 return {"ignored": True, "reason": "the fake game has no display or clock to change"}
             try:
@@ -1361,6 +1386,31 @@ class WC3Env(AgentEnvGameEnv):
                     except WorkerError as e:
                         log.warning("overlay: %s", e.message)
         return {}
+
+    @extension(FILE, description="A file a player leaves with its match, e.g. its agent's own report or logs: "
+                                 "{name, base64, content_type}. The match's files (agent_files) keep it until the "
+                                 "next game; a name is letters, digits, '.', '_' and '-', and a player's files "
+                                 "together take at most 64 MiB.")
+    async def session_file(self, name: str, base64: str, content_type: str = "application/octet-stream",
+                           slot: int | None = None) -> dict:
+        self.stats["extension_calls"] += 1
+        if not AGENT_FILE.fullmatch(name or ""):
+            raise ValueError("a file's name is 1 to 80 letters, digits, '.', '_' and '-', starting with a letter or "
+                             "digit")
+        try:
+            content = b64decode(base64, validate=True)
+        except (binascii.Error, ValueError) as e:
+            raise ValueError(f"{name}: not base64") from e
+        async with self.lock:
+            if self.timeline is None:
+                raise RuntimeError("no game has started")
+            player = self._session_player()
+            slot = player["slot"] if player is not None else self.lead if slot is None else slot
+            files = self.agent_files.setdefault(slot, {})
+            if sum(len(c) for n, (c, _) in files.items() if n != name) + len(content) > AGENT_FILE_BYTES:
+                raise ValueError(f"player {slot}'s files would pass {AGENT_FILE_BYTES // 2**20} MiB")
+            files[name] = (content, content_type or "application/octet-stream")
+        return {"name": name, "bytes": len(content)}
 
     async def _session_game(self) -> None:
         try:
@@ -1433,6 +1483,7 @@ class WC3Env(AgentEnvGameEnv):
             client = (await asyncio.to_thread(self.capture.stop)
                       if {"client_video", "highlights"} & set(wanted) and self.capture is not None else None)
             replay = await self._replay() if "replay" in wanted else None
+            left = {slot: dict(files) for slot, files in self.agent_files.items()} if "agent_files" in wanted else {}
         if self.recordings is None:
             self.recordings = Path(tempfile.mkdtemp(prefix="wc3-match-files-"))
         folder = self.recordings / "latest"
@@ -1441,22 +1492,32 @@ class WC3Env(AgentEnvGameEnv):
                                               tuple(k for k in wanted if k in rts_recording.KINDS), client)
         files = [MatchFile(name=f["name"], kind=f["kind"], content_type=f["content_type"], file=f["path"])
                  for f in made]
-        if isinstance(replay, bytes):
-            (path := folder / f"{stem}.w3g").write_bytes(replay)
+        if isinstance(replay, tuple):
+            data, startup = replay
+            (path := folder / f"{stem}.w3g").write_bytes(data)
             files.append(MatchFile(name=path.name, kind="replay", file=path))
+            if startup is not None:   # what playing the replay back needs: the match setup, AI level and AI slots
+                (sidecar := folder / f"{stem}.w3g.json").write_text(json.dumps(startup))
+                files.append(MatchFile(name=sidecar.name, kind="replay", content_type="application/json",
+                                       file=sidecar))
         elif replay is not None:
             notes.append(replay)
+        for slot, kept_files in sorted(left.items()):
+            for name, (content, content_type) in sorted(kept_files.items()):
+                (path := folder / f"{stem}-p{slot}-{name}").write_bytes(content)
+                files.append(MatchFile(name=path.name, kind="agent_files", content_type=content_type, file=path))
         return MatchFiles(files=files, notes=notes)
 
-    async def _replay(self) -> bytes | str:
-        """The game's native replay, or why there is none; it ends the game's own recording of itself."""
+    async def _replay(self) -> tuple[bytes, dict | None] | str:
+        """The game's native replay and its startup options, or why there is none; it ends the game's own recording
+        of itself."""
         if self.bridge is None or not self.game_over:
             return "no replay: the game did not reach its end"
         try:
             f = await self.bridge.call("replay")
         except WorkerError as e:
             return f"no replay: {e.message}"   # e.g. the fake game records none
-        return base64.b64decode(f["base64"])
+        return b64decode(f["base64"]), f.get("startup")
 
     def create_app(self):
         app = super().create_app()

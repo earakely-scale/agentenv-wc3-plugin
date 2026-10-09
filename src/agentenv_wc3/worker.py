@@ -66,12 +66,13 @@ class Worker:
     def start(self, map: str, players: list[dict], step_ms: int = 1000, seed: int | None = None,
               randomize_starts: bool = False, ai_difficulty: int | None = None, render: bool = False,
               visible: bool = False, window: list[int] | None = None, mode: str = "stepping",
-              ai_agents: list[int] | None = None) -> dict:
+              ai_agents: list[int] | None = None, computer_agents: list[int] | None = None) -> dict:
         """A new game: closes the one before, launches the game with these players, and returns every player's
         first observation and the accepted setup. In `realtime` mode the game runs on its own clock from `release`
         (`held` says it waits for one: a wc3env without hold starts it at once); `render` and `visible` draw the
         game in a window on the display, for its picture, `window` [width, height] big; `ai_agents` are agent slots
-        the game's own AI plays beside."""
+        the game's own AI plays beside, and `computer_agents` agent slots whose units cast on their own, as a computer
+        player's do."""
         from wc3env.session import GameConfig, GameSession, MatchSetup, PlayerConfig
 
         self.close()
@@ -87,6 +88,7 @@ class Worker:
                 players=tuple(PlayerConfig(p["slot"], p.get("race"), p.get("control", "agent")) for p in players),
                 mode=mode, step_ms=step_ms, render=render, background_visible=visible, sound=False,
                 ai_difficulty=ai_difficulty, ai_agents=tuple(ai_agents or ()),
+                computer_agents=tuple(computer_agents or ()),
                 setup=MatchSetup(seed=seed, randomize_starts=randomize_starts),
                 output_dir=os.environ.get("WC3_OUTPUT_DIR") or None, **hold,
             )
@@ -148,7 +150,9 @@ class Worker:
         return {"observations": _keyed(session._observe_all()), "done": session.done}
 
     def replay(self) -> dict:
-        """The episode's native replay (.w3g), as base64. Recording stops: call it once the game is over."""
+        """The episode's native replay (.w3g), as base64, with the startup options that play it back (the match
+        setup, AI level and AI slots, which wc3env writes beside it). Recording stops: call it once the game is
+        over."""
         session = self._session()
         with tempfile.TemporaryDirectory() as tmp:
             try:
@@ -156,9 +160,11 @@ class Worker:
             except Exception as e:   # the game ended without one, or (the fake game on Linux) can't write one
                 raise WorkerError("no_replay", f"{type(e).__name__}: {e}") from e
             data = path.read_bytes() if path.is_file() else b""
+            sidecar = path.with_name(path.name + ".json")
+            startup = json.loads(sidecar.read_text()) if sidecar.is_file() else None
         if not data:
             raise WorkerError("no_replay", "the game wrote no replay")
-        return {"name": "game.w3g", "base64": base64.b64encode(data).decode()}
+        return {"name": "game.w3g", "base64": base64.b64encode(data).decode(), "startup": startup}
 
     def debug(self, op: str, args: dict | None = None) -> dict:
         """A wc3env debug op; the fake game's `end` (with a result) is how tests finish a game."""

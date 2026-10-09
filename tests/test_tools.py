@@ -186,3 +186,17 @@ async def test_orders_that_stopped_applying_are_dropped_not_blocking(tools, env)
     report = await tools("advance", seconds=1)
     assert "Dropped 1 queued order that no longer applied:\n  4242 move at (0,0)" in report
     assert "Sent 1 order." in report
+
+
+def test_get_state_lists_each_hero_with_its_items_by_the_slot_use_item_takes():
+    ref = render.Reference.load()
+    hero = {"unit_id": 7, "type_id": "Hpal", "x": 0, "y": 0, "hp": 650, "max_hp": 650, "mana": 255, "max_mana": 255,
+            "hero": True, "level": 2, "order": None}
+    obs = {"units": [hero], "player": {}, "inventory": [{"unit_id": 7, "slot": 1, "type_id": "phea", "charges": 1},
+                                                        {"unit_id": 7, "slot": 0, "type_id": "stel", "charges": 0}]}
+    text = render.state(obs, ref, me=0, race="human", map_name="(2)EchoIsles.w3x", limit=600, queued=0, result="",
+                        events=[])
+    items = "items: slot 0 Staff of Teleportation (stel), slot 1 Potion of Healing (phea) x1"
+    assert "Heroes:\n  7 Paladin (Hpal)" in text and items in text
+    listed = render.units_list(obs, ref, who="own", type_filter=None, near=None, radius=None, details=False, limit=9)
+    assert items in listed
