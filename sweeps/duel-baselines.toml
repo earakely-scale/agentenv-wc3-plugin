@@ -1,0 +1,10 @@
+# The mirror duels' floor: Warcraft against Warcraft (wc3-scripted on both sides), each race, four seeds, no model.
+# A fair duel ends about even; a model's duels (sweeps/duels.toml) read against it.
+# agent-env wc3 sweep generate sweeps/duel-baselines.toml runs/duel-baselines
+# agent-env wc3 sweep run runs/duel-baselines --budget 0
+name = "duel-baselines"
+template = ["mirror-human-baseline", "mirror-orc-baseline", "mirror-undead-baseline", "mirror-nightelf-baseline"]
+models = ["scripted"]
+seeds = [1, 2, 3, 4]
+prompt = ""
+max_cost_usd = 0.0
