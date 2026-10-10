@@ -43,8 +43,11 @@ SYSTEM = ("You play a real-time strategy game through the tools you are given; t
           "then reply with the result in a sentence.")
 NUDGE = "The game is not over yet: keep playing through the tools until it is."
 TRIMMED = "[An earlier result, trimmed to save room: get_state shows the game as it is now.]"
-NUDGES, KEEP, TRIM_CHARS, MAX_TOKENS, RETRIES = 3, 6, 120_000, 4096, 4
-MODEL_SECONDS = 180   # one model turn; a call that hangs longer is retried
+NUDGES, KEEP, TRIM_CHARS, RETRIES = 3, 6, 120_000, 4
+# a turn's reasoning and reply: at 4096, DeepSeek V4.1 Flash reasoned past the limit on long pages and answered
+# nothing, three turns running, so the loop stopped mid-game (a replayed turn needed 14.3k tokens of reasoning)
+MAX_TOKENS = 32_768
+MODEL_SECONDS = 420   # one model turn, long reasoning included; a call that hangs longer is retried
 STEP_WAIT_SECONDS = 900   # a tool call; longer than lockstep's stall_seconds (600), which an advance can wait out
 TRAJECTORY_LIMIT = 2000
 TRANSCRIPT = "wc3-llm-transcript.json"   # every message untrimmed, left with the match's agent_files
