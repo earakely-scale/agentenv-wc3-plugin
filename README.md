@@ -222,6 +222,38 @@ Beside the MP4, `<out>.json` has the frames' pace and the playback's final score
 scores the game recorded played the same game. It needs the env's image and your activation files, as a real game
 does. `--source` runs a plugin checkout's code in the image, to try a change without a new `setup`.
 
+## Game styles: how much the env does for the player
+
+The same game can be played through three interfaces. Each is its own env or agent, and a task picks one.
+
+| Style | Env or agent | How the player plays | What it tests |
+|---|---|---|---|
+| **raw** | env `wc3` | One model, units by id: `get_state`, `list_units`, `resources`, `lookup`, then `act` (JSON orders by unit id and coordinates) and `advance` | A general model with general tools |
+| **commander** | env `wc3-commander` | One model through wc3agent's interface, from wc3agent's own code (MIT): a turn page with named units (`peasant1`), what it can do now and what not yet ("NOT YET: 70 more gold"), and how its orders went; orders in wc3agent's language through `command` (`build peasant1 Farm near goldmine1`, `group army footman1 footman2 attack at 1200 -300: take camp 3`); code acting for its groups between seconds; and wc3agent's unit menus through `fight` and `choose` | A model as a commander, with good affordances |
+| **wc3agent** | agent `wc3-macro-micro` on env `wc3` | wc3env's own agent: a macro model on wc3agent's observations, and a micro model (Haiku 4.5 here, Jev with a TypeSafe key) answering each unit's menu, through the env's session | Peter Wang's design, as built |
+
+- **Setup:** `agent-env wc3 setup --style commander` builds the commander env's image and registers it as
+  `wc3-commander`. It is the same Dockerfile with `STYLE` set, so the images share every layer but the last. An MCP
+  server env carries no settings of its own, so the style is part of the image (`WC3_STYLE`, `styles.py`).
+- **Tasks:** a task names its env (`"env_id": "wc3-commander"`). Its prompt describes that style's tools:
+  `prompts.COMMANDER_HOW_TO_PLAY` in place of `HOW_TO_PLAY`.
+- **Sweeps:** `style = "commander"` plays a sweep's tasks in the commander style. `agent = {id = "wc3-macro-micro",
+  env = {WC3_MICRO_MODEL = "..."}}` plays them with another agent; for a drill or a duel, that agent gets the goal
+  pinned, as wc3agent's scenarios pin theirs. `sweeps/*-commander.toml` and `sweeps/duels-macro-micro.toml` are the
+  comparison runs.
+- **What the commander env takes from wc3agent:**
+  - the macro memory, which reads every observation;
+  - the turn page (`describe`) and the guide (`system_prompt`: rules, the order language, race, item and map sheets);
+  - the order parser;
+  - the reflexes that need no model: creep escape, loot, regrouping stragglers, idle fighters joining the army,
+    skill points, gold-worker caps;
+  - the unit menus (`candidates`, `build_request`).
+- **What it does differently:** there is no micro model. A group fights by Warcraft's attack-move and the reflexes,
+  unless the model takes the fight over with `fight` (each unit's options, numbered) and `choose`. The guide and the
+  page say so, where wc3agent's texts speak of micro.
+- **What it shares with the raw env:** the game, its stepping clock (`advance` plays one-second ticks, as
+  wc3agent's stepping play does), staging, grading and recording, so the styles' results compare directly.
+
 ## Tasks
 
 | Task | Who plays | Game | Measured on the real game |
