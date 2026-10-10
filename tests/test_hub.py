@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from agent_env.bundle.parse import BundleKind, parse_bundle
 from huggingface_hub import DatasetCard, SpaceCard
-from PIL import Image, ImageDraw
+from PIL import Image
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "hub_dataset.py"
 DRILL = {"drill:wc3": {"score": 0.5, "results": [
@@ -122,12 +122,13 @@ def test_a_runs_files_are_kept_under_its_episode_id_and_its_row_names_them(hub, 
     record = types.SimpleNamespace(context={"metadata": {"match_files": {"files": saved}}})
     monkeypatch.setattr(hub, "find_task_instance", lambda instance: record)
     monkeypatch.setattr(hub.FileArtifact, "get", lambda artifact_id, version: types.SimpleNamespace(
-        load=lambda: artifact_id.encode()))
-    files, columns = hub.run_files("@local/~/runs/x/t-abc", "wc3-v1-duels/t-abc")
+        load=lambda: b'{"setup": {"seed": 1}}' if artifact_id.endswith(".w3g.json") else artifact_id.encode()))
+    easy = [{"type": "add_player_slot", "player_kind": "ai", "game_settings": {"ai_level": "easy"}}]
+    files, columns = hub.run_files("@local/~/runs/x/t-abc", "wc3-v1-duels/t-abc", easy)
     assert files == {"replays/wc3-v1-duels/t-abc.html": b"wc3-g-1.html",
                      "timelines/wc3-v1-duels/t-abc.json": b"wc3-g-1-timeline.json",
                      "w3g/wc3-v1-duels/t-abc.w3g": b"wc3-g-1.w3g",
-                     "w3g/wc3-v1-duels/t-abc.w3g.json": b"wc3-g-1.w3g.json",
+                     "w3g/wc3-v1-duels/t-abc.w3g.json": b'{"setup": {"seed": 1}, "ai_difficulty": 0}',
                      "transcripts/wc3-v1-duels/t-abc.json": b"wc3-g-1-p0-wc3-llm-transcript.json"}
     assert columns == {"replay": "replays/wc3-v1-duels/t-abc.html", "timeline": "timelines/wc3-v1-duels/t-abc.json",
                        "w3g": "w3g/wc3-v1-duels/t-abc.w3g", "transcript": "transcripts/wc3-v1-duels/t-abc.json"}
@@ -168,7 +169,7 @@ def test_the_space_lists_every_run_in_order_and_loads_replays_from_the_dataset_t
     hub.space(data, tmp_path / "space", "v9.9.9")
     listed = json.loads((tmp_path / "space/runs.json").read_text())
     assert (listed["dataset"], listed["revision"]) == (hub.REPO, "v9.9.9")
-    assert listed["featured"] == [{"id": "u/1", "why": "a duel"}]
+    assert listed["featured"] == [{"id": "u/1", "why": "a duel", "still": None}]
     runs = listed["runs"]
     assert [r["id"] for r in runs] == ["l/2", "l/1", "d/1", "u/1", "duels-references/r1"]
     assert (runs[0]["model"], runs[0]["opponent"]) == ("Claude Haiku 4.5", "the easy Orc AI")
@@ -190,15 +191,55 @@ def test_the_space_is_a_static_page_of_the_dataset(hub):
     assert "resolve/${DATA.revision}/" in (hub.SPACE / "app.js").read_text()
 
 
-def test_the_clip_is_cut_to_where_the_game_moves_under_its_title_bar(hub):
-    frames = []
-    for i in range(10):
-        frame = Image.new("RGB", (960, hub.BAR + 600), (40, 70, 40))
-        ImageDraw.Draw(frame).rectangle((0, 0, 960, hub.BAR), fill=(20, 20, 20))
-        ImageDraw.Draw(frame).ellipse((700 + i * 10, hub.BAR + 100, 710 + i * 10, hub.BAR + 110), fill=(255, 0, 0))
-        frames.append(frame)
-    left, top, right, bottom = hub.action(frames)
-    assert left <= 700 and right >= 800 and top <= 100 <= bottom
-    assert abs((right - left) * 9 - (bottom - top) * 16) <= 16 and right <= 960 and bottom <= 600
-    shot = hub.shot(frames[5], (left, top, right, bottom))
-    assert shot.size == (800, (hub.BAR + 540) * 800 // 960)
+def test_every_run_with_a_w3g_gets_a_render_at_its_sets_pace_but_one_whose_staging_warms_up(hub, tmp_path):
+    files = {"w3g": "w3g/x.w3g", "timeline": "timelines/x.json", "replay": "replays/x.html", "score": 10}
+    write_parquet(tmp_path / "episodes/ladder.parquet", [{"episode_id": "wc3-v1-ladder/a", "task": "ladder-t", **files},
+                                                          {"episode_id": "wc3-v1-ladder/b", "task": "ladder-t",
+                                                           **files, "w3g": None}])
+    write_parquet(tmp_path / "episodes/duels.parquet", [{"episode_id": "wc3-v1-duels/d", "task": "mirror-orc-s1",
+                                                         **files}])
+    write_parquet(tmp_path / "references/duels.parquet", [{"episode_id": "duels-references/e", "race": "night_elf",
+                                                           **files}])
+    write_parquet(tmp_path / "episodes/drills.parquet", [
+        {"episode_id": "wc3-v1-drills/c", "task": "drill-opening", **files},
+        {"episode_id": "wc3-v1-drills/f", "task": "drill-shopping", **files}])
+    for name in ("drill-opening", "drill-shopping"):
+        (tmp_path / "bundles/wc3-v1-drills/tasks").mkdir(parents=True, exist_ok=True)
+        task = (hub.drills.TASKS / f"{name}.json").read_text()
+        (tmp_path / f"bundles/wc3-v1-drills/tasks/{name}.json").write_text(task)
+    for name in ("ladder-t", "mirror-orc-s1"):
+        bundle = "wc3-v1-ladder" if name.startswith("ladder") else "wc3-v1-duels"
+        (tmp_path / f"bundles/{bundle}/tasks").mkdir(parents=True, exist_ok=True)
+        (tmp_path / f"bundles/{bundle}/tasks/{name}.json").write_text('[{"type": "open_lobby"}]')
+    jobs = {job["id"]: job for job in hub.video_jobs(tmp_path)}
+    assert {i: (j["speed"], j["video"]) for i, j in jobs.items()} == {
+        "wc3-v1-ladder/a": (8, "videos/wc3-v1-ladder/a.mp4"), "wc3-v1-drills/c": (2, "videos/wc3-v1-drills/c.mp4"),
+        "wc3-v1-duels/d": (1, "videos/wc3-v1-duels/d.mp4"), "duels-references/e": (1, "videos/duels-references/e.mp4")}
+    assert jobs["wc3-v1-drills/c"]["task"] == tmp_path / "bundles/wc3-v1-drills/tasks/drill-opening.json"
+    assert jobs["duels-references/e"]["task"].name == "mirror-nightelf-baseline.json"
+    assert jobs["duels-references/e"]["task"].is_file()
+    doc = {"frames": [{"t": 1, "players": {"0": {"score": 5}}}, {"t": 9, "players": {"0": {"score": 10}}}]}
+    assert hub.in_sync(doc, {"scores": {"0": 10, "1": 30}, "lead": 0})
+    assert not hub.in_sync(doc, {"scores": {"0": 11, "1": 30}, "lead": 0})
+
+
+def test_a_replay_page_places_each_frame_in_the_video_by_its_game_time(hub):
+    summary = {"start": 1.0, "frame_seconds": 0.4, "fps": 20, "frames": 100}
+    doc = {"static": {"game": "g"}, "frames": [{"t": t} for t in (0.5, 1.4, 1.8, 41.0, 900.0)]}
+    timeline = hub.with_video(doc, summary)
+    assert [f["w"] for f in timeline.frames] == [0.0, 0.0, 0.05, 4.95, 4.95]
+    assert "t" in timeline.frames[0] and "w" not in doc["frames"][0]
+
+
+def test_the_spaces_featured_runs_show_a_still_from_their_video(hub, tmp_path, monkeypatch):
+    shots = []
+    monkeypatch.setattr(hub, "still", lambda video, path: shots.append(video.name) or path.write_bytes(b"jpg"))
+    monkeypatch.setattr(hub, "space_runs", lambda dataset: [{"id": "u/1", "video": "videos/u/1.mp4"},
+                                                            {"id": "u/2", "video": None}])
+    monkeypatch.setattr(hub, "FEATURED", (("u/1", "a duel"), ("u/2", "no video")))
+    (tmp_path / "dataset/assets").mkdir(parents=True)
+    Image.new("RGB", (8, 8)).save(tmp_path / "dataset/assets/thumbnail.jpg")
+    hub.space(tmp_path / "dataset", tmp_path / "space", "v9.9.9")
+    featured = json.loads((tmp_path / "space/runs.json").read_text())["featured"]
+    assert [f["still"] for f in featured] == ["stills/0.jpg", None] and shots == ["1.mp4"]
+    assert (tmp_path / "space/stills/0.jpg").read_bytes() == b"jpg"

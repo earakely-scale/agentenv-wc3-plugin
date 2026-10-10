@@ -50,6 +50,7 @@ function featured() {
   for (const f of DATA.featured) {
     const run = RUNS.find((r) => r.id === f.id);
     box.append(el("a", {class: "card", href: `#run=${encodeURIComponent(run.id)}`},
+      f.still ? el("img", {class: "still", src: f.still, alt: `${run.model}: ${title(run)}`, loading: "lazy"}) : null,
       el("span", {class: "set", text: SETS.find(([k]) => k === run.set)[1]}),
       el("b", {text: run.model}),
       el("span", {class: "sub", text: title(run)}),
@@ -175,8 +176,9 @@ async function play(run) {
     el("span", {class: "chip", text: `${minutes(run.game_seconds)} game time`}),
     run.turns != null ? el("span", {class: "chip", text: `${run.turns} turns`}) : null,
     el("span", {class: "chip", text: money(run.cost_usd)})].filter(Boolean));
-  const links = [["Transcript", run.transcript && blobUrl(run.transcript)], ["Timeline JSON", run.timeline && blobUrl(run.timeline)],
-                 [".w3g replay", run.w3g && fileUrl(run.w3g)], ["Replay file", run.replay && fileUrl(run.replay)]];
+  const links = [["Video", run.video && fileUrl(run.video)], ["Transcript", run.transcript && blobUrl(run.transcript)],
+                 ["Timeline JSON", run.timeline && blobUrl(run.timeline)], [".w3g replay", run.w3g && fileUrl(run.w3g)],
+                 ["Replay file", run.replay && fileUrl(run.replay)]];
   $("r-links").replaceChildren(...links.filter(([, u]) => u).map(([t, u]) => el("a", {href: u, target: "_blank", rel: "noopener", text: t})));
   const facts = [`${race(run.race)} on ${run.map}`, `against ${run.opponent}`, `seed ${run.seed}`];
   if (run.orders != null) facts.push(`${run.orders} orders${run.orders_refused ? `, ${run.orders_refused} refused by the game` : ""}`);
@@ -194,7 +196,9 @@ async function play(run) {
   try {
     const response = await fetch(fileUrl(run.replay));
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const html = await response.text();
+    // The page names its video relative to itself, so it finds it in the dataset beside the page's own place.
+    const base = `<base href="${fileUrl(run.replay.replace(/[^/]*$/, ""))}">`;
+    const html = (await response.text()).replace("<head>", `<head>${base}`);
     if (mine !== loading) return;
     frame(html);
     $("r-status").hidden = true;

@@ -121,7 +121,7 @@ MAX_ADVANCE_SECONDS = 60
 DEFAULT_SCENARIO = {"map": "(2)EchoIsles.w3x", "race": "human", "opponent_race": "orc", "ai_difficulty": "normal",
                     "seed": None, "randomize_starts": False, "time_limit_seconds": 1200, "mode": "stepping",
                     "allow_debug": False, "client_view": False, "labels": None, "players": None, "step_ms": 1000,
-                    "lockstep": {"stall_seconds": 600}, "finish": None, "decide_ratio": None}
+                    "lockstep": {"stall_seconds": 600}, "finish": None, "decide_ratio": None, "replay": None}
 PLAYER_KEYS = ("agent", "computer", "race", "team", "slot", "ai_assist", "omniscient", "autocast")
 OUTCOMES = {"victory": "won", "defeat": "lost", "draw": "drawn"}
 FINISHED = "finished"   # every agent's result when the match's finish condition held: a drill's goal was met
@@ -297,6 +297,8 @@ def check_scenario(s: dict) -> dict:
     if s["decide_ratio"] is not None and not (isinstance(s["decide_ratio"], int | float)
                                               and 0 < s["decide_ratio"] < 1):
         raise ValueError("decide_ratio must be a share between 0 and 1, e.g. 0.4")
+    if s["replay"] is not None and not (isinstance(s["replay"], str) and s["replay"].lower().endswith(".w3g")):
+        raise ValueError("replay must be the game's path to a .w3g, played back instead of a new game")
     players_of(s)
     return s
 
@@ -466,7 +468,8 @@ class WC3Env(AgentEnvGameEnv):
         starting = [{"slot": x["slot"], "race": x["race"], "control": "computer" if x["computer"] else "agent"}
                     for x in players]
         level = next((x["computer"] for x in players if x["computer"]), scenario["ai_difficulty"])
-        result = await self.bridge.call("start", map=scenario["map"], players=starting, step_ms=scenario["step_ms"],
+        result = await self.bridge.call("start", map=scenario["replay"] or scenario["map"], players=starting,
+                                        step_ms=scenario["step_ms"],
                                         seed=scenario["seed"], randomize_starts=scenario["randomize_starts"],
                                         ai_difficulty=DIFFICULTIES[level],
                                         ai_agents=[x["slot"] for x in players if x["ai_assist"]],
@@ -1422,9 +1425,10 @@ class WC3Env(AgentEnvGameEnv):
                 self.metrics.stage(name, player, made[player])
 
     async def _staging_step(self, actions: dict[int, list]) -> None:
-        """Orders the harness gives for players while it stages: the game takes them as it runs a moment."""
-        self._observed(await self.bridge.call("step", actions={str(k): v for k, v in actions.items()},
-                                              ms=STAGE_STEP_MS))
+        """Orders the harness gives for players while it stages: the game takes them as it runs a moment. A replay
+        has them in its recording, at this very moment, so staging one only runs the moment."""
+        sent = {} if self.scenario["replay"] else actions
+        self._observed(await self.bridge.call("step", actions={str(k): v for k, v in sent.items()}, ms=STAGE_STEP_MS))
 
     async def _learn(self, units: list[int]) -> None:
         """Heroes spend every skill point the same way, whoever owns them, all in the same steps: wc3agent's

@@ -30,15 +30,17 @@ browser:
 - **The mirror duels:** a model against Warcraft's own attack-move.
 - **The Warcraft-against-Warcraft duels** they read against.
 
-A replay is the env's own drawing of the game: the map, every unit any player sees, the event feed, the agent's
-plans and both sides' momentum, scrubbable from start to end. It shows no game footage.
+A replay plays the game's own picture, rendered from the run's .w3g replay:
+- the camera follows the agent's fights and key moments;
+- the plans the agent wrote show in the game as it wrote them;
+- beside it are the env's map, the event feed and both sides' momentum.
 
 **How it runs:** a static page.
 - `runs.json` lists each run with its outcome, score and cost.
-- A replay is loaded from the dataset at the revision `runs.json` pins.
+- A replay and its video are loaded from the dataset at the revision `runs.json` pins.
 - The plugin's `scripts/hub_dataset.py space` writes both from the dataset folder.
 
 Part of the collection [wc3env on AgentEnv](https://huggingface.co/collections/earakely-scale/wc3env-on-agentenv-6ac924a8810f02942599a5a4).
 
-Warcraft III is a trademark of Blizzard Entertainment. This Space holds no game files and isn't affiliated with or
-endorsed by Blizzard.
+Warcraft III is a trademark of Blizzard Entertainment, and the videos show its picture. This Space holds no game
+files and isn't affiliated with or endorsed by Blizzard.

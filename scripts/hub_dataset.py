@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pyarrow as pa
@@ -38,11 +39,13 @@ from agentenv_hf import dataset, records, runs
 from agentenv_hf.card import card
 from agentenv_hf.scan import known_values, scan
 from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi
-from PIL import Image, ImageChops
+from PIL import Image
 
-from agentenv_rts.recording import BAR
+from agentenv_rts import live as rts_live
+from agentenv_rts.timeline import Timeline
 from agentenv_wc3 import drills
 from agentenv_wc3.prompts import RACES
+from agentenv_wc3.replay_video import startup_of
 from agentenv_wc3.sweep import DIFFICULTIES, Spec, map_name, results, task_name, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +60,10 @@ SETUP = ('agent-env wc3 build-worker "<game folder>" && agent-env wc3 license im
 SPLIT = "eval"
 PLACEHOLDER = "anthropic/claude-haiku-4-5"   # task_of sets a model; the bundle's tasks leave it to the agent
 REFERENCES = "duel-baselines-final"
-HERO = ("duels-final", "fireworks_ai/deepseek-v4p1-flash")   # the card's clip: this model's most one-sided duel win
+HERO = "wc3-v1-duels/duels-undead-deepseek-v4p1-flash-s1-msjysvkm"   # the card's clip: DeepSeek's best duel win
+HERO_CLIP = (6.0, 12.0)   # its start and length in the video, seconds: the armies meeting
+SPEEDS = {"ladder": 8, "drills": 2, "duels": 1, "references": 1}   # game seconds a second of video shows
+FPS = 20
 MODELS = {
     "fireworks_ai/deepseek-v4p1-flash": "DeepSeek V4.1 Flash",
     "anthropic/claude-haiku-4-5": "Claude Haiku 4.5",
@@ -221,10 +227,11 @@ def reference_row(s: Spec, tasks: set[str], r: dict) -> dict:
             "orders": r["orders"], "game_seconds": r["game_seconds"]}
 
 
-def run_files(instance: str, episode_id: str) -> tuple[dict[str, bytes], dict[str, str | None]]:
+def run_files(instance: str, episode_id: str, task: list[dict]) -> tuple[dict[str, bytes], dict[str, str | None]]:
     """A run's files the dataset keeps (its HTML replay, timeline, .w3g with its startup options, and wc3-llm's
     untrimmed transcript) under its episode id, and the columns that point to them. The map's video is left out:
-    the HTML replay plays the same pictures."""
+    the HTML replay plays the same pictures. The startup options get back the AI level `task` started the game
+    with, which wc3env leaves out when it is easy (0)."""
     record = find_task_instance(instance)
     metadata = (record.context or {}).get("metadata") or {}
     saved = [f for fs in (metadata.get("match_files") or {}).values() for f in fs]
@@ -236,6 +243,8 @@ def run_files(instance: str, episode_id: str) -> tuple[dict[str, bytes], dict[st
             if (path := where.format(id=episode_id)) in files:
                 raise ValueError(f"{instance}: more than one {f['kind']} {f['name']}")
             files[path] = FileArtifact.get(f["artifact_id"], f["version"]).load()
+            if path.endswith(".w3g.json"):
+                files[path] = json.dumps(startup_of(task, json.loads(files[path]))).encode()
     columns = {column: next((p for p in files if p.startswith(f"{folder}/") and not p.endswith(".w3g.json")), None)
                for folder, column in COLUMNS.items()}
     return files, columns
@@ -269,7 +278,8 @@ def family_files(v1: V1, root: Path, runs_dir: Path) -> dict[str, bytes]:
             run = json.loads(line)
             raw[run["episode_id"]] = line
             r = by_episode[run["episode_id"]]
-            kept, columns = run_files(r["instance"], run["episode_id"])
+            task = json.loads((root / "tasks" / f"{v1_task(s, r)}.json").read_text())
+            kept, columns = run_files(r["instance"], run["episode_id"], task)
             files |= kept
             rows.append(episode_row(v1, run["episode_id"], v1_task(s, r), sweep, r,
                                     run["record"]["metadata"]["verifications"]) | columns)
@@ -286,21 +296,12 @@ def family_files(v1: V1, root: Path, runs_dir: Path) -> dict[str, bytes]:
         references = []
         for r in results(runs_dir / REFERENCES):
             episode_id = f"duels-references/{r['instance'].rpartition('/')[2]}"
-            kept, columns = run_files(r["instance"], episode_id)
+            task = json.loads((drills.TASKS / f"mirror-{r['race'].replace('_', '')}-baseline.json").read_text())
+            kept, columns = run_files(r["instance"], episode_id, task)
             files |= kept
             references.append({"episode_id": episode_id, **reference_row(s, set(combos), r), **columns})
         files["references/duels.parquet"] = parquet(references)
     return files
-
-
-def hero_video(runs_dir: Path) -> tuple[bytes, dict]:
-    """The map's video of HERO's model's most one-sided duel win, and that run's results row."""
-    sweep, model = HERO
-    best = max((r for r in results(runs_dir / sweep) if r["model"] == model and r["outcome"] == "win"),
-               key=lambda r: r["score"] / (r["score"] + r["opponent_score"]))
-    metadata = (find_task_instance(best["instance"]).context or {}).get("metadata") or {}
-    video = next(f for fs in (metadata.get("match_files") or {}).values() for f in fs if f["kind"] == "map_video")
-    return FileArtifact.get(video["artifact_id"], video["version"]).load(), best
 
 
 def card_text(plugin: str) -> str:
@@ -327,8 +328,6 @@ def build(runs_dir: Path, out: Path, plugin: str) -> dict[str, bytes]:
     with namespace_routing():   # the sweeps' runs live in the @local namespace's own store
         for v1 in BUNDLES:
             files |= family_files(v1, out / "bundles" / v1.bundle, runs_dir)
-        files["assets/hero.mp4"], hero = hero_video(runs_dir)
-    print(f"the card's clip: {hero['task']} ({hero['model']}, {hero['outcome']})")
     for sweep in sorted({*(s for v1 in BUNDLES for s in v1.sweeps), REFERENCES}):
         for name in ("sweep.json", "results.jsonl", "report.md"):
             if (runs_dir / sweep / name).is_file():
@@ -345,47 +344,128 @@ def write(out: Path, files: dict[str, bytes]) -> None:
         (out / path).write_bytes(content)
 
 
+def warmed_up(task: Path) -> bool:
+    """Whether the task's staging lets the game run first (warmup_seconds). The game plays those minute-long steps of a
+    replay back short (drill-shopping's 460 s come back as about 422), so its playback can't reach the staging in step
+    with the game that was played."""
+    return any((d.get("args") or {}).get("warmup_seconds") for s in json.loads(task.read_text())
+               if s["type"] == "apply_server_config" for d in s.get("directives", ()))
+
+
+def video_jobs(dataset_dir: Path) -> list[dict]:
+    """Every run with a .w3g whose task can be replayed in step: its replay, the task it played (a v1 task, or the
+    plugin's own baseline duel for a reference), its timeline, where its video goes and how fast it plays."""
+    jobs = []
+    for v1 in BUNDLES:
+        for r in pq.read_table(dataset_dir / f"episodes/{v1.family}.parquet").to_pylist():
+            jobs.append({"family": v1.family, "row": r,
+                         "task": dataset_dir / "bundles" / v1.bundle / "tasks" / f"{r['task']}.json"})
+    for r in pq.read_table(dataset_dir / "references/duels.parquet").to_pylist():
+        jobs.append({"family": "references", "row": r,
+                     "task": drills.TASKS / f"mirror-{r['race'].replace('_', '')}-baseline.json"})
+    return [job | {"id": job["row"]["episode_id"], "speed": SPEEDS[job["family"]],
+                   "video": f"videos/{job['row']['episode_id']}.mp4"} for job in jobs
+            if job["row"].get("w3g") and not warmed_up(job["task"])]
+
+
+def render_videos(dataset_dir: Path, jobs: list[dict], parallel: int, source: Path | None) -> list[dict]:
+    """Each run's video in the game's own picture (agent-env wc3 render), `parallel` at a time; a video already there
+    is kept. Each job comes back with its render's summary, or its error."""
+    def one(job):
+        out = dataset_dir / job["video"]
+        summary = out.with_name(out.name + ".json")
+        if not summary.is_file():
+            row = job["row"]
+            proc = subprocess.run(
+                ["agent-env", "wc3", "render", str(dataset_dir / row["w3g"]), "--task", str(job["task"]),
+                 "--timeline", str(dataset_dir / row["timeline"]), "--out", str(out), "--speed", str(job["speed"]),
+                 "--fps", str(FPS), *(["--source", str(source)] if source else [])], capture_output=True, text=True)
+            if proc.returncode:
+                return job | {"error": (proc.stderr or proc.stdout).strip()[-600:]}
+        return job | {"summary": json.loads(summary.read_text())}
+    done = []
+    with ThreadPoolExecutor(parallel) as pool:
+        for job in as_completed([pool.submit(one, job) for job in jobs]):
+            done.append(job.result())
+            print(f"[{len(done)}/{len(jobs)}] {done[-1]['id']}: {'failed' if 'error' in done[-1] else 'ok'}",
+                  flush=True)
+    return done
+
+
+def in_sync(doc: dict, summary: dict) -> bool:
+    """The playback ended on the score the game's own timeline last showed for its lead player (both read from the
+    game's observations): the replay played the same game. The engine's playback of a 1.29 replay can drift, as
+    wc3env's own ladder replays sometimes do."""
+    lead = str(summary["lead"])
+    return summary["scores"].get(lead) == (doc["frames"][-1]["players"].get(lead) or {}).get("score")
+
+
+def with_video(doc: dict, summary: dict) -> Timeline:
+    """The timeline with each frame's place in the video ("w"): video frame i shows the game after step i + 1 from
+    the render's start, so the replay page plays the video in step with the map."""
+    timeline = Timeline(doc["static"])
+    last = summary["frames"] - 1
+    timeline.frames = [f | {"w": round(min(max(round((f["t"] - summary["start"]) / summary["frame_seconds"]) - 1, 0),
+                                               last) / summary["fps"], 2)} for f in doc["frames"]]
+    return timeline
+
+
+def videos(dataset_dir: Path, parallel: int, source: Path | None) -> None:
+    """Renders every run's video, rebuilds its replay page around it, and adds `video` and `video_in_sync` to WC3's
+    rows. A video whose playback drifted from the game is not kept (it would show a game the agent didn't play): its
+    run keeps the env's map alone, with `video_in_sync` false; a run whose render failed is left as it was."""
+    jobs = video_jobs(dataset_dir)
+    wanted = {dataset_dir / j["video"] for j in jobs}
+    for stale in [p for p in (dataset_dir / "videos").rglob("*.mp4") if p not in wanted]:
+        stale.unlink()
+        stale.with_name(stale.name + ".json").unlink(missing_ok=True)
+    done = render_videos(dataset_dir, jobs, parallel, source)
+    for job in done:
+        if "error" in job:
+            print(f"{job['id']} failed: {job['error']}")
+    rendered = [job for job in done if "error" not in job]
+    for job in rendered:
+        row = job["row"]
+        doc = json.loads((dataset_dir / row["timeline"]).read_text())
+        job["in_sync"] = in_sync(doc, job["summary"])
+        if job["in_sync"]:
+            video = "../" * (job["id"].count("/") + 1) + job["video"]   # from replays/<bundle>/ to videos/<bundle>/
+            (dataset_dir / row["replay"]).write_text(rts_live.standalone(with_video(doc, job["summary"]), video),
+                                                     encoding="utf-8")
+        else:
+            (dataset_dir / job["video"]).unlink(missing_ok=True)
+    by_id = {job["id"]: job for job in rendered}
+    for path in [*(f"episodes/{v1.family}.parquet" for v1 in BUNDLES), "references/duels.parquet"]:
+        rows = pq.read_table(dataset_dir / path).to_pylist()
+        (dataset_dir / path).write_bytes(parquet([r | (
+            {"video": by_id[r["episode_id"]]["video"] if by_id[r["episode_id"]]["in_sync"] else None,
+             "video_in_sync": by_id[r["episode_id"]]["in_sync"]}
+            if r["episode_id"] in by_id else {"video": None, "video_in_sync": None}) for r in rows]))
+    off = [job["id"] for job in rendered if not job["in_sync"]]
+    print(f"{len(rendered)} rendered; {len(rendered) - len(off)} in sync, kept" + (f"; drifted, dropped: {off}"
+                                                                                    if off else ""))
+
+
 def media(out: Path) -> None:
-    """The card's clip and the Space's thumbnail from assets/hero.mp4: the duel cropped to where it moves, under the
-    recording's title bar, as an animated WebP (ffmpeg cuts the frames, Pillow writes them) and its frame two thirds
-    in, when the armies are locked together."""
+    """The card's clip and the Space's thumbnail from HERO's video: HERO_CLIP of it as an animated WebP (ffmpeg cuts
+    the frames, Pillow writes them), and the clip's middle frame."""
+    start, length = HERO_CLIP
     with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(["ffmpeg", "-v", "error", "-i", str(out / "assets" / "hero.mp4"), "-vf", "fps=10",
+        subprocess.run(["ffmpeg", "-v", "error", "-ss", str(start), "-t", str(length), "-i",
+                        str(out / "videos" / f"{HERO}.mp4"), "-vf", "fps=8,scale=720:-2:flags=lanczos",
                         f"{tmp}/%04d.png"], check=True)
-        frames = [Image.open(f).convert("RGB") for f in sorted(Path(tmp).glob("*.png"))]
-    box = action(frames)
-    shots = [shot(f, box) for f in frames]
-    shots[0].save(out / "assets" / "hero.webp", save_all=True, append_images=shots[1:], duration=100, loop=0,
-                  quality=80)
-    shots[len(shots) * 2 // 3].save(out / "assets" / "thumbnail.jpg", quality=90)
+        first, *rest = [Image.open(f).convert("RGB") for f in sorted(Path(tmp).glob("*.png"))]
+    (out / "assets").mkdir(exist_ok=True)
+    first.save(out / "assets" / "hero.webp", save_all=True, append_images=rest, duration=125, loop=0, quality=50)
+    rest[len(rest) // 2].save(out / "assets" / "thumbnail.jpg", quality=90)
 
 
-def action(frames: list[Image.Image], pad: int = 48) -> tuple[int, int, int, int]:
-    """The map's box (below the title bar) where anything changes over the clip, padded and widened to 16:9."""
-    w, h = frames[0].size
-    first, moved = frames[0].crop((0, BAR, w, h)), None
-    for frame in frames[1:]:
-        changed = ImageChops.difference(first, frame.crop((0, BAR, w, h))).convert("L").point(lambda v: v > 40 and 255)
-        moved = changed if moved is None else ImageChops.lighter(moved, changed)
-    x0, y0, x1, y1 = moved.getbbox() or (0, 0, w, h - BAR)
-    x0, y0, x1, y1 = x0 - pad, y0 - pad, x1 + pad, y1 + pad
-    width = max(x1 - x0, (y1 - y0) * 16 // 9, w // 2)
-    width = min(width, w, (h - BAR) * 16 // 9)
-    height = width * 9 // 16
-    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-    left = min(max(cx - width // 2, 0), w - width)
-    top = min(max(cy - height // 2, 0), h - BAR - height)
-    return left, top, left + width, top + height
-
-
-def shot(frame: Image.Image, box: tuple[int, int, int, int], width: int = 800) -> Image.Image:
-    w = frame.width
-    left, top, right, bottom = box
-    region = frame.crop((left, BAR + top, right, BAR + bottom)).resize((w, w * 9 // 16), Image.LANCZOS)
-    canvas = Image.new("RGB", (w, BAR + region.height))
-    canvas.paste(frame.crop((0, 0, w, BAR)), (0, 0))
-    canvas.paste(region, (0, BAR))
-    return canvas.resize((width, canvas.height * width // w), Image.LANCZOS)
+def still(video: Path, path: Path, at: float = 0.4) -> None:
+    """The frame `at` of the way into a video, as a JPEG."""
+    seconds = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                    str(video)], check=True, capture_output=True, text=True).stdout)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{seconds * at:.2f}", "-i", str(video), "-frames:v", "1",
+                    "-vf", "scale=640:-2", "-q:v", "4", str(path)], check=True)
 
 
 def space_runs(dataset_dir: Path) -> list[dict]:
@@ -407,14 +487,14 @@ def space_runs(dataset_dir: Path) -> list[dict]:
                              else SCRIPTS.get(task.get("opponent_script")) or MIRROR),
                 "skill": r.get("skill"), "checks_met": r.get("checks_met"), "num_checks": r.get("num_checks"),
                 "passed": r.get("passed"), "checks": json.loads(r["checks"]) if r.get("checks") else None,
-                **{column: r.get(column) for column in COLUMNS.values()}})
+                "video": r.get("video"), **{column: r.get(column) for column in COLUMNS.values()}})
     for r in table("references/duels.parquet"):
         out.append({"id": r["episode_id"], "set": "references", "task": r["task"] or f"mirror-{r['race']}-s{r['seed']}",
                     "model": SCRIPTED, "outcome": r["outcome"], "reward": r["reward"],
                     "score_share": r["score_share"], "game_seconds": r["game_seconds"], "turns": None,
                     "cost_usd": 0.0, "orders": r["orders"], "orders_refused": None,
                     "units_killed": r["units_killed"], "map": "Echo Isles", "race": r["race"], "seed": r["seed"],
-                    "opponent": MIRROR,
+                    "opponent": MIRROR, "video": r.get("video"),
                     **{column: r.get(column) for column in COLUMNS.values()}})
     return sorted(out, key=order)
 
@@ -442,9 +522,16 @@ def space(dataset_dir: Path, out: Path, revision: str) -> None:
     known = {r["id"] for r in listed}
     if missing := [i for i, _ in FEATURED if i not in known]:
         raise ValueError(f"featured runs {missing} aren't in the dataset")
+    featured = []
+    (out / "stills").mkdir()
+    for n, (i, why) in enumerate(FEATURED):
+        video = next(r["video"] for r in listed if r["id"] == i)
+        if video:
+            still(dataset_dir / video, out / "stills" / f"{n}.jpg")
+        featured.append({"id": i, "why": why, "still": f"stills/{n}.jpg" if video else None})
     (out / "runs.json").write_text(json.dumps({
-        "dataset": REPO, "revision": revision, "plugin": f"v{VERSION}",
-        "featured": [{"id": i, "why": why} for i, why in FEATURED], "runs": listed}, separators=(",", ":")))
+        "dataset": REPO, "revision": revision, "plugin": f"v{VERSION}", "featured": featured, "runs": listed},
+        separators=(",", ":")))
     shutil.copy(dataset_dir / "assets" / "thumbnail.jpg", out / "thumbnail.jpg")
 
 
@@ -471,6 +558,10 @@ def main() -> None:
     b.add_argument("--runs", type=Path, default=Path.home() / "runs", help="the folder of the sweeps' run folders")
     b.add_argument("--out", type=Path, required=True)
     b.add_argument("--plugin-ref", default=f"v{VERSION}", help="the plugin tag the card's needs pin")
+    v = commands.add_parser("videos", help="render every run's video in the game's own picture, from its replay")
+    v.add_argument("out", type=Path)
+    v.add_argument("--parallel", type=int, default=3)
+    v.add_argument("--source", type=Path, help="a plugin checkout to run in the env's image (agent-env wc3 render)")
     m = commands.add_parser("media", help="the card's clip and the Space's thumbnail, with ffmpeg")
     m.add_argument("out", type=Path)
     s = commands.add_parser("space", help="write the Space's folder from a built dataset folder")
@@ -490,6 +581,8 @@ def main() -> None:
         write(args.out, files)
         for path in sorted(p for p in files if p.endswith(".parquet")):
             print(f"{path}: {pq.read_metadata(io.BytesIO(files[path])).num_rows} rows")
+    elif args.command == "videos":
+        videos(args.out, args.parallel, args.source)
     elif args.command == "media":
         media(args.out)
     elif args.command == "space":

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentenv-wc3"
-version = "0.3.0"
+version = "0.4.0"
 description = "Warcraft III as an AgentEnv environment: an LLM agent plays a melee game through wc3env's raw orders."
 readme = "README.md"
 license = "Apache-2.0"

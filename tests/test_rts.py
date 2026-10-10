@@ -30,7 +30,7 @@ from agentenv_rts.grade import RTSGradeTaskStep, VoidMatch
 from agentenv_rts.lockstep import Lockstep
 from agentenv_rts.session import RemoteSession, SessionError
 from agentenv_rts.timeline import Timeline, model_name
-from agentenv_wc3 import frames, metrics, render, server
+from agentenv_wc3 import frames, metrics, render, replay_video, server
 from agentenv_wc3.bridge import WorkerError
 from agentenv_wc3.server import WC3Env, check_scenario, players_of
 from agentenv_wc3.worker import Worker
@@ -853,6 +853,80 @@ def test_a_replay_comes_with_the_startup_options_that_play_it_back():
     worker.session = Saved()
     assert worker.replay() == {"name": "game.w3g", "base64": base64.b64encode(b"W3G").decode(),
                                "startup": {"ai_difficulty": 1}}
+
+
+async def test_a_replay_plays_back_with_its_saved_setup_and_staging_it_sends_no_orders(env_vars, monkeypatch):
+    import wc3env.session
+
+    class Session:
+        def __init__(self, config, **_):
+            self.config, self.setup = config, None
+
+        def reset(self):
+            return {0: {"game_time_seconds": 0}}
+
+    monkeypatch.setattr(wc3env.session, "GameSession", Session)
+    worker = Worker()
+    worker.start("Z:\\work\\game.w3g", [{"slot": 0, "race": "human"}, {"slot": 1, "race": "human"}], seed=3,
+                 ai_difficulty=2, computer_agents=[0, 1])
+    config = worker.session.config
+    assert (config.map, config.setup, config.ai_difficulty, config.computer_agents) == ("Z:\\work\\game.w3g", None,
+                                                                                         None, ())
+    with pytest.raises(ValueError, match="replay must be"):
+        check_scenario({**server.DEFAULT_SCENARIO, "replay": "game.w3x"})
+    env = WC3Env()
+    try:
+        await new_game(env, [{"agent": "wc3", "race": "human"}, {"computer": "normal", "race": "orc"}])
+        steps, real = [], env.bridge.call
+
+        async def call(cmd, **args):
+            if cmd == "step":
+                steps.append(args["actions"])
+            return await real(cmd, **args)
+
+        env.bridge.call = call
+        orders = {0: [{"unit_id": env.obs[0]["units"][0]["unit_id"], "command": "stop", "arguments": {}}]}
+        await env._staging_step(orders)
+        env.scenario = {**env.scenario, "replay": "Z:\\work\\game.w3g"}
+        await env._staging_step(orders)
+        assert steps == [{"0": orders[0]}, {}]
+    finally:
+        await env.bridge.close()
+
+
+def test_a_render_takes_the_tasks_slots_and_staging_the_replays_seed_and_the_lead_agents_plans():
+    task = json.loads((server.Path(server.__file__).with_name("bundles") / "wc3" / "tasks" / "mirror-orc.json")
+                      .read_text())
+    timeline = {"frames": [{"t": 1.0, "notes": [{"slot": 0, "kind": "plan", "text": "Focus the shaman."},
+                                                {"slot": 1, "kind": "plan", "text": "Attack."}]},
+                           {"t": 2.5, "notes": [{"slot": 0, "kind": "player", "text": "DeepSeek"}]}]}
+    spec = replay_video.spec_of(task, "Z:\\work\\game.w3g", {"setup": {"seed": 7}}, timeline, 1.0, 20, "/work/v.mp4")
+    assert [(p["slot"], p["agent"], p["autocast"], p["omniscient"]) for p in spec["players"]] == [
+        (0, "wc3", True, False), (1, "opponent", True, True)]
+    assert (spec["seed"], spec["lead"], spec["notes"]) == (7, 0, [{"t": 1.0, "text": "Focus the shaman."}])
+    assert [op["op"] for op in spec["stage"]["ops"]][:2] == ["formation", "research"]
+    check_scenario({**server.DEFAULT_SCENARIO, "map": spec["map"], "players": spec["players"], "seed": spec["seed"],
+                    "replay": spec["replay"]})
+
+
+def test_a_render_gives_the_playback_the_ai_level_the_game_started_with_even_easy():
+    tasks = server.Path(server.__file__).with_name("bundles") / "wc3" / "tasks"
+    saved = {"setup": {"seed": 1}}   # wc3env saved an easy game's startup without its ai_difficulty of 0
+    easy = json.loads((tasks / "drill-full-game-easy.json").read_text())
+    assert replay_video.startup_of(easy, saved) == {"setup": {"seed": 1}, "ai_difficulty": 0}
+    assert replay_video.startup_of(json.loads((tasks / "mirror-orc.json").read_text()), saved)["ai_difficulty"] == 1
+
+
+def test_a_renders_camera_eases_to_a_near_spot_over_frames_and_cuts_to_a_far_one():
+    camera = replay_video.Camera(fps=20)
+    camera.go((0.0, 0.0))
+    assert camera.next() == (0.0, 0.0) and camera.next() is None
+    camera.go((1000.0, 0.0))
+    path = [camera.next() for _ in range(camera.frames)]
+    assert len(path) == round(server.PAN_SECONDS * 20) and path[-1] == (1000.0, 0.0)
+    assert all(a[0] < b[0] for a, b in zip(path, path[1:], strict=False))
+    camera.go((1000.0 + server.PAN_MAX + 1, 0.0))
+    assert camera.next() == (1000.0 + server.PAN_MAX + 1, 0.0) and camera.next() is None
 
 
 @pytest.mark.parametrize(("seed", "swapped"), [(8, False), (7, True)])

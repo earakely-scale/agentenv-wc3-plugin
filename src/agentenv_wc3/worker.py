@@ -72,7 +72,8 @@ class Worker:
         (`held` says it waits for one: a wc3env without hold starts it at once); `render` and `visible` draw the
         game in a window on the display, for its picture, `window` [width, height] big; `ai_agents` are agent slots
         the game's own AI plays beside, and `computer_agents` agent slots whose units cast on their own, as a computer
-        player's do."""
+        player's do. A `map` that is a replay (.w3g) plays it back, with the setup, AI difficulty and AI slots its
+        game started with: wc3env reads them from the replay's <name>.w3g.json and refuses them as arguments."""
         from wc3env.session import GameConfig, GameSession, MatchSetup, PlayerConfig
 
         self.close()
@@ -82,15 +83,16 @@ class Worker:
         hold = {"hold": True} if self.held and not self.fake else {}
         if self.fake and mode == "realtime":
             mode = "stepping"
+        started = {} if map.lower().endswith(".w3g") else {
+            "ai_difficulty": ai_difficulty, "ai_agents": tuple(ai_agents or ()),
+            "computer_agents": tuple(computer_agents or ()),
+            "setup": MatchSetup(seed=seed, randomize_starts=randomize_starts)}
         try:
             config = GameConfig(
                 map=map,
                 players=tuple(PlayerConfig(p["slot"], p.get("race"), p.get("control", "agent")) for p in players),
                 mode=mode, step_ms=step_ms, render=render, background_visible=visible, sound=False,
-                ai_difficulty=ai_difficulty, ai_agents=tuple(ai_agents or ()),
-                computer_agents=tuple(computer_agents or ()),
-                setup=MatchSetup(seed=seed, randomize_starts=randomize_starts),
-                output_dir=os.environ.get("WC3_OUTPUT_DIR") or None, **hold,
+                output_dir=os.environ.get("WC3_OUTPUT_DIR") or None, **started, **hold,
             )
         except (TypeError, ValueError) as e:
             raise WorkerError("bad_config", str(e)) from e

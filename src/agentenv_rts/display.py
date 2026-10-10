@@ -114,6 +114,63 @@ class Capture:
             self.errors = (self.errors + line)[-2000:]
 
 
+class Grab:
+    """ffmpeg reading a display region as JPEGs, with no video of its own: `fresh` is the first frame read after a
+    call, so a renderer that steps a game and then takes a frame gets one drawn after the step."""
+
+    def __init__(self, display: str, region: tuple[int, int, int, int], fps: int = 30):
+        x, y, w, h = region
+        self.command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostats", "-f", "x11grab", "-draw_mouse",
+                        "0", "-framerate", str(fps), "-video_size", f"{w // 2 * 2}x{h // 2 * 2}",
+                        "-i", f"{display}+{x},{y}", "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe", "-"]
+        self.proc: subprocess.Popen | None = None
+        self.frame: bytes | None = None
+        self.frames = 0
+        self.ready = threading.Condition()
+        self.errors = b""
+
+    def start(self) -> None:
+        if shutil.which("ffmpeg") is None:
+            raise DisplayError("ffmpeg is not installed")
+        self.proc = subprocess.Popen(self.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        threading.Thread(target=self._read, daemon=True, name="grab-frames").start()
+        threading.Thread(target=self._drain, daemon=True, name="grab-errors").start()
+
+    def fresh(self, timeout: float = 10) -> bytes:
+        """A frame read after this call began (the second one, since the first may have been on its way)."""
+        with self.ready:
+            after = self.frames + 1
+            if not self.ready.wait_for(lambda: self.frames > after or self.proc is None or self.proc.poll() is not None,
+                                       timeout):
+                raise DisplayError(f"no frame from the display in {timeout} s")
+            if self.frame is None or self.frames <= after:
+                raise DisplayError(f"the display capture stopped: {self.errors.decode(errors='replace')[-300:]}")
+            return self.frame
+
+    def stop(self) -> None:
+        proc, self.proc = self.proc, None
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        with self.ready:
+            self.ready.notify_all()
+
+    def _read(self) -> None:
+        rest, stream = b"", self.proc.stdout
+        while chunk := stream.read1(1 << 16):
+            frames, rest = split_jpegs(rest + chunk)
+            if frames:
+                with self.ready:
+                    self.frame, self.frames = frames[-1], self.frames + len(frames)
+                    self.ready.notify_all()
+        with self.ready:
+            self.ready.notify_all()
+
+    def _drain(self) -> None:
+        for line in self.proc.stderr:
+            self.errors = (self.errors + line)[-2000:]
+
+
 async def mjpeg(latest: Callable[[], bytes | None], fps: int = LIVE_FPS) -> AsyncIterator[bytes]:
     """multipart/x-mixed-replace parts (boundary BOUNDARY) of each new frame `latest` gives, for an <img> to show."""
     sent = None

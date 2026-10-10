@@ -172,11 +172,15 @@ function momentum() {
     ? `${lead[0][0].label} ahead by ${Math.round((lead[0][1] - lead[1][1]) / total * 100)}% of the score` : "Level on score";
 }
 
-// A recording with the game's video beside it plays the video in step with the frames (each frame's "w").
+// A recording with the game's video beside it keeps the two in step by each frame's "w": while it plays, the video
+// is the clock and the frames follow it (tick), so a game with few frames still plays smoothly; a frame picked by
+// hand moves the video to it.
 function syncVideo(frame) {
   const v = S.video;
   if (!v || !frame || frame.w == null || !isFinite(v.duration)) return;
-  if (Math.abs(v.currentTime - frame.w) > (S.playing ? 1.5 : 0.25)) v.currentTime = Math.min(frame.w, v.duration - 0.05);
+  const next = S.frames[S.idx + 1];
+  if (v.currentTime < frame.w - 0.25 || (next && next.w != null && v.currentTime >= next.w + 0.25))
+    v.currentTime = Math.min(frame.w, v.duration - 0.05);
   if (S.playing && v.paused) v.play().catch(() => {});
   if (!S.playing && !v.paused) v.pause();
 }
@@ -224,12 +228,17 @@ async function poll() {
   setTimeout(poll, 1000);
 }
 
-// Replays step a frame per 100 ms; beside the game's video, at the video's pace.
+// Replays step a frame per 100 ms; beside the game's video, to the frame the video has reached.
 function tick() {
-  if (S.playing && S.idx < S.frames.length - 1) show(S.idx + 1); else S.playing = false;
+  const v = S.video;
+  if (S.playing && v && isFinite(v.duration)) {
+    let i = S.idx;
+    while (i < S.frames.length - 1 && S.frames[i + 1].w != null && S.frames[i + 1].w <= v.currentTime) i++;
+    if (i !== S.idx) show(i);
+    if (v.ended) S.playing = false;
+  } else if (S.playing && S.idx < S.frames.length - 1) show(S.idx + 1); else S.playing = false;
   $("play").textContent = S.playing ? "❚❚" : "▶";
-  const here = S.frames[S.idx] || {}, next = S.frames[S.idx + 1] || {};
-  setTimeout(tick, S.video && here.w != null && next.w != null ? Math.max(20, Math.min(1000, (next.w - here.w) * 1000)) : 100);
+  setTimeout(tick, 100);
 }
 
 $("scrub").addEventListener("input", e => { S.follow = false; $("follow").checked = false; show(+e.target.value); });

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import platform
 import re
@@ -401,6 +402,60 @@ def recordings(instance: str | None, out_dir: Path):
     page = next((f["name"] for f in saved if f["name"].endswith(".html")), None)
     if page:
         click.echo(f"Open {out_dir / page} to watch it, with the game's video beside the map when it has one.")
+
+
+@wc3.command()
+@click.argument("replay", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--task", "task_file", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="The task the game played: its map, player slots and staging.")
+@click.option("--timeline", "timeline_file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="The game's timeline, for the plans its agent wrote.")
+@click.option("--out", "out_file", required=True, type=click.Path(dir_okay=False, path_type=Path),
+              help="The MP4 to write; <out>.json beside it has the frames' pace and the game's final scores.")
+@click.option("--speed", type=float, default=1.0, show_default=True, help="Game seconds per video second.")
+@click.option("--fps", type=int, default=20, show_default=True)
+@click.option("--image", default="mcp-server-wc3:latest", show_default=True, help="The env's image (setup builds it).")
+@click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="A plugin checkout whose src/ runs in the image instead of the image's own code.")
+def render(replay: Path, task_file: Path, timeline_file: Path | None, out_file: Path, speed: float, fps: int,
+           image: str, source: Path | None):
+    """A game's video in the game's own picture, from its replay (.w3g, with its .w3g.json beside it): the env plays
+    it back with the picture on, stages it as the task did, and points the camera as a live game's director does.
+    Needs the env's image and your activation files, as a real game does."""
+    from .replay_video import spec_of, startup_of
+
+    startup = replay.with_name(replay.name + ".json")
+    if not startup.is_file():
+        raise click.ClickException(f"no {startup.name} beside the replay: wc3env plays a replay back with the setup "
+                                   "it saved there")
+    files = license.license_from_secrets(license.LICENSE_SECRETS) or license.read_license(license.license_dir())
+    if not files:
+        raise click.ClickException(_license_source()[1] or "no activation files")
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        work.chmod(0o777)   # the image's user writes the video here
+        task = json.loads(task_file.read_text())
+        saved = startup_of(task, json.loads(startup.read_text()))
+        shutil.copyfile(replay, work / "game.w3g")
+        (work / "game.w3g.json").write_text(json.dumps(saved))
+        timeline = json.loads(timeline_file.read_text()) if timeline_file else None
+        spec = spec_of(task, "Z:\\work\\game.w3g", saved, timeline, speed, fps, "/work/video.mp4")
+        (work / "spec.json").write_text(json.dumps(spec))
+        mounts = ["-v", f"{work}:/work"] + (["-v", f"{source.resolve() / 'src'}:/src:ro", "-e", "PYTHONPATH=/src"]
+                                            if source else [])
+        command = ["docker", "run", "--rm", *mounts, "-e", "WC3_ROC_W3K", "-e", "WC3_TFT_W3K", "--entrypoint", "bash",
+                   image, "/opt/agentenv/with-display.sh", "/opt/agentenv/bin/python", "-m",
+                   "agentenv_wc3.replay_video", "/work/spec.json"]
+        env = {**os.environ, "WC3_ROC_W3K": files["roc.w3k"], "WC3_TFT_W3K": files["tft.w3k"]}
+        proc = subprocess.run(command, env=env, capture_output=True, text=True)
+        if proc.returncode or not (work / "video.mp4").is_file():
+            raise click.ClickException(f"the render failed: {(proc.stderr or proc.stdout).strip()[-1500:]}")
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(work / "video.mp4", out_file)
+        shutil.copyfile(work / "video.mp4.json", out_file.with_name(out_file.name + ".json"))
+    summary = json.loads(out_file.with_name(out_file.name + ".json").read_text())
+    click.echo(f"{out_file}: {summary['frames']} frames, game {summary['start']:.0f}-{summary['end']:.0f} s, "
+               f"{summary['result'] or 'no result'}, scores {summary['scores']}")
 
 
 @wc3.command()
