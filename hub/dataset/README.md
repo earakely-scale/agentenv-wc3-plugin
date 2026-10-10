@@ -52,7 +52,7 @@ agentenv:
 
 # Warcraft III (wc3env) on AgentEnv
 
-[![DeepSeek V4.1 Flash's Undead army meets an identical one played by Warcraft's own attack-move, its plan written over the fight](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv/resolve/v0.4.0/assets/hero.webp)](https://huggingface.co/spaces/earakely-scale/wc3env-AgentEnv)
+[![DeepSeek V4.1 Flash's Undead army meets an identical one played by Warcraft's own attack-move, its plan written over the fight](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv/resolve/v0.5.0/assets/hero.webp)](https://huggingface.co/spaces/earakely-scale/wc3env-AgentEnv)
 
 *DeepSeek V4.1 Flash's Undead army meets an identical one played by Warcraft's own attack-move. The plan it wrote at
 that moment is over the fight. It wins in 54 seconds, keeping 79% of its army. This is the game's own picture,
@@ -135,11 +135,11 @@ more than 30 seconds) and `average_unspent_gold`.
 
 Each model fights worse than Warcraft's attack-move from the same player slot.
 
-The plugin's [docs/evals](https://github.com/earakely-scale/agentenv-wc3-plugin/tree/v0.4.0/docs/evals) read these
-runs game by game: [ladder](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.4.0/docs/evals/ladder.md),
-[drills](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.4.0/docs/evals/drills.md),
-[duels](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.4.0/docs/evals/duels.md) and
-[frontier](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.4.0/docs/evals/frontier.md).
+The plugin's [docs/evals](https://github.com/earakely-scale/agentenv-wc3-plugin/tree/v0.5.0/docs/evals) read these
+runs game by game: [ladder](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/ladder.md),
+[drills](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/drills.md),
+[duels](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/duels.md) and
+[frontier](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/frontier.md).
 
 ## Tables
 
@@ -188,7 +188,7 @@ And:
 ```python
 from datasets import load_dataset
 
-repo, rev = "earakely-scale/wc3env-AgentEnv", "v0.4.0"
+repo, rev = "earakely-scale/wc3env-AgentEnv", "v0.5.0"
 episodes = load_dataset(repo, "ladder_episodes", split="eval", revision=rev).to_pandas()
 transcripts = load_dataset(repo, "wc3-v1-ladder_episodes", split="eval", revision=rev).to_pandas()
 games = episodes.merge(transcripts[["episode_id", "messages"]], on="episode_id")
@@ -216,11 +216,11 @@ You need:
   `LITELLM_API_KEY`.
 
 ```bash
-pip install "agentenv-wc3 @ git+https://github.com/earakely-scale/agentenv-wc3-plugin@v0.4.0"
+pip install "agentenv-wc3 @ git+https://github.com/earakely-scale/agentenv-wc3-plugin@v0.5.0"
 agent-env wc3 build-worker "<game folder>"     # the worker image from your copy, about five minutes
 agent-env wc3 license import "<game folder>"   # your activation files, into agent-env's secret store
 agent-env wc3 setup --agent                    # the env as "wc3", and the agents
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --task drill-opening --model anthropic/claude-haiku-4-5
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --task drill-opening --model anthropic/claude-haiku-4-5
 ```
 
 `agent-env hf run` downloads the bundle at that revision and checks that the plugin is installed and that the env and
@@ -229,16 +229,16 @@ its env or agent: `agent-env wc3 setup --style commander` builds and registers `
 registers `wc3-macro-micro` with the other agents.
 
 ```bash
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-ladder \
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --bundle wc3-v1-ladder \
     --task ladder-echoisles-vs-easy-orc-s1 --model <your model>
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-duels --eval duels --model <your model>
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-drills-commander --eval drills-economy \
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --bundle wc3-v1-duels --eval duels --model <your model>
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --bundle wc3-v1-drills-commander --eval drills-economy \
     --model <your model>
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-duels-wc3agent --task mirror-orc-s1
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --bundle wc3-v1-duels-wc3agent --task mirror-orc-s1
 ```
 
 Without `--model`, a task plays Claude Haiku 4.5; `wc3-v1-duels-wc3agent`'s play DeepSeek V4.1 Flash as wc3agent's macro model, as its runs did, with Claude Haiku 4.5 as its micro. `--dry-run` shows what would run, and `--yes` skips the question.
-The plugin's [README](https://github.com/earakely-scale/agentenv-wc3-plugin/tree/v0.4.0#play-the-real-game-x86-64-linux)
+The plugin's [README](https://github.com/earakely-scale/agentenv-wc3-plugin/tree/v0.5.0#play-the-real-game-x86-64-linux)
 has the setup in full. It also covers watching a game live and getting its video and replay, and `agent-env wc3
 sweep` for running a task set across models.
 
@@ -310,5 +310,5 @@ The tasks, records and tables are Apache-2.0, like the plugin. The transcripts a
   skill builds.
 
 This dataset and its Space are built by
-[`scripts/hub_dataset.py`](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.4.0/scripts/hub_dataset.py)
+[`scripts/hub_dataset.py`](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/scripts/hub_dataset.py)
 in the plugin's repository, from the sweeps' folders and the agent-env store they wrote to.

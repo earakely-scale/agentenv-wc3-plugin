@@ -562,8 +562,8 @@ Each release tags the dataset with the plugin's version. The plugin depends on
 task straight from the Hub:
 
 ```bash
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --task drill-opening --model anthropic/claude-haiku-4-5
-agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-ladder \
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --task drill-opening --model anthropic/claude-haiku-4-5
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --bundle wc3-v1-ladder \
     --task ladder-echoisles-vs-easy-orc-s1 --model anthropic/claude-haiku-4-5
 ```
 
@@ -590,12 +590,12 @@ python scripts/hub_dataset.py build --runs ~/runs --out build/hub/dataset   # pr
 python scripts/hub_dataset.py videos build/hub/dataset
 python scripts/hub_dataset.py media build/hub/dataset
 python scripts/hub_dataset.py space build/hub/dataset --out build/hub/space
-python scripts/hub_dataset.py push build/hub/dataset --tag v0.4.0 --message "v0.4.0: ..."
-python scripts/hub_dataset.py push build/hub/space --type space --message "v0.4.0: ..."
+python scripts/hub_dataset.py push build/hub/dataset --tag v0.5.0 --message "v0.5.0: ..."
+python scripts/hub_dataset.py push build/hub/space --type space --message "v0.5.0: ..."
 ```
 
 To release:
-1. Bump `version` in `pyproject.toml`, and every `v0.4.0` pin in this section and in `hub/dataset/README.md`.
+1. Bump `version` in `pyproject.toml`, and every `v0.5.0` pin in this section and in `hub/dataset/README.md`.
 2. Tag the plugin on GitHub first, because the card's needs pin that tag.
 3. Push the dataset with its tag.
 4. Push the Space, which loads replays from that tag.
