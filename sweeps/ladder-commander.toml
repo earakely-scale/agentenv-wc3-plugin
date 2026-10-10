@@ -1,0 +1,21 @@
+# The ladder in the commander style (env wc3-commander), the same models, maps, levels and caps as
+# sweeps/ladder.toml.
+# agent-env wc3 sweep generate sweeps/ladder-commander.toml runs/ladder-commander
+# agent-env wc3 sweep run runs/ladder-commander --budget <dollars>
+name = "ladder-commander"
+template = "vs-ai"
+models = [
+  "fireworks_ai/deepseek-v4p1-flash",
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.4-mini",
+]
+maps = ["(2)EchoIsles.w3x", "(2)TerenasStand.w3x"]
+opponents = [
+  {computer = "easy", race = "orc"},
+  {computer = "normal", race = "orc"},
+  {computer = "insane", race = "orc"},
+]
+seeds = [1, 2]
+time_limit_seconds = 1800
+max_cost_usd = 2.0
+style = "commander"

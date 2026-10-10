@@ -1,0 +1,14 @@
+# The drills in the commander style (env wc3-commander: wc3agent's interface), the same models and caps as
+# sweeps/drills.toml, which plays them in the raw style.
+# agent-env wc3 sweep generate sweeps/drills-commander.toml runs/drills-commander
+# agent-env wc3 sweep run runs/drills-commander --budget <dollars>
+name = "drills-commander"
+template = "drill-*"
+models = [
+  "fireworks_ai/deepseek-v4p1-flash",
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.4-mini",
+]
+prompt = ""
+max_cost_usd = 0.5
+style = "commander"

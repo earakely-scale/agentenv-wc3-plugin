@@ -1,0 +1,14 @@
+# The mirror duels in the commander style (env wc3-commander), the same models, seeds and caps as sweeps/duels.toml.
+# agent-env wc3 sweep generate sweeps/duels-commander.toml runs/duels-commander
+# agent-env wc3 sweep run runs/duels-commander --budget <dollars>
+name = "duels-commander"
+template = ["mirror-human", "mirror-orc", "mirror-undead", "mirror-nightelf"]
+models = [
+  "fireworks_ai/deepseek-v4p1-flash",
+  "anthropic/claude-haiku-4-5",
+  "openai/gpt-5.4-mini",
+]
+seeds = [1, 2, 3, 4]
+prompt = ""
+max_cost_usd = 0.5
+style = "commander"
