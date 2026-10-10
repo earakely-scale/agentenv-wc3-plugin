@@ -1,6 +1,8 @@
 # The mirror duels with wc3env's own agent, wc3agent (wc3-macro-micro): DeepSeek V4.1 Flash as its macro, the cheapest
 # of sweeps/duels.toml's models, and Haiku 4.5 as its micro in place of Jev. It plays through the env's session, on
-# wc3agent's own observations; the duel's goal is pinned as wc3agent's scenarios pin theirs.
+# wc3agent's own observations; the duel's goal is pinned as wc3agent's scenarios pin theirs. Haiku answers a menu per
+# unit group each game second, about $0.03 a game second, so the cap is $4: at $1.50 it stopped playing 50 seconds in,
+# before the armies were decided, and the duel went on without it. The comparison runs played seed 1 of each race.
 # agent-env wc3 sweep generate sweeps/duels-macro-micro.toml runs/duels-macro-micro
 # agent-env wc3 sweep run runs/duels-macro-micro --budget <dollars>
 name = "duels-macro-micro"
@@ -8,5 +10,5 @@ template = ["mirror-human", "mirror-orc", "mirror-undead", "mirror-nightelf"]
 models = ["fireworks_ai/deepseek-v4p1-flash"]
 seeds = [1, 2, 3, 4]
 prompt = ""
-max_cost_usd = 1.5
+max_cost_usd = 4.0
 agent = {id = "wc3-macro-micro", env = {WC3_MICRO_MODEL = "anthropic/claude-haiku-4-5"}}

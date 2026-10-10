@@ -49,7 +49,7 @@ def row(**axes) -> dict:
 def test_the_v1_bundles_are_the_sweeps_tasks_without_the_model_in_each_style(hub, tmp_path):
     expected = {"wc3-v1-drills": (25, 7, 0.5), "wc3-v1-ladder": (12, 3, 2.0), "wc3-v1-duels": (16, 1, 0.5),
                 "wc3-v1-drills-commander": (25, 7, 0.5), "wc3-v1-ladder-commander": (12, 3, 2.0),
-                "wc3-v1-duels-commander": (16, 1, 0.5), "wc3-v1-duels-wc3agent": (16, 1, 1.5)}
+                "wc3-v1-duels-commander": (16, 1, 0.5), "wc3-v1-duels-wc3agent": (16, 1, 4.0)}
     players = {"raw": ("wc3", "wc3-llm"), "commander": ("wc3-commander", "wc3-llm"),
                "wc3agent": ("wc3", "wc3-macro-micro")}
     assert [v1.bundle for v1 in hub.BUNDLES] == list(expected)
