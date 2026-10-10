@@ -61,11 +61,18 @@ rendered from the run's replay. Every run here plays like this in the
 
 LLM agents play the real Warcraft III: The Frozen Throne (1.29) through
 [wc3env](https://github.com/pwang724/wc3env), as an [AgentEnv](https://github.com/scaleapi/agentenv-framework)
-environment: the [agentenv-wc3](https://github.com/earakely-scale/agentenv-wc3-plugin) plugin. The agent reads the
-game through MCP tools (`get_state`, `list_units`, `lookup`), gives orders with `act` and moves game time on with
-`advance`. Each game is graded per player.
+environment: the [agentenv-wc3](https://github.com/earakely-scale/agentenv-wc3-plugin) plugin. Each game is graded
+per player. A task is played in one of three **styles**, each its own env or agent:
+- **raw** (env `wc3`): one model orders units by id through general tools: it reads the game with `get_state`,
+  `list_units` and `lookup`, gives orders with `act` and moves game time on with `advance`.
+- **commander** (env `wc3-commander`): one model plays through wc3agent's interface, from wc3agent's own code: named
+  units (`peasant1`), a turn page that says what it can and can't do yet, wc3agent's order language (`command`), its
+  code reflexes, and its unit menus (`fight`, `choose`).
+- **wc3agent** (agent `wc3-macro-micro` on env `wc3`): wc3env's own agent, as Peter Wang built it: a macro model, and
+  a micro model answering each unit group's menu.
 
-This dataset holds three v1 task sets and every run of them from 2026-10-09, played by five models on the real game:
+This dataset holds three v1 task sets in those styles and every run of them from 2026-10-09 and 2026-10-10, played on
+the real game:
 
 | Bundle | Tasks | What the agent does | Graded on | Runs |
 |---|---:|---|---|---:|
@@ -142,14 +149,17 @@ Every config has one split, `eval`. Two kinds of tables share the repo:
 - **agentenv-hf's,** one pair per bundle, as `agent-env hf publish` writes them: the tasks' steps and prompts, and each
   run's record and chat transcript (`messages`).
 
-A run has the same `episode_id` in both, so you can join them. Each of WC3's episode rows, and each reference duel,
-also names its files: `video`, `replay`, `timeline`, `w3g` and `transcript` (empty when the run has none).
+A run has the same `episode_id` in both, so you can join them. WC3's tables are one pair per set, with every style's
+runs: a task is the same game in every style, so `<set>_tasks` has one row per task, and each `<set>_episodes` row
+says who played it: `bundle`, `style` (`raw`, `commander` or `wc3agent`), `agent`, `model` (wc3agent's macro model),
+`micro_model` (wc3agent's) and `max_cost_usd`, the cap it played under. Each of WC3's episode rows, and each reference
+duel, also names its files: `video`, `replay`, `timeline`, `w3g` and `transcript` (empty when the run has none).
 `video_in_sync` says whether the run's playback stayed in step with the game. A playback that drifted isn't kept:
 that run has no `video`, and its replay shows the env's map alone.
 
 | Config | Rows | One row is |
 |---|---:|---|
-| `ladder_tasks` | 12 | a ladder game: map, seed, the AI's level and race, time limit, cost cap |
+| `ladder_tasks` | 12 | a ladder game: map, seed, the AI's level and race, time limit |
 | `ladder_episodes` | 38 | a run: model, outcome, reward, score against the AI's, units killed, orders and orders refused, turns, game seconds, cost |
 | `drills_tasks` | 25 | a drill: its skill, opponent, time limit and checks (`metric`, `op`, `value`) |
 | `drills_episodes` | 75 | a run: each check met or not with what was measured, the share met, passed, turns, cost |
@@ -214,15 +224,20 @@ agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --task drill-opening --mo
 ```
 
 `agent-env hf run` downloads the bundle at that revision and checks that the plugin is installed and that the env and
-agents are set up, before it plays. It plays `wc3-v1-drills` unless `--bundle` names another:
+agents are set up, before it plays. It plays `wc3-v1-drills` unless `--bundle` names another. A style's bundles need
+its env or agent: `agent-env wc3 setup --style commander` builds and registers `wc3-commander`, and `setup --agent`
+registers `wc3-macro-micro` with the other agents.
 
 ```bash
 agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-ladder \
     --task ladder-echoisles-vs-easy-orc-s1 --model <your model>
 agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-duels --eval duels --model <your model>
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-drills-commander --eval drills-economy \
+    --model <your model>
+agent-env hf run earakely-scale/wc3env-AgentEnv@v0.4.0 --bundle wc3-v1-duels-wc3agent --task mirror-orc-s1
 ```
 
-Without `--model`, a task plays Claude Haiku 4.5. `--dry-run` shows what would run, and `--yes` skips the question.
+Without `--model`, a task plays Claude Haiku 4.5; `wc3-v1-duels-wc3agent`'s play DeepSeek V4.1 Flash as wc3agent's macro model, as its runs did, with Claude Haiku 4.5 as its micro. `--dry-run` shows what would run, and `--yes` skips the question.
 The plugin's [README](https://github.com/earakely-scale/agentenv-wc3-plugin/tree/v0.4.0#play-the-real-game-x86-64-linux)
 has the setup in full. It also covers watching a game live and getting its video and replay, and `agent-env wc3
 sweep` for running a task set across models.
