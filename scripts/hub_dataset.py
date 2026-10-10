@@ -259,9 +259,9 @@ def reference_row(s: Spec, tasks: set[str], r: dict) -> dict:
 
 def run_files(instance: str, episode_id: str, task: list[dict]) -> tuple[dict[str, bytes], dict[str, str | None]]:
     """A run's files the dataset keeps (its HTML replay, timeline, .w3g with its startup options, and wc3-llm's
-    untrimmed transcript, or wc3agent's report and session) under its episode id, and the columns that point to them. The map's video is left out:
-    the HTML replay plays the same pictures. The startup options get back the AI level `task` started the game
-    with, which wc3env leaves out when it is easy (0)."""
+    untrimmed transcript, or wc3agent's report and session) under its episode id, and the columns that point to
+    them. The map's video is left out: the HTML replay plays the same pictures. The startup options get back the AI
+    level `task` started the game with, which wc3env leaves out when it is easy (0)."""
     record = find_task_instance(instance)
     metadata = (record.context or {}).get("metadata") or {}
     saved = [f for fs in (metadata.get("match_files") or {}).values() for f in fs]
