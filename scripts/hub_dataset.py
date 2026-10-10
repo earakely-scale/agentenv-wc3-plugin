@@ -74,7 +74,8 @@ MODELS = {
 SCRIPTED = "Warcraft's attack-move"   # both player slots of a reference duel
 SCRIPTS = {"attack": "a scripted attacker", "raid": "scripted raiders"}
 MIRROR = "a mirror army on Warcraft's attack-move"
-SETS = ("ladder", "drills", "duels", "references")
+FAMILIES = ("ladder", "drills", "duels")
+SETS = (*FAMILIES, "references")
 FEATURED = (   # the Space's "Start here", by episode id, each with what to watch for
     ("wc3-v1-ladder/ladder-frontier-claude-sonnet-5-5-8jb4mv4h",
      "Lasts the full 30 minutes against the normal AI for a draw, though its army trails from minute 12."),
@@ -106,6 +107,8 @@ class V1:
     prefix: str           # its task names: <prefix>-<the axes it varies>
     sweeps: tuple[str, ...]
     description: str
+    style: str = "raw"    # STYLES: who plays, through what
+    model: str | None = None   # the model its tasks keep; None leaves it to the agent's own default
 
 
 BUNDLES = (
@@ -118,12 +121,30 @@ BUNDLES = (
     V1("duels", "wc3-v1-duels", "duels", "mirror", ("duels-final",),
        "Warcraft III mirror duels: two identical late-game armies of one race, the model against Warcraft's own "
        "attack-move, graded on the outcome."),
+    V1("drills", "wc3-v1-drills-commander", "drills-commander", "drill", ("drills-commander",),
+       "Warcraft III drills in the commander style: wc3-v1-drills' 25 scenes, played through wc3agent's interface (env "
+       "wc3-commander) instead of the raw tools.", "commander"),
+    V1("ladder", "wc3-v1-ladder-commander", "ladder-commander", "ladder", ("ladder-commander",),
+       "Warcraft III against the game's own AI in the commander style: wc3-v1-ladder's 12 games, played through "
+       "wc3agent's interface (env wc3-commander) instead of the raw tools.", "commander"),
+    V1("duels", "wc3-v1-duels-commander", "duels-commander", "mirror", ("duels-commander",),
+       "Warcraft III mirror duels in the commander style: wc3-v1-duels' 16 duels, played through wc3agent's interface "
+       "(env wc3-commander) instead of the raw tools.", "commander"),
+    V1("duels", "wc3-v1-duels-wc3agent", "duels-macro-micro", "mirror", ("duels-macro-micro",),
+       "Warcraft III mirror duels played by wc3env's own agent, wc3agent (agent wc3-macro-micro): a macro model on "
+       "wc3agent's observations and Claude Haiku 4.5 as its micro, answering each unit's menu.", "wc3agent",
+       "fireworks_ai/deepseek-v4p1-flash"),
 )
 DEFAULT = "wc3-v1-drills"
+STYLES = {   # the env or agent that plays a style's bundles, and what setting it up takes beyond SETUP
+    "raw": ("wc3-llm on env wc3", ""),
+    "commander": ("wc3-llm on env wc3-commander", " && agent-env wc3 setup --style commander"),
+    "wc3agent": ("wc3-macro-micro on env wc3", ""),
+}
 
 
 def spec(v1: V1) -> Spec:
-    return dataclasses.replace(Spec.load(SWEEPS / f"{v1.spec}.toml"), name=v1.prefix, models=[PLACEHOLDER])
+    return dataclasses.replace(Spec.load(SWEEPS / f"{v1.spec}.toml"), name=v1.prefix, models=[v1.model or PLACEHOLDER])
 
 
 def v1_task(s: Spec, axes: dict) -> str:
@@ -142,7 +163,8 @@ def write_bundle(v1: V1, root: Path) -> dict[str, dict]:
     for c in s.combinations():
         name = task_name(s, c)
         steps = task_of(s, templates[c["template"]], c, name)
-        next(step for step in steps if step["id"] == s.player_step).pop("model")
+        if v1.model is None:
+            next(step for step in steps if step["id"] == s.player_step).pop("model")
         (root / "tasks" / f"{name}.json").write_text(json.dumps(steps, indent=2) + "\n")
         combos[name] = c
     for file, text in evals(v1, combos).items():
@@ -171,11 +193,9 @@ def step(steps: list[dict], kind: str, **match) -> dict:
 
 def task_row(v1: V1, name: str, c: dict, steps: list[dict]) -> dict:
     settings = step(steps, "open_lobby")["game_settings"]
-    agent = step(steps, "deploy_agent", agent_name="wc3")
     pretty, _ = map_name(c["map"])
     row = {"task": name, "map": pretty, "map_file": c["map"], "race": c["race"], "seed": c["seed"],
-           "time_limit_seconds": settings.get("time_limit_seconds"),
-           "max_cost_usd": float(agent["env_vars"]["WC3_MAX_COST_USD"])}
+           "time_limit_seconds": settings.get("time_limit_seconds")}
     opponent = c["opponent"] or {}
     if v1.family == "drills":
         checks = step(steps, "rts_grade")["checks"]
@@ -194,11 +214,17 @@ def measured(result: dict) -> float | None:
     return float(found[1]) if found else None
 
 
-def episode_row(v1: V1, episode_id: str, task: str, sweep: str, r: dict, verifications: dict) -> dict:
-    """WC3's row for one run, from its sweep's results row and its verifier's results."""
+def episode_row(v1: V1, episode_id: str, task: str, sweep: str, r: dict, verifications: dict,
+                steps: list[dict]) -> dict:
+    """WC3's row for one run, from its sweep's results row, its verifier's results and the task it played (who played
+    it, and under what cap)."""
     share = (r["score"] / (r["score"] + r["opponent_score"])
              if r.get("score") is not None and r.get("opponent_score") else None)
-    row = {"episode_id": episode_id, "task": task, "model": r["model"], "sweep": sweep, "outcome": r["outcome"],
+    agent = step(steps, "deploy_agent", agent_name="wc3")
+    row = {"episode_id": episode_id, "task": task, "bundle": v1.bundle, "style": v1.style,
+           "agent": agent.get("a2a_agent_id"), "model": r["model"],
+           "micro_model": agent["env_vars"].get("WC3_MICRO_MODEL"),
+           "max_cost_usd": float(agent["env_vars"]["WC3_MAX_COST_USD"]), "sweep": sweep, "outcome": r["outcome"],
            "result": r["result"], "reward": r["grade"], "score": r["score"], "opponent_score": r["opponent_score"],
            "score_share": share, "units_killed": r["units_killed"], "orders": r["orders"],
            "orders_refused": r.get("refused"), "turns": r["decisions"], "game_seconds": r["game_seconds"],
@@ -257,8 +283,8 @@ def parquet(rows: list[dict]) -> bytes:
     return sink.getvalue()
 
 
-def family_files(v1: V1, root: Path, runs_dir: Path) -> dict[str, bytes]:
-    """The bundle's files and both kinds of its tables."""
+def bundle_files(v1: V1, root: Path, runs_dir: Path) -> tuple[dict[str, bytes], dict[str, dict], list[dict]]:
+    """The bundle's files with agentenv-hf's two tables, its tasks' axes by name, and WC3's rows for its runs."""
     combos = write_bundle(v1, root)
     s = spec(v1)
     files = dataset.build(runs.locate(str(root)), name=v1.bundle, split=SPLIT, which="latest").files
@@ -282,18 +308,34 @@ def family_files(v1: V1, root: Path, runs_dir: Path) -> dict[str, bytes]:
             kept, columns = run_files(r["instance"], run["episode_id"], task)
             files |= kept
             rows.append(episode_row(v1, run["episode_id"], v1_task(s, r), sweep, r,
-                                    run["record"]["metadata"]["verifications"]) | columns)
+                                    run["record"]["metadata"]["verifications"], task) | columns)
     episodes = pa.concat_tables(parts).sort_by([("model", "ascending"), ("task", "ascending")])
     sink = io.BytesIO()
     pq.write_table(episodes, sink)
     order = episodes.column("episode_id").to_pylist()
     files[f"episodes/{v1.bundle}.parquet"] = sink.getvalue()
     files[f"raw/{v1.bundle}.jsonl"] = "".join(raw[i] + "\n" for i in order).encode()
-    tasks = [task_row(v1, n, c, json.loads((root / "tasks" / f"{n}.json").read_text())) for n, c in combos.items()]
-    files[f"tasks/{v1.family}.parquet"] = parquet(tasks)
-    files[f"episodes/{v1.family}.parquet"] = parquet(sorted(rows, key=lambda r: order.index(r["episode_id"])))
-    if v1.family == "duels":
-        references = []
+    return files, combos, sorted(rows, key=lambda r: order.index(r["episode_id"]))
+
+
+def family_files(family: str, out: Path, runs_dir: Path) -> dict[str, bytes]:
+    """The family's bundles, and WC3's tables for it: its tasks (the same in every style, so read from the raw
+    bundle), and every bundle's runs, by style."""
+    files, rows, combos = {}, [], None
+    for v1 in (v for v in BUNDLES if v.family == family):
+        kept, own, played = bundle_files(v1, out / "bundles" / v1.bundle, runs_dir)
+        if combos is None:
+            combos, raw = own, v1
+        elif own.keys() != combos.keys():
+            raise ValueError(f"{v1.bundle}'s tasks aren't {raw.bundle}'s: {sorted(own.keys() ^ combos.keys())}")
+        files |= kept
+        rows += played
+    tasks = [task_row(raw, n, c, json.loads((out / "bundles" / raw.bundle / "tasks" / f"{n}.json").read_text()))
+             for n, c in combos.items()]
+    files[f"tasks/{family}.parquet"] = parquet(tasks)
+    files[f"episodes/{family}.parquet"] = parquet(rows)
+    if family == "duels":
+        s, references = spec(raw), []
         for r in results(runs_dir / REFERENCES):
             episode_id = f"duels-references/{r['instance'].rpartition('/')[2]}"
             task = json.loads((drills.TASKS / f"mirror-{r['race'].replace('_', '')}-baseline.json").read_text())
@@ -309,7 +351,7 @@ def card_text(plugin: str) -> str:
     text = CARD.read_text()
     for v1 in BUNDLES:
         text = card(text, name=v1.bundle, split=SPLIT, repo=None, description=None, license=None,
-                    needs={"plugins": [plugin], "setup": SETUP})
+                    needs={"plugins": [plugin], "setup": SETUP + STYLES[v1.style][1]})
     return text
 
 
@@ -326,8 +368,8 @@ def check(files: dict[str, bytes]) -> None:
 def build(runs_dir: Path, out: Path, plugin: str) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     with namespace_routing():   # the sweeps' runs live in the @local namespace's own store
-        for v1 in BUNDLES:
-            files |= family_files(v1, out / "bundles" / v1.bundle, runs_dir)
+        for family in FAMILIES:
+            files |= family_files(family, out, runs_dir)
     for sweep in sorted({*(s for v1 in BUNDLES for s in v1.sweeps), REFERENCES}):
         for name in ("sweep.json", "results.jsonl", "report.md"):
             if (runs_dir / sweep / name).is_file():
@@ -356,10 +398,10 @@ def video_jobs(dataset_dir: Path) -> list[dict]:
     """Every run with a .w3g whose task can be replayed in step: its replay, the task it played (a v1 task, or the
     plugin's own baseline duel for a reference), its timeline, where its video goes and how fast it plays."""
     jobs = []
-    for v1 in BUNDLES:
-        for r in pq.read_table(dataset_dir / f"episodes/{v1.family}.parquet").to_pylist():
-            jobs.append({"family": v1.family, "row": r,
-                         "task": dataset_dir / "bundles" / v1.bundle / "tasks" / f"{r['task']}.json"})
+    for family in FAMILIES:
+        for r in pq.read_table(dataset_dir / f"episodes/{family}.parquet").to_pylist():
+            jobs.append({"family": family, "row": r,
+                         "task": dataset_dir / "bundles" / r["bundle"] / "tasks" / f"{r['task']}.json"})
     for r in pq.read_table(dataset_dir / "references/duels.parquet").to_pylist():
         jobs.append({"family": "references", "row": r,
                      "task": drills.TASKS / f"mirror-{r['race'].replace('_', '')}-baseline.json"})
@@ -435,7 +477,7 @@ def videos(dataset_dir: Path, parallel: int, source: Path | None) -> None:
         else:
             (dataset_dir / job["video"]).unlink(missing_ok=True)
     by_id = {job["id"]: job for job in rendered}
-    for path in [*(f"episodes/{v1.family}.parquet" for v1 in BUNDLES), "references/duels.parquet"]:
+    for path in [*(f"episodes/{family}.parquet" for family in FAMILIES), "references/duels.parquet"]:
         rows = pq.read_table(dataset_dir / path).to_pylist()
         (dataset_dir / path).write_bytes(parquet([r | (
             {"video": by_id[r["episode_id"]]["video"] if by_id[r["episode_id"]]["in_sync"] else None,
@@ -472,13 +514,16 @@ def space_runs(dataset_dir: Path) -> list[dict]:
     """Every run the Space lists, from WC3's tables: what it played, how it ended and where its files are."""
     def table(path):
         return pq.read_table(dataset_dir / path).to_pylist()
-    tasks = {r["task"]: r for f in ("ladder", "drills", "duels") for r in table(f"tasks/{f}.parquet")}
+    tasks = {r["task"]: r for f in FAMILIES for r in table(f"tasks/{f}.parquet")}
     out = []
-    for family in ("ladder", "drills", "duels"):
+    for family in FAMILIES:
         for r in table(f"episodes/{family}.parquet"):
             task = tasks[r["task"]]
+            model = MODELS.get(r["model"], r["model"])
             out.append({
-                "id": r["episode_id"], "set": family, "task": r["task"], "model": MODELS.get(r["model"], r["model"]),
+                "id": r["episode_id"], "set": family, "task": r["task"], "style": r["style"], "model": model,
+                "player": f"{model} + {MODELS.get(r['micro_model'], r['micro_model'])} micro" if r["micro_model"]
+                else model,
                 "outcome": r["outcome"], "reward": r["reward"], "score_share": r["score_share"],
                 "game_seconds": r["game_seconds"], "turns": r["turns"], "cost_usd": r["cost_usd"],
                 "orders": r["orders"], "orders_refused": r["orders_refused"], "units_killed": r["units_killed"],
@@ -490,9 +535,9 @@ def space_runs(dataset_dir: Path) -> list[dict]:
                 "video": r.get("video"), **{column: r.get(column) for column in COLUMNS.values()}})
     for r in table("references/duels.parquet"):
         out.append({"id": r["episode_id"], "set": "references", "task": r["task"] or f"mirror-{r['race']}-s{r['seed']}",
-                    "model": SCRIPTED, "outcome": r["outcome"], "reward": r["reward"],
-                    "score_share": r["score_share"], "game_seconds": r["game_seconds"], "turns": None,
-                    "cost_usd": 0.0, "orders": r["orders"], "orders_refused": None,
+                    "style": None, "model": SCRIPTED, "player": SCRIPTED, "outcome": r["outcome"],
+                    "reward": r["reward"], "score_share": r["score_share"], "game_seconds": r["game_seconds"],
+                    "turns": None, "cost_usd": 0.0, "orders": r["orders"], "orders_refused": None,
                     "units_killed": r["units_killed"], "map": "Echo Isles", "race": r["race"], "seed": r["seed"],
                     "opponent": MIRROR, "video": r.get("video"),
                     **{column: r.get(column) for column in COLUMNS.values()}})
@@ -501,7 +546,7 @@ def space_runs(dataset_dir: Path) -> list[dict]:
 
 def order(run: dict) -> tuple:
     """The Space's default order: by task set, then the ladder by map, AI level and seed, the drills by skill as the
-    plugin lists them, the duels by race and seed; then by model."""
+    plugin lists them, the duels by race and seed; then by style and model."""
     skills = list(drills.SKILLS)
     if run["set"] == "ladder":
         level = next(i for i, d in enumerate(DIFFICULTIES) if f" {d} " in run["opponent"])
@@ -510,7 +555,7 @@ def order(run: dict) -> tuple:
         task = (skills.index(run["skill"]), run["task"])
     else:
         task = (list(RACES).index(run["race"]), run["seed"])
-    return SETS.index(run["set"]), task, run["model"]
+    return SETS.index(run["set"]), task, list(STYLES).index(run["style"]) if run["style"] else -1, run["model"]
 
 
 def space(dataset_dir: Path, out: Path, revision: str) -> None:

@@ -46,8 +46,13 @@ def row(**axes) -> dict:
             **axes}
 
 
-def test_the_v1_bundles_are_the_sweeps_tasks_without_the_model(hub, tmp_path):
-    expected = {"wc3-v1-drills": (25, 7, 0.5), "wc3-v1-ladder": (12, 3, 2.0), "wc3-v1-duels": (16, 1, 0.5)}
+def test_the_v1_bundles_are_the_sweeps_tasks_without_the_model_in_each_style(hub, tmp_path):
+    expected = {"wc3-v1-drills": (25, 7, 0.5), "wc3-v1-ladder": (12, 3, 2.0), "wc3-v1-duels": (16, 1, 0.5),
+                "wc3-v1-drills-commander": (25, 7, 0.5), "wc3-v1-ladder-commander": (12, 3, 2.0),
+                "wc3-v1-duels-commander": (16, 1, 0.5), "wc3-v1-duels-wc3agent": (16, 1, 1.5)}
+    players = {"raw": ("wc3", "wc3-llm"), "commander": ("wc3-commander", "wc3-llm"),
+               "wc3agent": ("wc3", "wc3-macro-micro")}
+    assert [v1.bundle for v1 in hub.BUNDLES] == list(expected)
     for v1 in hub.BUNDLES:
         combos = hub.write_bundle(v1, tmp_path / v1.bundle)
         bundle = parse_bundle(tmp_path / v1.bundle)
@@ -58,30 +63,50 @@ def test_the_v1_bundles_are_the_sweeps_tasks_without_the_model(hub, tmp_path):
             steps = json.loads((tmp_path / v1.bundle / "tasks" / f"{name}.json").read_text())
             play = next(s for s in steps if s["id"] == "play")
             agent = next(s for s in steps if s["type"] == "deploy_agent" and s["agent_name"] == "wc3")
-            assert "model" not in play and play["prompt_id"] == name
+            assert play.get("model") == v1.model and play["prompt_id"] == name
             assert agent["env_vars"]["WC3_MAX_COST_USD"] == str(cap)
+            assert (*{s["env_id"] for s in steps if "env_id" in s}, agent["a2a_agent_id"]) == players[v1.style]
     assert {"drill-opening", "ladder-terenasstand-vs-insane-orc-s2", "mirror-nightelf-s4"} <= {
         p.stem for p in tmp_path.glob("*/tasks/*.json")}
+    for family in hub.FAMILIES:
+        assert len({frozenset(p.stem for p in (tmp_path / v1.bundle / "tasks").iterdir())
+                    for v1 in hub.BUNDLES if v1.family == family}) == 1
 
 
 def test_a_sweeps_run_is_filed_under_its_v1_task_by_its_axes(hub):
-    drills, ladder, duels = (hub.spec(v1) for v1 in hub.BUNDLES)
+    drills, ladder, duels = (hub.spec(v1) for v1 in hub.BUNDLES[:3])
     assert hub.v1_task(drills, row(template="drill-fight-even")) == "drill-fight-even"
     frontier = row(template="vs-ai", model="anthropic/claude-opus-5-5", seed=2,
                    opponent={"computer": "normal", "race": "orc"})
     assert hub.v1_task(ladder, frontier) == "ladder-echoisles-vs-normal-orc-s2"
     assert hub.v1_task(duels, row(template="mirror-orc", race="orc", seed=3)) == "mirror-orc-s3"
     assert hub.v1_task(duels, row(template="mirror-orc-baseline", race="orc", seed=3)) == "mirror-orc-s3"
+    wc3agent = hub.spec(hub.BUNDLES[-1])
+    assert hub.v1_task(wc3agent, row(template="mirror-orc", race="orc", seed=3,
+                                     model="fireworks_ai/deepseek-v4p1-flash")) == "mirror-orc-s3"
 
 
-def test_wc3_rows_carry_each_check_the_duels_strengths_and_the_references_task(hub):
-    drills, ladder, duels = hub.BUNDLES
-    drill = hub.episode_row(drills, "wc3-v1-drills/x", "drill-opening", "drills-final", row(), DRILL)
+def player(agent: str, **env) -> list[dict]:
+    return [{"type": "deploy_agent", "agent_name": "wc3", "a2a_agent_id": agent, "env_vars": env}]
+
+
+def test_wc3_rows_carry_who_played_each_check_the_duels_strengths_and_the_references_task(hub):
+    drills, ladder, duels = hub.BUNDLES[:3]
+    drill = hub.episode_row(drills, "wc3-v1-drills/x", "drill-opening", "drills-final", row(), DRILL,
+                            player("wc3-llm", WC3_MAX_COST_USD="0.5"))
     assert (drill["skill"], drill["checks_met"], drill["num_checks"], drill["passed"]) == ("economy", 1, 2, False)
     assert json.loads(drill["checks"])[1] == {"check": "idle_worker_seconds <= 30", "met": False, "measured": 80.0}
     assert (drill["score_share"], drill["orders_refused"]) == (0.25, 3)
-    duel = hub.episode_row(duels, "wc3-v1-duels/x", "mirror-human-s1", "duels-final", row(), DUEL)
+    assert (drill["bundle"], drill["style"], drill["agent"], drill["micro_model"], drill["max_cost_usd"]) == (
+        "wc3-v1-drills", "raw", "wc3-llm", None, 0.5)
+    duel = hub.episode_row(duels, "wc3-v1-duels/x", "mirror-human-s1", "duels-final", row(), DUEL,
+                           player("wc3-llm", WC3_MAX_COST_USD="0.5"))
     assert (duel["army_kept_percent"], duel["enemy_army_destroyed_percent"]) == (26.0, 32.0)
+    pair = hub.episode_row(hub.BUNDLES[-1], "wc3-v1-duels-wc3agent/x", "mirror-human-s1", "duels-macro-micro",
+                           row(), DUEL, player("wc3-macro-micro", WC3_MAX_COST_USD="1.5",
+                                               WC3_MICRO_MODEL="anthropic/claude-haiku-4-5"))
+    assert (pair["style"], pair["agent"], pair["micro_model"], pair["max_cost_usd"]) == (
+        "wc3agent", "wc3-macro-micro", "anthropic/claude-haiku-4-5", 1.5)
     tasks = {"mirror-human-s1"}
     assert hub.reference_row(hub.spec(duels), tasks, row(template="mirror-human-baseline"))["task"] == "mirror-human-s1"
     assert hub.reference_row(hub.spec(duels), tasks, row(template="mirror-human-baseline", seed=5))["task"] is None
@@ -95,7 +120,8 @@ def test_the_card_pins_the_plugin_and_lists_every_config_with_one_default(hub):
     assert {f"{v1.bundle}_{t}" for v1 in hub.BUNDLES for t in ("tasks", "episodes")} <= set(names)
     assert {f"{f}_{t}" for f in ("ladder", "drills", "duels") for t in ("tasks", "episodes")} <= set(names)
     assert data.agentenv["default"] == "wc3-v1-drills"
-    assert data.agentenv["bundles"] == {v1.bundle: {"plugins": [plugin], "setup": hub.SETUP} for v1 in hub.BUNDLES}
+    assert data.agentenv["bundles"] == {v1.bundle: {"plugins": [plugin], "setup": hub.SETUP + (
+        " && agent-env wc3 setup --style commander" if v1.style == "commander" else "")} for v1 in hub.BUNDLES}
     card = hub.CARD.read_text()
     pins = re.findall(r"agentenv-wc3-plugin(?:@|/tree/|/blob/)(v[\d.]+)", card)
     pins += re.findall(r"wc3env-AgentEnv/resolve/(v[\d.]+)/", card) + re.findall(r'rev = "[^"]+", "(v[\d.]+)"', card)
@@ -143,7 +169,7 @@ def test_the_space_lists_every_run_in_order_and_loads_replays_from_the_dataset_t
     data = tmp_path / "dataset"
     files = {"replay": "replays/x.html", "timeline": "timelines/x.json", "w3g": "w3g/x.w3g", "transcript": None}
     base = {"outcome": "loss", "reward": 0.0, "score_share": 0.3, "game_seconds": 60.0, "turns": 10, "cost_usd": 0.1,
-            "orders": 9, "orders_refused": 1, "units_killed": 0, **files}
+            "orders": 9, "orders_refused": 1, "units_killed": 0, "style": "raw", "micro_model": None, **files}
     ladder = {"map": "Echo Isles", "race": "human", "seed": 1, "opponent_race": "orc"}
     write_parquet(data / "tasks/ladder.parquet", [{"task": "ladder-insane", "opponent_ai": "insane", **ladder},
                                                    {"task": "ladder-easy", "opponent_ai": "easy", **ladder}])
@@ -159,8 +185,12 @@ def test_the_space_lists_every_run_in_order_and_loads_replays_from_the_dataset_t
          "checks": json.dumps([{"check": "workers >= 11", "met": True, "measured": 14.0}]), **base}])
     write_parquet(data / "tasks/duels.parquet", [{"task": "mirror-orc-s1", "map": "Echo Isles", "race": "orc",
                                                   "seed": 1}])
-    write_parquet(data / "episodes/duels.parquet", [{"episode_id": "u/1", "task": "mirror-orc-s1",
-                                                     "model": "fireworks_ai/deepseek-v4p1-flash", **base}])
+    write_parquet(data / "episodes/duels.parquet", [
+        {"episode_id": "u/1", "task": "mirror-orc-s1", "model": "fireworks_ai/deepseek-v4p1-flash", **base},
+        {"episode_id": "w/1", "task": "mirror-orc-s1", "model": "fireworks_ai/deepseek-v4p1-flash", **base,
+         "style": "wc3agent", "micro_model": "anthropic/claude-haiku-4-5"},
+        {"episode_id": "c/1", "task": "mirror-orc-s1", "model": "fireworks_ai/deepseek-v4p1-flash", **base,
+         "style": "commander"}])
     write_parquet(data / "references/duels.parquet", [{"episode_id": "duels-references/r1", "task": None,
                                                        "race": "orc", "seed": 5, **base}])
     (data / "assets").mkdir()
@@ -171,11 +201,13 @@ def test_the_space_lists_every_run_in_order_and_loads_replays_from_the_dataset_t
     assert (listed["dataset"], listed["revision"]) == (hub.REPO, "v9.9.9")
     assert listed["featured"] == [{"id": "u/1", "why": "a duel", "still": None}]
     runs = listed["runs"]
-    assert [r["id"] for r in runs] == ["l/2", "l/1", "d/1", "u/1", "duels-references/r1"]
-    assert (runs[0]["model"], runs[0]["opponent"]) == ("Claude Haiku 4.5", "the easy Orc AI")
+    assert [r["id"] for r in runs] == ["l/2", "l/1", "d/1", "u/1", "c/1", "w/1", "duels-references/r1"]
+    assert (runs[0]["model"], runs[0]["player"], runs[0]["opponent"]) == (
+        "Claude Haiku 4.5", "Claude Haiku 4.5", "the easy Orc AI")
+    assert (runs[5]["style"], runs[5]["player"]) == ("wc3agent", "DeepSeek V4.1 Flash + Claude Haiku 4.5 micro")
     assert (runs[2]["opponent"], runs[2]["checks"][0]["met"]) == ("a scripted attacker", True)
     assert runs[2]["replay"] == "replays/x.html"
-    assert (runs[4]["model"], runs[4]["task"]) == (hub.SCRIPTED, "mirror-orc-s5")
+    assert (runs[6]["model"], runs[6]["style"], runs[6]["task"]) == (hub.SCRIPTED, None, "mirror-orc-s5")
     assert {p.name for p in (tmp_path / "space").iterdir()} >= {"index.html", "app.js", "app.css", "README.md",
                                                                 "runs.json", "thumbnail.jpg"}
     monkeypatch.setattr(hub, "FEATURED", (("gone/1", "missing"),))
@@ -193,28 +225,32 @@ def test_the_space_is_a_static_page_of_the_dataset(hub):
 
 def test_every_run_with_a_w3g_gets_a_render_at_its_sets_pace_but_one_whose_staging_warms_up(hub, tmp_path):
     files = {"w3g": "w3g/x.w3g", "timeline": "timelines/x.json", "replay": "replays/x.html", "score": 10}
-    write_parquet(tmp_path / "episodes/ladder.parquet", [{"episode_id": "wc3-v1-ladder/a", "task": "ladder-t", **files},
-                                                          {"episode_id": "wc3-v1-ladder/b", "task": "ladder-t",
-                                                           **files, "w3g": None}])
-    write_parquet(tmp_path / "episodes/duels.parquet", [{"episode_id": "wc3-v1-duels/d", "task": "mirror-orc-s1",
-                                                         **files}])
+    write_parquet(tmp_path / "episodes/ladder.parquet", [
+        {"episode_id": "wc3-v1-ladder/a", "bundle": "wc3-v1-ladder", "task": "ladder-t", **files},
+        {"episode_id": "wc3-v1-ladder/b", "bundle": "wc3-v1-ladder", "task": "ladder-t", **files, "w3g": None}])
+    write_parquet(tmp_path / "episodes/duels.parquet", [
+        {"episode_id": "wc3-v1-duels/d", "bundle": "wc3-v1-duels", "task": "mirror-orc-s1", **files},
+        {"episode_id": "wc3-v1-duels-commander/g", "bundle": "wc3-v1-duels-commander", "task": "mirror-orc-s1",
+         **files}])
     write_parquet(tmp_path / "references/duels.parquet", [{"episode_id": "duels-references/e", "race": "night_elf",
                                                            **files}])
     write_parquet(tmp_path / "episodes/drills.parquet", [
-        {"episode_id": "wc3-v1-drills/c", "task": "drill-opening", **files},
-        {"episode_id": "wc3-v1-drills/f", "task": "drill-shopping", **files}])
+        {"episode_id": "wc3-v1-drills/c", "bundle": "wc3-v1-drills", "task": "drill-opening", **files},
+        {"episode_id": "wc3-v1-drills/f", "bundle": "wc3-v1-drills", "task": "drill-shopping", **files}])
     for name in ("drill-opening", "drill-shopping"):
         (tmp_path / "bundles/wc3-v1-drills/tasks").mkdir(parents=True, exist_ok=True)
         task = (hub.drills.TASKS / f"{name}.json").read_text()
         (tmp_path / f"bundles/wc3-v1-drills/tasks/{name}.json").write_text(task)
-    for name in ("ladder-t", "mirror-orc-s1"):
-        bundle = "wc3-v1-ladder" if name.startswith("ladder") else "wc3-v1-duels"
+    for bundle, name in (("wc3-v1-ladder", "ladder-t"), ("wc3-v1-duels", "mirror-orc-s1"),
+                         ("wc3-v1-duels-commander", "mirror-orc-s1")):
         (tmp_path / f"bundles/{bundle}/tasks").mkdir(parents=True, exist_ok=True)
         (tmp_path / f"bundles/{bundle}/tasks/{name}.json").write_text('[{"type": "open_lobby"}]')
     jobs = {job["id"]: job for job in hub.video_jobs(tmp_path)}
     assert {i: (j["speed"], j["video"]) for i, j in jobs.items()} == {
         "wc3-v1-ladder/a": (8, "videos/wc3-v1-ladder/a.mp4"), "wc3-v1-drills/c": (2, "videos/wc3-v1-drills/c.mp4"),
-        "wc3-v1-duels/d": (1, "videos/wc3-v1-duels/d.mp4"), "duels-references/e": (1, "videos/duels-references/e.mp4")}
+        "wc3-v1-duels/d": (1, "videos/wc3-v1-duels/d.mp4"), "duels-references/e": (1, "videos/duels-references/e.mp4"),
+        "wc3-v1-duels-commander/g": (1, "videos/wc3-v1-duels-commander/g.mp4")}
+    assert jobs["wc3-v1-duels-commander/g"]["task"].parent.parent.name == "wc3-v1-duels-commander"
     assert jobs["wc3-v1-drills/c"]["task"] == tmp_path / "bundles/wc3-v1-drills/tasks/drill-opening.json"
     assert jobs["duels-references/e"]["task"].name == "mirror-nightelf-baseline.json"
     assert jobs["duels-references/e"]["task"].is_file()

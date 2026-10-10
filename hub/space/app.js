@@ -5,7 +5,8 @@
 const SETS = [["all", "All"], ["ladder", "Ladder"], ["drills", "Drills"], ["duels", "Duels"],
               ["references", "Warcraft vs Warcraft"]];
 const RACES = {human: "Human", orc: "Orc", undead: "Undead", night_elf: "Night Elf", nightelf: "Night Elf"};
-const state = {set: "all", model: "", outcome: "", search: "", sort: "order", desc: false};
+const STYLES = {raw: "Raw tools", commander: "Commander", wc3agent: "wc3agent"};
+const state = {set: "all", style: "", model: "", outcome: "", search: "", sort: "order", desc: false};
 let DATA, RUNS, BASE;
 
 const $ = (id) => document.getElementById(id);
@@ -21,6 +22,7 @@ function el(tag, attrs = {}, ...children) {
 }
 
 const race = (r) => RACES[r] || r;
+const style = (run) => STYLES[run.style] || "–";
 const minutes = (s) => s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 const money = (c) => c == null ? "–" : c === 0 ? "$0" : c < 0.01 ? "<$0.01" : `$${c.toFixed(2)}`;
 const pct = (x) => x == null ? "–" : `${Math.round(x * 100)}%`;
@@ -52,8 +54,8 @@ function featured() {
     box.append(el("a", {class: "card", href: `#run=${encodeURIComponent(run.id)}`},
       f.still ? el("img", {class: "still", src: f.still, alt: `${run.model}: ${title(run)}`, loading: "lazy"}) : null,
       el("span", {class: "set", text: SETS.find(([k]) => k === run.set)[1]}),
-      el("b", {text: run.model}),
-      el("span", {class: "sub", text: title(run)}),
+      el("b", {text: run.player}),
+      el("span", {class: "sub", text: `${title(run)} · ${style(run)}`}),
       el("p", {text: f.why}),
       el("span", {class: "chips"}, el("span", {class: `chip ${resultClass(run)}`, text: result(run)}),
         el("span", {class: "chip", text: minutes(run.game_seconds)}), el("span", {class: "chip", text: money(run.cost_usd)}))));
@@ -76,21 +78,28 @@ function table(caption, head, rows) {
       el("tbody", {}, rows.map((row) => el("tr", {}, row.map((c, i) => el("td", {class: i ? "num" : "name", text: c}))))))));
 }
 
+// Each player (a model, or wc3agent's pair) in each style, with its runs, for a results table.
+function players(runs) {
+  return [...group(runs.map((r) => ({...r, key: `${r.style}|${r.player}`})), "key").values()];
+}
+
 function results() {
   const box = $("results");
-  const ladder = [...group(RUNS.filter((r) => r.set === "ladder"), "model")]
-    .sort(([, a], [, b]) => b.length - a.length || mean(b.map((r) => r.reward)) - mean(a.map((r) => r.reward))
+  const who = (rs) => [rs[0].player, style(rs[0])];
+  const ladder = players(RUNS.filter((r) => r.set === "ladder"))
+    .sort((a, b) => b.length - a.length || mean(b.map((r) => r.reward)) - mean(a.map((r) => r.reward))
       || mean(b.map((r) => r.score_share)) - mean(a.map((r) => r.score_share)))
-    .map(([m, rs]) => [m, rs.length, wdl(rs), pct(mean(rs.map((r) => r.score_share))), money(mean(rs.map((r) => r.cost_usd)))]);
-  box.append(table("Ladder: Human against the Orc AI, 30-minute games", ["Model", "Games", "Won / drawn / lost", "Score share", "Cost a game"], ladder));
-  const drills = [...group(RUNS.filter((r) => r.set === "drills"), "model")]
-    .map(([m, rs]) => [m, `${rs.filter((r) => r.passed).length} of ${rs.length}`, pct(mean(rs.map((r) => r.reward))), money(mean(rs.map((r) => r.cost_usd)))])
-    .sort((a, b) => parseInt(b[1]) - parseInt(a[1]));
-  box.append(table("Drills: one skill each, passed when every check is met", ["Model", "Passed", "Checks met", "Cost a drill"], drills));
-  const duels = [...group(RUNS.filter((r) => r.set === "duels" || r.set === "references"), "model")]
-    .sort(([, a], [, b]) => mean(b.map((r) => r.reward)) - mean(a.map((r) => r.reward)))
-    .map(([m, rs]) => [m, rs.length, mean(rs.map((r) => r.reward)).toFixed(2), wdl(rs), money(mean(rs.map((r) => r.cost_usd)))]);
-  box.append(table("Mirror duels, from player 0's side", ["Player 0", "Duels", "Points", "Won / drawn / lost", "Cost a duel"], duels));
+    .map((rs) => [...who(rs), rs.length, wdl(rs), pct(mean(rs.map((r) => r.score_share))), money(mean(rs.map((r) => r.cost_usd)))]);
+  box.append(table("Ladder: Human against the Orc AI, 30-minute games", ["Model", "Style", "Games", "Won / drawn / lost", "Score share", "Cost a game"], ladder));
+  const drills = players(RUNS.filter((r) => r.set === "drills"))
+    .sort((a, b) => b.filter((r) => r.passed).length - a.filter((r) => r.passed).length
+      || mean(b.map((r) => r.reward)) - mean(a.map((r) => r.reward)))
+    .map((rs) => [...who(rs), `${rs.filter((r) => r.passed).length} of ${rs.length}`, pct(mean(rs.map((r) => r.reward))), money(mean(rs.map((r) => r.cost_usd)))]);
+  box.append(table("Drills: one skill each, passed when every check is met", ["Model", "Style", "Passed", "Checks met", "Cost a drill"], drills));
+  const duels = players(RUNS.filter((r) => r.set === "duels" || r.set === "references"))
+    .sort((a, b) => mean(b.map((r) => r.reward)) - mean(a.map((r) => r.reward)))
+    .map((rs) => [...who(rs), rs.length, mean(rs.map((r) => r.reward)).toFixed(2), wdl(rs), money(mean(rs.map((r) => r.cost_usd)))]);
+  box.append(table("Mirror duels, from player 0's side", ["Player 0", "Style", "Duels", "Points", "Won / drawn / lost", "Cost a duel"], duels));
 }
 
 function controls() {
@@ -100,6 +109,9 @@ function controls() {
     tab.onclick = () => { state.set = key; render(); };
     $("sets").append(tab);
   }
+  const styles = Object.keys(STYLES).filter((k) => RUNS.some((r) => r.style === k));
+  $("style").append(el("option", {value: "", text: "Every style"}), ...styles.map((k) => el("option", {value: k, text: STYLES[k]})));
+  $("style").onchange = (e) => { state.style = e.target.value; render(); };
   const models = [...new Set(RUNS.map((r) => r.model))];
   $("model").append(el("option", {value: "", text: "Every model"}), ...models.map((m) => el("option", {value: m, text: m})));
   $("outcome").append(el("option", {value: "", text: "Every result"}),
@@ -128,7 +140,8 @@ function render() {
     th.classList.toggle("sorted", th.dataset.key === state.sort);
     th.classList.toggle("desc", th.dataset.key === state.sort && state.desc);
   }
-  const shown = RUNS.filter((r) => (state.set === "all" || r.set === state.set) && (!state.model || r.model === state.model)
+  const shown = RUNS.filter((r) => (state.set === "all" || r.set === state.set) && (!state.style || r.style === state.style)
+      && (!state.model || r.model === state.model)
       && (!state.outcome || resultClass(r) === state.outcome)
       && (!state.search || `${r.task} ${title(r)}`.toLowerCase().includes(state.search)))
     .sort((a, b) => {
@@ -140,7 +153,8 @@ function render() {
   $("runs").tBodies[0].replaceChildren(...shown.map((r) => {
     const row = el("tr", {tabindex: "0"},
       el("td", {}, el("span", {class: `set ${r.set}`, text: SETS.find(([k]) => k === r.set)[1]}), " ", title(r)),
-      el("td", {text: r.model}),
+      el("td", {text: r.player}),
+      el("td", {text: style(r)}),
       el("td", {}, el("span", {class: `chip ${resultClass(r)}`, text: result(r)})),
       el("td", {class: "num", text: r.reward == null ? "–" : r.reward.toFixed(2)}),
       el("td", {class: "num", text: pct(r.score_share)}),
@@ -168,9 +182,10 @@ function frame(html) {
 
 async function play(run) {
   const mine = ++loading;
-  document.title = `${run.model}: ${title(run)} · Warcraft III on AgentEnv`;
-  $("r-title").textContent = `${run.model} · ${title(run)}`;
+  document.title = `${run.player}: ${title(run)} · Warcraft III on AgentEnv`;
+  $("r-title").textContent = `${run.player} · ${title(run)}`;
   $("r-chips").replaceChildren(...[
+    run.style ? el("span", {class: "chip", text: style(run)}) : null,
     el("span", {class: `chip ${resultClass(run)}`, text: result(run)}),
     el("span", {class: "chip", text: `reward ${run.reward == null ? "–" : run.reward.toFixed(2)}`}),
     el("span", {class: "chip", text: `${minutes(run.game_seconds)} game time`}),

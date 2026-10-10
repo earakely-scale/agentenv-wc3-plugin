@@ -44,6 +44,7 @@
     <h2>Every run</h2>
     <div class="controls">
       <div id="sets" class="tabs" role="tablist"></div>
+      <select id="style" aria-label="Style"></select>
       <select id="model" aria-label="Model"></select>
       <select id="outcome" aria-label="Outcome"></select>
       <input id="search" type="search" placeholder="Search tasks" aria-label="Search tasks">
@@ -52,7 +53,8 @@
     <div class="table-wrap">
       <table id="runs">
         <thead><tr>
-          <th data-key="task">Task</th><th data-key="model">Model</th><th data-key="result">Result</th>
+          <th data-key="task">Task</th><th data-key="player">Model</th><th data-key="style">Style</th>
+          <th data-key="result">Result</th>
           <th data-key="reward" class="num">Reward</th><th data-key="score_share" class="num">Score share</th>
           <th data-key="game_seconds" class="num">Game time</th><th data-key="turns" class="num">Turns</th>
           <th data-key="cost_usd" class="num">Cost</th>
