@@ -94,10 +94,10 @@ ordered units one by one, 130 orders a duel, and lost all 8.
   all 13 (4 of the 26 raw duels). Haiku reached the $0.50 cap in 8 of its 13 commander duels (1 of 9 raw): every
   commander turn returns the whole page, and its turns cost $0.015 against $0.004 on the raw tools. DeepSeek's turns
   came back empty often enough to end its play in 10 of its 14 commander duels (2 of its 7 raw duels with a
-  transcript): the agent stops at a game's fourth reply without a tool call. Its reasoning had run past the agent's
-  limit of 4,096 output tokens before it called a tool. Replayed, one such turn ran out at 4,096 tokens of
-  reasoning; at 16,384 it reasoned for 14,324 tokens and gave orders. `wc3-llm` now allows 32,768. The runs here
-  were played before that fix.
+  transcript): the agent then stopped at a game's fourth reply without a tool call. Its reasoning had run past the
+  agent's limit of 4,096 output tokens before it called a tool. Replayed, one such turn ran out at 4,096 tokens of
+  reasoning; at 16,384 it reasoned for 14,324 tokens and gave orders. `wc3-llm` now allows 32,768, and stops only
+  at the fourth reply in a row without a tool call. The runs here were played before both fixes.
 
 ## Ladder
 

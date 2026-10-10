@@ -331,8 +331,9 @@ env's map alone.
   duel's goal asks for the enemy army, but the grade counts the game's result.
 - **Some players stopped early.** In 13 commander duels the player stopped giving orders more than 15 game seconds
   before the end, and lost each. Haiku reached the $0.50 cap in 8 of its 13: each commander turn returns the whole
-  page. DeepSeek's turns came back empty: `wc3-llm` allowed 4,096 output tokens a turn, and DeepSeek's reasoning ran
-  past them before it called a tool. Plugin v0.5.0 allows 32,768, and these runs were played before that.
+  page. DeepSeek's turns came back empty: `wc3-llm` allowed 4,096 output tokens a turn, DeepSeek's reasoning ran past
+  them before it called a tool, and the agent stopped at a game's fourth reply without a tool call. Plugin v0.5.0
+  allows 32,768 tokens and stops only at the fourth in a row; these runs were played before.
 - **The commander style has no micro model.** A group fights by Warcraft's attack-move unless the model takes the
   fight over with `fight` and `choose`, which the models seldom do.
 - **wc3agent's micro is Haiku, not Jev.** wc3agent's own micro model needs a TypeSafe key. With Haiku a duel costs

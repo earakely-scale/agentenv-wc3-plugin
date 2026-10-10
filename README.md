@@ -27,7 +27,7 @@ AI agents play Warcraft III: The Frozen Throne through [wc3env](https://github.c
 Every game is graded, saved as a native `.w3g` replay and recorded. You can watch it live in the game's own picture,
 with the agents' plans beside it, and broadcast it to Twitch or X, or only record the broadcast.
 
-Three v1 task sets, and every run of them by five models, are on the Hugging Face Hub as the dataset
+Three v1 task sets in three game styles, and every run of them, are on the Hugging Face Hub as the dataset
 [earakely-scale/wc3env-AgentEnv](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv). The
 [Space](https://huggingface.co/spaces/earakely-scale/wc3env-AgentEnv) replays every run in the browser; see
 [On the Hugging Face Hub](#on-the-hugging-face-hub).
@@ -253,6 +253,15 @@ The same game can be played through three interfaces. Each is its own env or age
   page say so, where wc3agent's texts speak of micro.
 - **What it shares with the raw env:** the game, its stepping clock (`advance` plays one-second ticks, as
   wc3agent's stepping play does), staging, grading and recording, so the styles' results compare directly.
+
+**How they compare** ([docs/evals/styles.md](docs/evals/styles.md), the v1 sets in each style on the real game):
+- **Drills:** the commander style lifts the weaker models: Haiku 4.5 passes 9 of 25 against 3 on the raw tools,
+  GPT-5.4 mini 7 against 2, and DeepSeek V4.1 Flash the same 11. It does worse in the combat drills, which are left
+  to Warcraft's attack-move.
+- **Ladder:** no model beats Warcraft's AI in either style. In the commander style each lasts longer and kills more
+  (DeepSeek 28 units a game against 12).
+- **Duels:** GPT-5.4 mini goes from 0 of 8 to 5 of 8 by attack-moving its whole army as Warcraft does. wc3agent, with
+  a model for the fights, wins 4 of its 6 duels, at $1.85 a duel against $0.07 to $0.13.
 
 ## Tasks
 
@@ -532,7 +541,7 @@ outcome with the game's score. On outcomes:
 ## On the Hugging Face Hub
 
 The dataset [earakely-scale/wc3env-AgentEnv](https://huggingface.co/datasets/earakely-scale/wc3env-AgentEnv) holds three
-v1 task sets as bundles, and every run of them from 2026-10-09. The Space
+v1 task sets as a bundle per game style, and every run of them from 2026-10-09 and 2026-10-10. The Space
 [earakely-scale/wc3env-AgentEnv](https://huggingface.co/spaces/earakely-scale/wc3env-AgentEnv) replays every run in
 the browser. Both are in the collection
 [wc3env on AgentEnv](https://huggingface.co/collections/earakely-scale/wc3env-on-agentenv-6ac924a8810f02942599a5a4).
@@ -542,6 +551,10 @@ the browser. Both are in the collection
 | `wc3-v1-drills` | the 25 drills, an eval per skill | 75 | `drills_tasks`, `drills_episodes` |
 | `wc3-v1-ladder` | Human against the easy, normal and insane Orc AI × Echo Isles and Terenas Stand × seeds 1 and 2, 30-minute games | 38 | `ladder_tasks`, `ladder_episodes` |
 | `wc3-v1-duels` | the mirror duels, four races × seeds 1 to 4 | 26 | `duels_tasks`, `duels_episodes`, `duels_references` |
+| `wc3-v1-drills-commander` | the drills, in the commander style | 75 | `drills_tasks`, `drills_episodes` |
+| `wc3-v1-ladder-commander` | the ladder, in the commander style | 36 | `ladder_tasks`, `ladder_episodes` |
+| `wc3-v1-duels-commander` | the duels, in the commander style | 40 | `duels_tasks`, `duels_episodes` |
+| `wc3-v1-duels-wc3agent` | the duels, played by wc3agent (`wc3-macro-micro`) | 6 | `duels_tasks`, `duels_episodes` |
 
 - **WC3's tables:** each run's outcome, score, checks and cost.
 - **agentenv-hf's** (`<bundle>_tasks`, `<bundle>_episodes`): each task's steps and each run's record and chat
@@ -551,7 +564,8 @@ the browser. Both are in the collection
   - its HTML replay, which plays the video beside the env's map (`replays/`);
   - its timeline as JSON (`timelines/`);
   - the game's `.w3g` replay with its startup options (`w3g/`);
-  - from env v34, `wc3-llm`'s untrimmed transcript (`transcripts/`).
+  - from env v34, `wc3-llm`'s untrimmed transcript (`transcripts/`); for wc3agent, its report and session
+    (`reports/`, `sessions/`).
 
   The 24 Warcraft-against-Warcraft duels have theirs too.
 - **Not in it:** game files and activation files. The `.w3g` replays need your own game to watch.
@@ -609,7 +623,9 @@ To release:
 `agents/wc3-llm` lets any chat model play through the env's MCP tools (`get_state`, `act`, `advance`, …): any model
 agent-env's model endpoint serves that calls tools. The `vs-ai` tasks use it, and it plays any player slot.
 - **The loop:** a plain tool loop. The model calls tools until it answers without one; if the game isn't over yet, it
-  is told to keep playing.
+  is told to keep playing, up to three times in a row.
+- **Room to reason:** a turn may use 32,768 output tokens and take 7 minutes, so a reasoning model finishes its
+  thought and calls a tool.
 - **Long games fit:**
   - once the tool results pass about 120k characters, all but the last six are trimmed at once;
   - the system prompt and the newest message are marked for prompt caching (Anthropic models through LiteLLM), so
@@ -903,7 +919,11 @@ extensions and `/live`, gives agentenv-game-env its spectator card and match fil
     and GCP runners.
   - The mirror duels run on Echo Isles, with the creeps in sight cleared and odd seeds swapping the armies' ground,
     not on wc3agent's flat arena map: building it needs StormLib, which wc3env's map tools load from a Windows DLL.
-  - A human player slot; wc3agent's commander feedback and its decision-panel replay.
+  - A human player slot, and wc3agent's decision-panel replay.
+- **A duel can be won by the base.** On odd seeds each army starts nearer the enemy's base than the enemy army is,
+  and razing the opponent's only building wins by Warcraft's melee rule, though the duel's goal asks for the enemy
+  army. Four duel wins came that way. Invulnerable town halls in the duel's staging would close it; the published
+  duels were played without.
 - **Battle.net on the Linux host.** Its installer and launcher run under Wine in a container, but on a host with no
   GPU the login page's embedded browser doesn't draw (its renderer restarts in a loop, with Mesa's software Vulkan
   and DXVK too), so the game's download still needs Windows. The rest of the setup runs on Linux.
