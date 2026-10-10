@@ -25,8 +25,11 @@
     </nav>
   </header>
 
-  <p class="note">A replay plays the game's own picture, rendered from the run's .w3g: the camera follows the agent's
-    fights and key moments, and the plans it wrote show in the game as it wrote them. Beside it, the env's map: every
+  <p class="note">Each run plays in one of three styles: <b>raw tools</b> (one model orders units by id through the env's
+    general tools), <b>commander</b> (one model through wc3agent's interface: named units, its order language and its
+    unit menus) and <b>wc3agent</b> (wc3env's own agent: a macro model and a micro model). A replay plays the game's own
+    picture, rendered from the run's .w3g: the camera follows the agent's fights and key moments, and the plans it
+    wrote show in the game as it wrote them. Beside it, the env's map: every
     unit any player sees, the event feed and the momentum of both sides. Ladder games play at 8×, drills at 2× and
     duels at their own pace. Press play, or drag the slider.</p>
 
@@ -65,7 +68,8 @@
   </section>
 
   <footer>
-    <p>Played on 2026-10-09 by <code>wc3-llm</code> on the real game (Warcraft III Legacy 1.29.2 under Wine), with the
+    <p>Played on 2026-10-09 and 2026-10-10 by <code>wc3-llm</code> and <code>wc3-macro-micro</code> on the real game
+      (Warcraft III Legacy 1.29.2 under Wine), with the
       <a id="footer-plugin" href="https://github.com/earakely-scale/agentenv-wc3-plugin">agentenv-wc3</a> plugin. Warcraft III is a
       trademark of Blizzard Entertainment, and the videos show its picture; this Space holds no game files and isn't
       affiliated with or endorsed by Blizzard.</p>

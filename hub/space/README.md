@@ -30,6 +30,11 @@ browser:
 - **The mirror duels:** a model against Warcraft's own attack-move.
 - **The Warcraft-against-Warcraft duels** they read against.
 
+Each run plays in one of three styles, and the page filters and compares by style:
+- **Raw tools:** one model orders units by id through the env's general tools.
+- **Commander:** one model plays through wc3agent's interface: named units, its order language and its unit menus.
+- **wc3agent:** wc3env's own agent, a macro model with a micro model.
+
 A replay plays the game's own picture, rendered from the run's .w3g replay:
 - the camera follows the agent's fights and key moments;
 - the plans the agent wrote show in the game as it wrote them;
