@@ -74,7 +74,8 @@ This dataset holds three v1 task sets and every run of them from 2026-10-09, pla
 | `wc3-v1-duels` | 16 | a mirror duel: two identical late-game armies of one race, against Warcraft's own attack-move, seeds 1 to 4 | the outcome, decided once one army is down to 40% of the other's strength | 26 |
 
 Every run comes with:
-- its video in the game's own picture;
+- its video in the game's own picture (all but the three `drill-shopping` runs, see
+  [How the videos were made](#how-the-videos-were-made));
 - its replay in the browser, with the video beside the env's map;
 - its timeline;
 - the game's own `.w3g` replay;
@@ -162,7 +163,7 @@ Beside the tables, each run's files are under its `episode_id` (`<bundle>/<run>`
 
 | Folder | Runs | What a file is |
 |---|---:|---|
-| `videos/` | – | the game's own picture as an MP4 (960×540), rendered from the run's replay: the camera follows the agent's fights and key moments, and its plans show in the game as it wrote them. Ladder games play at 8×, drills at 2×, duels at the game's pace. |
+| `videos/` | 160 | the game's own picture as an MP4 (960×540), rendered from the run's replay: the camera follows the agent's fights and key moments, and its plans show in the game as it wrote them. Ladder games play at 8×, drills at 2×, duels at the game's pace. |
 | `replays/` | 163 | the replay in a browser: one HTML file with the whole game in it. It plays the run's video beside the env's map (every unit any player sees), the event feed, the agent's plans and both sides' momentum, scrubbable. It finds the video at `../../videos/`, as in this repo. |
 | `timelines/` | 163 | the same game as JSON: every frame's units, events and notes, to analyse or redraw a game without playing it |
 | `w3g/` | 163 | the game's own replay (`.w3g`), which plays in Warcraft III 1.29, with its startup options (`.w3g.json`). wc3env saves those without the AI level when it is easy (0), and a playback then fields the normal AI. These files have it back. |
@@ -260,10 +261,12 @@ picture on:
   drills (2×), 50 ms for duels (1×).
 
 **Every published video is checked against the game.** Its playback must end on the score the live game's own
-timeline last showed for the run's lead player. Both are read from the game's observations, so the check is exact.
-A playback that drifted is not published, since it would show a game the agent didn't play. The engine's playback of
-a 1.29 replay can drift: wc3env finds the same on some ladder replays. `videos/<run>.mp4.json`, next to each video,
-has the render's pace and final scores.
+timeline last showed for the run's lead player; both are read from the game's observations, so the check is exact.
+All 160 do. A playback that drifted would not be published, since it would show a game the agent didn't play.
+- **The one cause of drift found, now fixed.** Six playbacks first drifted, all of games where the easy AI was set:
+  wc3env saves a replay's startup without an AI level of 0, so they played back against the normal AI. With the
+  level restored from the task, all six end in sync.
+- **The render's own record.** `videos/<run>.mp4.json`, next to each video, has the render's pace and final scores.
 
 **The three `drill-shopping` runs have no video.** Their staging lets the game run 460 seconds first, a minute at a
 time, and the game plays those minute-long steps of a replay back short: about 422 seconds instead of 460. The
