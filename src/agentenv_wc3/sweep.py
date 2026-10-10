@@ -26,7 +26,7 @@ from agent_env.store.routing import namespace_routing
 from agent_env.task.store import get_task_instance_store
 
 from .drills import SKILLS, TASKS, skill
-from .prompts import HOW_TO_PLAY, PLAY_TO_THE_END, RACES, SUPPLY, WORKER
+from .prompts import HOW_TO_PLAY, PLAY_TO_THE_END, RACES, SUPPLY, WORKER, for_style, goal_of
 
 DIFFICULTIES = ("easy", "normal", "insane")
 OUTCOMES = {"victory": "win", "draw": "draw", "time_limit": "draw", "finished": "draw", "defeat": "loss"}
@@ -40,7 +40,8 @@ PROMPT = (
     "supply before you are food-capped, then an army with a hero, and attack the enemy base (its start location is in "
     "get_state). " + PLAY_TO_THE_END)
 SPEC_KEYS = {"name", "template", "models", "maps", "races", "opponents", "seeds", "time_limit_seconds",
-             "max_cost_usd", "player_step", "prompt"}
+             "max_cost_usd", "player_step", "prompt", "style", "agent"}
+STYLE_ENVS = {"raw": "wc3", "commander": "wc3-commander"}   # a game style's env (styles.py)
 INSTANCE = re.compile(r"(\d+(?:\.\d+)?)s, instance (\S+)")
 
 
@@ -57,6 +58,8 @@ class Spec:
     max_cost_usd: float = 0.5
     player_step: str = "play"
     prompt: str | None = PROMPT
+    style: str = "raw"
+    agent: dict | None = None   # {"id": an A2A agent, "env": its settings}: plays instead of the template's
 
     @classmethod
     def load(cls, path: Path) -> Spec:
@@ -68,6 +71,14 @@ class Spec:
             raise ValueError("a sweep's name is lowercase letters, digits and dashes")
         if not spec.models:
             raise ValueError("a sweep needs at least one model")
+        if spec.style not in STYLE_ENVS:
+            raise ValueError(f"style must be one of {', '.join(STYLE_ENVS)}, not {spec.style!r}")
+        if spec.agent is not None and (not isinstance(spec.agent, dict) or not spec.agent.get("id")
+                                       or set(spec.agent) - {"id", "env"}):
+            raise ValueError('an agent is {id = "<A2A agent>", env = {NAME = "value"}}')
+        if spec.agent is not None and spec.style != "raw":
+            raise ValueError("an agent of its own plays through the env's session, not a style's tools: leave style "
+                             "out")
         for race in spec.races or ():
             if race not in RACES:
                 raise ValueError(f"race {race!r} is not one of {', '.join(RACES)}")
@@ -177,6 +188,17 @@ def task_of(spec: Spec, template: list[dict], c: dict, name: str) -> list[dict]:
             worker=WORKER[c["race"]], supply=SUPPLY[c["race"]])
     agent_step = next(s for s in steps if s["type"] == "deploy_agent" and s.get("agent_name") == play.get("agent_name"))
     agent_step["env_vars"] = {**agent_step.get("env_vars", {}), "WC3_MAX_COST_USD": str(spec.max_cost_usd)}
+    if spec.style != "raw":
+        for step in steps:
+            if step.get("env_id") == STYLE_ENVS["raw"]:
+                step["env_id"] = STYLE_ENVS[spec.style]
+        play["prompt"] = for_style(play["prompt"], c["race"], spec.style)
+    if spec.agent:
+        agent_step["a2a_agent_id"] = spec.agent["id"]
+        agent_step["env_vars"].update(spec.agent.get("env") or {})
+        if skill(c["template"]) or opponent is None:   # a drill's or duel's goal is pinned; a full game is its own
+            play["prompt"] = goal_of(play["prompt"], c["race"])
+            agent_step["env_vars"]["WC3_GOAL"] = "prompt"
     return steps
 
 
@@ -187,7 +209,7 @@ def generate(spec: Spec, out: Path) -> list[str]:
     (out / "evals").mkdir(exist_ok=True)
     agent = next(s for s in next(iter(templates.values())) if s["id"] == spec.player_step).get("agent_name")
     manifest = {"name": spec.name, "template": spec.template, "max_cost_usd": spec.max_cost_usd, "agent": agent,
-                "player_step": spec.player_step, "tasks": {}}
+                "player_step": spec.player_step, "style": spec.style, "plays": spec.agent, "tasks": {}}
     for c in spec.combinations():
         name = task_name(spec, c)
         steps = task_of(spec, templates[c["template"]], c, name)

@@ -45,6 +45,7 @@ AGENTS = {
                 {"default_model": "anthropic/claude-haiku-4-5"}),
 }
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
+STYLES = ("raw", "commander")   # styles.py: the game styles an env image serves
 
 
 def _checkout(source: Path | None) -> Path:
@@ -276,8 +277,11 @@ def show_license():
 
 
 @wc3.command()
-@click.option("--id", "env_id", default=ENVIRONMENT_NAME, show_default=True,
-              help="Env id to register. The bundle's tasks deploy 'wc3'.")
+@click.option("--id", "env_id", help="Env id to register. Default: wc3 for the raw style (the bundle's tasks deploy "
+                                     "it), wc3-<style> for another.")
+@click.option("--style", type=click.Choice(STYLES), default="raw", show_default=True,
+              help="The game style: raw, each unit's orders by id through general tools; commander, wc3agent's "
+                   "interface (named units, an order language, groups with objectives, unit menus).")
 @click.option("--base", default=BASE_IMAGE, show_default=True,
               help="Your wc3env worker image (its `environment` target), which holds your game files.")
 @click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
@@ -293,8 +297,8 @@ def show_license():
 @click.option("--agent", is_flag=True, help="Also build and register the agents: wc3-llm (any chat model through the "
                                             "tools), wc3-macro-micro (wc3env's wc3agent) and wc3-scripted (its "
                                             "scripted opponent).")
-def setup(env_id: str, base: str, source: Path | None, image: str | None, fake: bool, wc3env_dir: Path | None,
-          agent: bool):
+def setup(env_id: str | None, style: str, base: str, source: Path | None, image: str | None, fake: bool,
+          wc3env_dir: Path | None, agent: bool):
     """Build the env image on top of your wc3env worker image and register it as an MCP server env. The image holds
     your game files: it stays in agent-env's local registry; never push it anywhere public. With --fake, the env is
     built on wc3env's fake game instead; with --agent, the wc3-llm, wc3-macro-micro and wc3-scripted agents are
@@ -303,6 +307,7 @@ def setup(env_id: str, base: str, source: Path | None, image: str | None, fake: 
     from agent_env.env import MCPServerEnv
 
     root = _checkout(source)
+    env_id = env_id or (ENVIRONMENT_NAME if style == "raw" else f"{ENVIRONMENT_NAME}-{style}")
     if image is None:
         if fake:
             build_platform = _docker_platform()
@@ -318,12 +323,13 @@ def setup(env_id: str, base: str, source: Path | None, image: str | None, fake: 
         image = f"mcp-server-{env_id}"
         click.echo(f"Building {image} on {base} for {build_platform} from {root}")
         build = ["docker", "build", "--platform", build_platform, "--build-arg", f"BASE={base}", "--build-arg",
-                 f"GAME_ENV={_game_env(root)}", "-t", image, str(root)]
+                 f"GAME_ENV={_game_env(root)}", "--build-arg", f"WC3ENV_COMMIT={WC3ENV_COMMIT}", "--build-arg",
+                 f"STYLE={style}", "-t", image, str(root)]
         if subprocess.run(build).returncode:
             raise click.ClickException("docker build failed")
     click.echo("Storing the image (docker save, can take a few minutes" + ("" if fake else ": it holds the game") + ")")
     description = ("Warcraft III env on wc3env's fake game" if fake else
-                   "Warcraft III env: wc3env under Wine and its MCP server")
+                   "Warcraft III env: wc3env under Wine and its MCP server") + f", {style} style"
     artifact = DockerImageArtifact.put(id=f"mcp-server-{env_id}", image_name=image, description=description)
     env = MCPServerEnv.put(id=env_id, docker_image_artifact=artifact, environment_name=ENVIRONMENT_NAME,
                            env_provider_type="server")

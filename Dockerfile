@@ -23,6 +23,14 @@ RUN test -n "$GAME_ENV" || { echo "build with --build-arg GAME_ENV=<agentenv-gam
  && /opt/agentenv/bin/pip install --no-cache-dir --no-deps "$GAME_ENV"
 COPY pyproject.toml README.md LICENSE /tmp/plugin/
 COPY src/ /tmp/plugin/src/
+# wc3agent (wc3env's agent, MIT) from the wc3env commit the plugin pins: the commander style plays through its code.
+ARG WC3ENV_COMMIT
+RUN test -n "$WC3ENV_COMMIT" || { echo "build with --build-arg WC3ENV_COMMIT=<the wc3env commit cli.py pins>" >&2; \
+      exit 1; } \
+ && /opt/agentenv/bin/python -c "import io, tarfile, urllib.request; tarfile.open(fileobj=io.BytesIO(urllib.request.\
+urlopen('https://codeload.github.com/pwang724/wc3env/tar.gz/$WC3ENV_COMMIT', timeout=300).read())).extractall('/tmp')" \
+ && mv "/tmp/wc3env-$WC3ENV_COMMIT/wc3agent/src/wc3agent" /opt/host/wc3agent && rm -rf "/tmp/wc3env-$WC3ENV_COMMIT" \
+ && /opt/agentenv/bin/python -c "import wc3agent.game.featurize, wc3agent.micro.request"
 COPY docker/with-display.sh /opt/agentenv/with-display.sh
 RUN /opt/agentenv/bin/pip install --no-cache-dir --no-deps /tmp/plugin && rm -rf /tmp/plugin \
  && mkdir -p /tmp/wc3-sessions && chown 10001:10001 /tmp/wc3-sessions
@@ -32,6 +40,10 @@ USER 10001:10001
 ENV WC3_GAME_DIR='C:\wc3' WC3_USER_DIR='C:\scratch\Warcraft III' WC3_OUTPUT_DIR='Z:\tmp\wc3-sessions' \
     MCP_HOST=0.0.0.0 MCP_PORT=18765 WC3_SCREEN=1920x1080x24
 EXPOSE 18765
+# The game style the image serves (styles.py): raw (env wc3) or commander (env wc3-commander). Last, so the styles'
+# images share every other layer.
+ARG STYLE=raw
+ENV WC3_STYLE=$STYLE
 # with-display.sh starts Xvfb (WC3_SCREEN), runs the server, and stops Wine and the display when it exits.
-ENTRYPOINT ["bash", "/opt/agentenv/with-display.sh", "/opt/agentenv/bin/python", "-m", "agentenv_wc3.server"]
+ENTRYPOINT ["bash", "/opt/agentenv/with-display.sh", "/opt/agentenv/bin/python", "-m", "agentenv_wc3.styles"]
 CMD []
