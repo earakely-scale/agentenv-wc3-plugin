@@ -83,6 +83,26 @@ async def test_the_spectators_see_its_model_and_plans(env_vars):
         "Plan: rush."]
 
 
+async def test_only_replies_in_a_row_without_a_tool_call_stop_it(env_vars):
+    agent = llm()
+
+    async def complete(http, base, key, model, chat, tools):
+        last = chat[-1]
+        if last["role"] == "tool" and "GAME OVER" in last["content"]:
+            return {"content": "Over."}, {}, 0.0
+        if last["role"] == "tool":
+            return {"content": None}, {}, 0.0   # a turn cut off before any tool call
+        return calling("advance", len(chat), seconds=20), {}, 0.0
+
+    agent.complete = complete
+    env = WC3Env()
+    async with deployed(env) as record:
+        player = agent.Player("anthropic/claude-haiku-4-5", {"url": record.environment_url + "/mcp"}, ENDPOINT, 100)
+        await player.play("Play.")
+        over, _ = await player.over()
+    assert over and player.stats["nudges"] > agent.NUDGES
+
+
 def test_old_tool_results_are_trimmed_all_at_once():
     agent = llm()
     chat = [{"role": "user", "content": "go"}]

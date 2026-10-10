@@ -3,10 +3,10 @@ the rest), as the vs-ai tasks ask: the prompt_agent step's prompt is the first m
 agent-env's model endpoint (LITELLM_BASE_URL, LITELLM_API_KEY; any model it serves that calls tools).
 
 A plain tool loop: the model calls tools until it answers without one, and is told to keep playing (up to NUDGES
-times) if the game is not over then. A long game fits: once the tool results pass TRIM_CHARS, all but the last KEEP
-are trimmed, and the system prompt and the newest message are marked for prompt caching, so each turn pays for its
-history once (Anthropic models through LiteLLM; other providers ignore the marks). Spectators see its model as its
-name, what it writes between tool calls as its plan, and its running cost (urn:rts:note/v1). With
+times in a row) if the game is not over then. A long game fits: once the tool results pass TRIM_CHARS, all but the
+last KEEP are trimmed, and the system prompt and the newest message are marked for prompt caching, so each turn pays
+for its history once (Anthropic models through LiteLLM; other providers ignore the marks). Spectators see its model
+as its name, what it writes between tool calls as its plan, and its running cost (urn:rts:note/v1). With
 WC3_MAX_COST_USD it stops playing once a game has cost that much (the task's finish_match then plays the game out).
 """
 
@@ -175,6 +175,7 @@ class Player:
                 ClientSession(read, write) as mcp, httpx.AsyncClient(timeout=model_timeout) as http:
             await mcp.initialize()
             tools = tools_of((await mcp.list_tools()).tools)
+            idle = 0   # replies in a row without a tool call
             while self.stats["turns"] < self.max_turns:
                 if self.stats["cost_usd"] >= self.max_cost:
                     self.stats["stopped_at_cost_cap"] = True
@@ -192,11 +193,13 @@ class Player:
                     if calls:
                         await self.note("plan", text)
                 if not calls:
-                    if (await self.over())[0] or self.stats["nudges"] >= NUDGES:
+                    if (await self.over())[0] or idle >= NUDGES:
                         break
+                    idle += 1
                     self.stats["nudges"] += 1
                     self.say({"role": "user", "content": NUDGE})
                     continue
+                idle = 0
                 for call in calls:
                     self.say({"role": "tool", "tool_call_id": call["id"],
                               "content": await self.call(mcp, call["function"])})
