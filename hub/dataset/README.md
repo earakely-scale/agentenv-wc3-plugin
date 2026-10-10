@@ -71,22 +71,29 @@ per player. A task is played in one of three **styles**, each its own env or age
 - **wc3agent** (agent `wc3-macro-micro` on env `wc3`): wc3env's own agent, as Peter Wang built it: a macro model, and
   a micro model answering each unit group's menu.
 
-This dataset holds three v1 task sets in those styles and every run of them from 2026-10-09 and 2026-10-10, played on
-the real game:
+This dataset holds three v1 task sets and every run of them from 2026-10-09 and 2026-10-10, played on the real game.
+Each set is a bundle per style, and a task is the same game in every style:
 
-| Bundle | Tasks | What the agent does | Graded on | Runs |
+| Set | Tasks | What the agent does | Graded on | Runs |
 |---|---:|---|---|---:|
-| `wc3-v1-drills` | 25 | one skill in a staged scene of 1.5 to 10 game minutes: economy, map control, defence, combat, creeping, hero and items, a full game | the share of its checks met; passed when all are | 75 |
-| `wc3-v1-ladder` | 12 | a 30-minute game as Human against the game's easy, normal or insane Orc AI, on Echo Isles or Terenas Stand, seed 1 or 2 | the outcome: a win 1, a draw at the time limit 0.5, a loss 0 | 38 |
-| `wc3-v1-duels` | 16 | a mirror duel: two identical late-game armies of one race, against Warcraft's own attack-move, seeds 1 to 4 | the outcome, decided once one army is down to 40% of the other's strength | 26 |
+| drills | 25 | one skill in a staged scene of 1.5 to 10 game minutes: economy, map control, defence, combat, creeping, hero and items, a full game | the share of its checks met; passed when all are | 150 |
+| ladder | 12 | a 30-minute game as Human against the game's easy, normal or insane Orc AI, on Echo Isles or Terenas Stand, seed 1 or 2 | the outcome: a win 1, a draw at the time limit 0.5, a loss 0 | 74 |
+| duels | 16 | a mirror duel: two identical late-game armies of one race, against Warcraft's own attack-move, seeds 1 to 4 | the outcome, decided once one army is down to 40% of the other's strength | 72 |
+
+| Set | raw | commander | wc3agent |
+|---|---|---|---|
+| drills | `wc3-v1-drills`: 75 runs | `wc3-v1-drills-commander`: 75 runs | |
+| ladder | `wc3-v1-ladder`: 38 runs | `wc3-v1-ladder-commander`: 36 runs | |
+| duels | `wc3-v1-duels`: 26 runs | `wc3-v1-duels-commander`: 40 runs | `wc3-v1-duels-wc3agent`: 6 runs |
 
 Every run comes with:
-- its video in the game's own picture (all but the three `drill-shopping` runs, see
+- its video in the game's own picture (all but the six `drill-shopping` runs{DRIFTED}, see
   [How the videos were made](#how-the-videos-were-made));
 - its replay in the browser, with the video beside the env's map;
 - its timeline;
 - the game's own `.w3g` replay;
-- from env v34, the agent's untrimmed transcript.
+- the agent's own record: from env v34, `wc3-llm`'s untrimmed transcript; for wc3agent's seed-2 duels, its report
+  and session.
 
  **[Watch them in the Space](https://huggingface.co/spaces/earakely-scale/wc3env-AgentEnv).** The dataset and the Space make up the
 collection [wc3env on AgentEnv](https://huggingface.co/collections/earakely-scale/wc3env-on-agentenv-6ac924a8810f02942599a5a4).
@@ -98,48 +105,64 @@ III: Reforged (it includes the classic game) and an x86-64 Linux host; see [Play
 
 ## Results
 
-**The ladder** (Human against the Orc AI, 30-minute games; DeepSeek, Haiku and GPT-5.4 mini each played all 12
-games):
+The same three low-cost models played every set in the raw and commander styles, and wc3agent played six of the
+duels. The plugin's [styles](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/styles.md)
+reads the styles side by side.
 
-| Model | Won / drawn / lost | Score share | Cost a game |
-|---|---|---:|---:|
-| DeepSeek V4.1 Flash | 0 / 1 / 11 | 26% | $0.10 |
-| Claude Haiku 4.5 | 0 / 0 / 12 | 21% | $0.34 |
-| GPT-5.4 mini | 0 / 0 / 12 | 19% | $0.12 |
-| Claude Sonnet 5.5 (normal AI, Echo Isles, seed 2) | draw | 29% | $1.23 |
-| Claude Opus 5.5 (normal AI, Echo Isles, seed 2) | loss at 27.5 minutes | 31% | $3.14 |
+**The drills** (passed, of 25):
 
-No model beats any level, not even the easy AI. The low-cost models bank their money, rarely cut lumber, and send
-armies of four to seven Footmen at the AI's base. Sonnet and Opus spend what they mine and act on the env's
-feedback, but fall behind after 12 to 18 minutes.
+| Model | Raw | Commander | Checks met, raw | Checks met, commander | Cost a drill, raw | Cost a drill, commander |
+|---|---:|---:|---:|---:|---:|---:|
+| DeepSeek V4.1 Flash | 11 | 11 | 82% | 79% | $0.02 | $0.03 |
+| Claude Haiku 4.5 | 3 | 9 | 62% | 74% | $0.11 | $0.13 |
+| GPT-5.4 mini | 2 | 7 | 49% | 60% | $0.03 | $0.05 |
 
-**The drills:**
+The commander style lifts the two weaker models. Its page says what can be built now and what is still short, and
+its order language builds, trains and gathers in a line each. It does worse in the combat drills (a mean reward of
+0.23 against 0.44): it has no micro model, and the models seldom take a fight over. On the raw tools the cheapest
+model plays the drills best, and the checks most models miss are `idle_worker_seconds` (a worker idle for more than
+30 seconds) and `average_unspent_gold`.
 
-| Model | Passed | Checks met | Cost a drill |
-|---|---:|---:|---:|
-| DeepSeek V4.1 Flash | 11 of 25 | 82% | $0.02 |
-| Claude Haiku 4.5 | 3 of 25 | 62% | $0.11 |
-| GPT-5.4 mini | 2 of 25 | 49% | $0.03 |
+**The ladder** (Human against the Orc AI, 30-minute games; each model played all 12 games in each style):
 
-The cheapest model plays the drills best. The checks most models miss are `idle_worker_seconds` (a worker idle for
-more than 30 seconds) and `average_unspent_gold`.
+| Model | Won / drawn / lost, raw | Won / drawn / lost, commander | Score share, raw | Score share, commander | Cost a game, raw | Cost a game, commander |
+|---|---|---|---:|---:|---:|---:|
+| DeepSeek V4.1 Flash | 0 / 1 / 11 | 0 / 2 / 10 | 26% | 31% | $0.10 | $0.12 |
+| Claude Haiku 4.5 | 0 / 0 / 12 | 0 / 0 / 12 | 21% | 24% | $0.34 | $0.44 |
+| GPT-5.4 mini | 0 / 0 / 12 | 0 / 1 / 11 | 19% | 18% | $0.12 | $0.12 |
 
-**The duels** (26 of the 48 planned: seeds 1 and 2 and part of 3, before the run's budget ran out):
+No model beats any level in either style, not even the easy AI. On the raw tools the low-cost models bank their
+money, rarely cut lumber, and send armies of four to seven Footmen at the AI's base. In the commander style they last
+longer and kill more: DeepSeek 28 units a game against 12, and a draw against the normal AI. Claude Sonnet 5.5 drew
+and Claude Opus 5.5 lost at 27.5 minutes, each in one raw game against the normal AI on Echo Isles ($1.23 and
+$3.14): they spend what they mine and act on the env's feedback, but fall behind after 12 to 18 minutes.
 
-| Player 0 | Duels | Points | Won / drawn / lost | Cost a duel |
-|---|---:|---:|---|---:|
-| DeepSeek V4.1 Flash | 9 | 0.33 | 3 / 0 / 6 | $0.07 |
-| Claude Haiku 4.5 | 9 | 0.28 | 2 / 1 / 6 | $0.31 |
-| GPT-5.4 mini | 8 | 0.00 | 0 / 0 / 8 | $0.14 |
-| Warcraft's own attack-move (`duels_references`) | 24 | 0.63 | 14 / 2 / 8 | $0 |
+**The duels:**
 
-Each model fights worse than Warcraft's attack-move from the same player slot.
+| Player 0 | Style | Duels | Points | Won / drawn / lost | Cost a duel |
+|---|---|---:|---:|---|---:|
+| DeepSeek V4.1 Flash | raw | 9 | 0.33 | 3 / 0 / 6 | $0.07 |
+| DeepSeek V4.1 Flash | commander | 14 | 0.36 | 5 / 0 / 9 | $0.13 |
+| DeepSeek V4.1 Flash, Claude Haiku 4.5 micro | wc3agent | 6 | 0.67 | 4 / 0 / 2 | $1.85 |
+| Claude Haiku 4.5 | raw | 9 | 0.28 | 2 / 1 / 6 | $0.31 |
+| Claude Haiku 4.5 | commander | 13 | 0.23 | 3 / 0 / 10 | $0.43 |
+| GPT-5.4 mini | raw | 8 | 0.00 | 0 / 0 / 8 | $0.14 |
+| GPT-5.4 mini | commander | 13 | 0.46 | 6 / 0 / 7 | $0.10 |
+| Warcraft's own attack-move (`duels_references`) | | 24 | 0.63 | 14 / 2 / 8 | $0 |
+
+The budgets played 26 of the 48 raw duels and 40 of the commander ones. On the 26 both played, GPT-5.4 mini won 5
+against 0: in the commander style it groups its whole army and attack-moves it at the enemy base, as Warcraft does.
+DeepSeek won 3 against 3, and Haiku 1 against 2 and a draw. wc3agent, the only player with a model for the fights,
+wins the most, at $1.85 a duel against DeepSeek's $0.07 raw and $0.13 commander. Read the duels with two caveats,
+both in [Limitations](#limitations): four wins came from razing the opponent's only building, and 13 commander duels
+ended early.
 
 The plugin's [docs/evals](https://github.com/earakely-scale/agentenv-wc3-plugin/tree/v0.5.0/docs/evals) read these
 runs game by game: [ladder](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/ladder.md),
 [drills](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/drills.md),
-[duels](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/duels.md) and
-[frontier](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/frontier.md).
+[duels](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/duels.md),
+[frontier](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/frontier.md) and
+[styles](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/docs/evals/styles.md).
 
 ## Tables
 
@@ -160,14 +183,14 @@ that run has no `video`, and its replay shows the env's map alone.
 | Config | Rows | One row is |
 |---|---:|---|
 | `ladder_tasks` | 12 | a ladder game: map, seed, the AI's level and race, time limit |
-| `ladder_episodes` | 38 | a run: model, outcome, reward, score against the AI's, units killed, orders and orders refused, turns, game seconds, cost |
+| `ladder_episodes` | 74 | a run: who played it, outcome, reward, score against the AI's, units killed, orders and orders refused, turns, game seconds, cost |
 | `drills_tasks` | 25 | a drill: its skill, opponent, time limit and checks (`metric`, `op`, `value`) |
-| `drills_episodes` | 75 | a run: each check met or not with what was measured, the share met, passed, turns, cost |
+| `drills_episodes` | 150 | a run: who played it, each check met or not with what was measured, the share met, passed, turns, cost |
 | `duels_tasks` | 16 | a duel: race, seed, time limit, the strength ratio that decides it |
-| `duels_episodes` | 26 | a run: outcome, score share, the share of its army it kept and of the enemy's it destroyed, cost |
+| `duels_episodes` | 72 | a run: who played it, outcome, score share, the share of its army it kept and of the enemy's it destroyed, cost |
 | `duels_references` | 24 | a Warcraft-against-Warcraft duel, from player 0's side: outcome, score share, its files (seeds 1 to 6; `task` names the v1 duel it mirrors) |
-| `wc3-v1-*_tasks` | 25, 12, 16 | a bundle task: its steps and prompt (agentenv-hf) |
-| `wc3-v1-*_episodes` | 75, 38, 26 | a run: reward, scores, verifications, `messages` (the chat transcript), tool calls (agentenv-hf) |
+| `<bundle>_tasks` | 25, 12 or 16 | a bundle task: its steps and prompt (agentenv-hf), for each of the seven bundles |
+| `<bundle>_episodes` | its runs | a run: reward, scores, verifications, `messages` (`wc3-llm`'s chat transcript; none for wc3agent), tool calls (agentenv-hf) |
 
 Beside the tables, each run's files are under its `episode_id` (`<bundle>/<run>`, or `duels-references/<run>`):
 
@@ -237,27 +260,36 @@ agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --bundle wc3-v1-drills-co
 agent-env hf run earakely-scale/wc3env-AgentEnv@v0.5.0 --bundle wc3-v1-duels-wc3agent --task mirror-orc-s1
 ```
 
-Without `--model`, a task plays Claude Haiku 4.5; `wc3-v1-duels-wc3agent`'s play DeepSeek V4.1 Flash as wc3agent's macro model, as its runs did, with Claude Haiku 4.5 as its micro. `--dry-run` shows what would run, and `--yes` skips the question.
+Without `--model`, a task plays Claude Haiku 4.5; `wc3-v1-duels-wc3agent`'s play DeepSeek V4.1 Flash as wc3agent's
+macro model, as its runs did, with Claude Haiku 4.5 as its micro. `--dry-run` shows what would run, and `--yes`
+skips the question.
 The plugin's [README](https://github.com/earakely-scale/agentenv-wc3-plugin/tree/v0.5.0#play-the-real-game-x86-64-linux)
 has the setup in full. It also covers watching a game live and getting its video and replay, and `agent-env wc3
 sweep` for running a task set across models.
 
 ## How the runs were made
 
-Each set was played as a sweep by `wc3-llm`, the plugin's agent: any chat model, with the env's tools. The sweeps ran
-two or three games at a time on one Linux host, under a spend budget. `runs/` has each sweep's spec and results.
+Each set was played as a sweep, by `wc3-llm`, the plugin's agent (any chat model, with the style's tools), or by
+`wc3-macro-micro` (wc3agent). The sweeps ran two or three games at a time on one Linux host, under a spend budget.
+`runs/` has each sweep's spec, results and report.
 
-| Sweep | Bundle | Models | Per-game cap |
+| Sweep | Bundle | Players | Per-game cap |
 |---|---|---|---:|
 | `drills-final` | `wc3-v1-drills` | DeepSeek V4.1 Flash, Haiku 4.5, GPT-5.4 mini | $0.50 |
+| `drills-commander` | `wc3-v1-drills-commander` | the same three | $0.50 |
 | `ladder-final` | `wc3-v1-ladder` | the same three | $2 |
+| `ladder-commander` | `wc3-v1-ladder-commander` | the same three | $2 |
 | `frontier-final` | `wc3-v1-ladder` (one task) | Claude Sonnet 5.5, Claude Opus 5.5 | $5 |
 | `duels-final` | `wc3-v1-duels` | DeepSeek V4.1 Flash, Haiku 4.5, GPT-5.4 mini | $0.50 |
+| `duels-commander` | `wc3-v1-duels-commander` | the same three | $0.50 |
+| `duels-macro-micro` | `wc3-v1-duels-wc3agent` | wc3agent: DeepSeek V4.1 Flash, with Claude Haiku 4.5 as its micro | $4 |
 | `duel-baselines-final` | `duels_references` | `wc3-scripted` in both player slots | $0 |
 
-The env changed during the day (plugin env versions v32 to v36). The fixes report why the game dropped an order, keep
-a dead hero in view, and check each order on its own; each fix reached the games started after it. A sweep's task
-names carry the model (`ladder-gpt-5.4-mini-echoisles-vs-easy-orc-s1`); here each run is filed under its v1 task.
+The raw env changed during 2026-10-09 (plugin env versions v32 to v36). The fixes report why the game dropped an
+order, keep a dead hero in view, and check each order on its own; each fix reached the games started after it. On
+2026-10-10 the commander sweeps played `wc3-commander` v1, and wc3agent's duels the raw env v37 (seed 1) and v38
+(seed 2), which play them alike. A sweep's task names carry the model (`ladder-gpt-5.4-mini-echoisles-vs-easy-orc-s1`);
+here each run is filed under its v1 task.
 
 ## How the videos were made
 
@@ -291,7 +323,22 @@ env's map alone.
 ## Limitations
 
 - **Few runs.** One game per model and task, so a model's ladder record is 12 games, and the frontier models played
-  one ladder task each. The duels stopped at 26 of 48.
+  one ladder task each. The raw duels stopped at 26 of 48 and the commander duels at 40, and wc3agent played six
+  duels: seed 1 of each race and seed 2 of the human and night elf mirrors.
+- **A duel can be won by the base.** On odd seeds each army starts nearer the enemy's base than the enemy army is.
+  Four wins (three commander, one raw, all in the orc mirror) came from attack-moving at the opponent's Great Hall:
+  the armies passed each other, the hall fell, and Warcraft's melee rule defeated the player with no buildings. The
+  duel's goal asks for the enemy army, but the grade counts the game's result.
+- **Some players stopped early.** In 13 commander duels the player stopped giving orders more than 15 game seconds
+  before the end, and lost each. Haiku reached the $0.50 cap in 8 of its 13: each commander turn returns the whole
+  page. DeepSeek's turns came back empty: `wc3-llm` allowed 4,096 output tokens a turn, and DeepSeek's reasoning ran
+  past them before it called a tool. Plugin v0.5.0 allows 32,768, and these runs were played before that.
+- **The commander style has no micro model.** A group fights by Warcraft's attack-move unless the model takes the
+  fight over with `fight` and `choose`, which the models seldom do.
+- **wc3agent's micro is Haiku, not Jev.** wc3agent's own micro model needs a TypeSafe key. With Haiku a duel costs
+  about $1.85 (Haiku costs about $0.03 a game second), so a 30-minute ladder game would cost about $50, and wc3agent
+  played duels only. Its four seed-1 duels were played before a fix: it kept running after the env decided the duel,
+  so their report and session weren't kept.
 - **Duels on Echo Isles.** wc3agent ran its duels on a flat arena built from Echo Isles, which needs Windows tools to
   build. Here the armies meet in Echo Isles' middle, with the creeps in sight cleared and odd seeds swapping the
   sides. Warcraft against Warcraft scores 15 of 24 for player 0 in these games, and 59% over the 48 since the
@@ -307,7 +354,8 @@ The tasks, records and tables are Apache-2.0, like the plugin. The transcripts a
 - [wc3env](https://github.com/pwang724/wc3env) (MIT), by Peter Wang: the game under Wine, the hook that observes and
   orders it, and the fake game the plugin's tests use.
 - wc3agent (MIT), in wc3env's repository: the scenarios the drills are built from, the mirror duel and the heroes'
-  skill builds.
+  skill builds; the commander style's interface (its pages, order language, reflexes and unit menus), and the agent
+  that `wc3-macro-micro` runs.
 
 This dataset and its Space are built by
 [`scripts/hub_dataset.py`](https://github.com/earakely-scale/agentenv-wc3-plugin/blob/v0.5.0/scripts/hub_dataset.py)

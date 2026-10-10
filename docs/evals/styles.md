@@ -18,7 +18,7 @@ each with the raw sweep's models, caps and seeds, except where said.
 In short: the commander style lifts the weaker models in the drills (Haiku passes 9 of 25 against 3, GPT-5.4 mini 7
 against 2) and keeps every model in a ladder game longer, but it doesn't fight better. In the duels GPT-5.4 mini goes
 from 0 of 8 to 5 of 8 by attack-moving as Warcraft does. wc3agent, the only style with a model for the fights, wins 4
-of its 6 duels at about 20 times the cost of a commander duel.
+of its 6 duels, at 14 to 26 times the cost of DeepSeek's commander and raw duels.
 
 ## Drills
 
@@ -26,9 +26,9 @@ Sweep `drills-commander`: the 25 drills for the same three models, 75 drills, $5
 
 | Model | Passed, commander | Passed, raw | Checks met, commander | Checks met, raw | Cost a drill, commander | Cost a drill, raw | Turns, commander | Turns, raw |
 |---|---|---|---|---|---|---|---|---|
-| DeepSeek V4.1 Flash | 11 of 25 | 11 of 25 | 79% | 81% | $0.027 | $0.023 | 22 | 35 |
-| Claude Haiku 4.5 | 9 of 25 | 3 of 25 | 70% | 59% | $0.125 | $0.107 | 31 | 49 |
-| GPT-5.4 mini | 7 of 25 | 2 of 25 | 64% | 48% | $0.054 | $0.033 | 21 | 21 |
+| DeepSeek V4.1 Flash | 11 of 25 | 11 of 25 | 79% | 82% | $0.027 | $0.023 | 22 | 35 |
+| Claude Haiku 4.5 | 9 of 25 | 3 of 25 | 74% | 62% | $0.125 | $0.107 | 31 | 49 |
+| GPT-5.4 mini | 7 of 25 | 2 of 25 | 60% | 49% | $0.054 | $0.033 | 21 | 21 |
 
 **The commander style lifts the two weaker models a lot and leaves the strongest where it was.** Haiku passes three
 times as many drills and GPT-5.4 mini three and a half times as many; DeepSeek, the best raw player, passes the
@@ -133,11 +133,12 @@ spend.
 | night elf, seed 2 | won | lost | won | $1.53 |
 | **won** | **4 of 6** | **2 of 6** | **3 of 6** | **$1.85 a duel** |
 
-**wc3agent wins the most duels, at about 20 times the cost.** Its micro model answers a menu for each group every
-game second, 300 to 450 model calls a duel; these are the fights the commander style leaves to attack-move. Its own
-micro model, Jev, is a trained model that needs a TypeSafe key; Haiku stands in for it here. At $1.50 a duel it
-stopped 50 seconds in, before the armies were decided, so the cap is $4. Six duels are too few to rank the three:
-one won or lost duel moves a column by 17 points.
+**wc3agent wins the most duels, at 14 to 26 times the cost.** It cost $1.85 a duel, against DeepSeek's $0.13 in
+the commander style and $0.07 on the raw tools. Its micro model answers a menu for each group every game second, 300
+to 450 model calls a duel; these are the fights the commander style leaves to attack-move. Its own micro model, Jev,
+is a trained model that needs a TypeSafe key; Haiku stands in for it here. At $1.50 a duel it stopped 50 seconds in,
+before the armies were decided, so the cap is $4. Six duels are too few to rank the three: one won or lost duel
+moves a column by 17 points.
 
 The four seed-1 duels were played before a fix to the agent. wc3agent then kept running after the env decided a duel,
 until the task's 30-minute timeout, so their reports and transcripts were not kept. The env decides the duel, so
