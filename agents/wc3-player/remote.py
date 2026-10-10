@@ -43,8 +43,11 @@ class RemoteGameSession:
     def step(self, actions: dict[int, list], ms: int | None = None):
         result = self.remote.step(self.player(actions), ms if ms is not None else self.config.step_ms)
         self.observations, self.done = self.player(result["observations"]), result["done"]
-        if self.capped() and not self.observations[0].get("result"):   # wc3agent stops when its side has a result
-            self.observations[0] = {**self.observations[0], "result": COST_CAP}
+        # wc3agent stops when its side's observation has a result; an env that decides the game (a duel's strength
+        # ratio) says so in its reply, while the game's own observation has none and the clock stops
+        ended = COST_CAP if self.capped() else (result.get("result") or "game_over") if self.done else None
+        if ended and not self.observations[0].get("result"):
+            self.observations[0] = {**self.observations[0], "result": ended}
         rejected, placements = self.player(result["rejected"]), self.player(result["placements"])
         for slot in actions:
             rejected.setdefault(slot, [])

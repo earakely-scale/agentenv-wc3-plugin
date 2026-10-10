@@ -135,13 +135,14 @@ async def test_wc3agent_stops_at_its_cost_cap_and_the_env_plays_on(env_vars, tmp
 class SlotEnv:
     """A stand-in env serving one player slot as an env serves it: every request comes in under /players/1, the player
     is player 1 (wc3env's fake world, with a peon beside the orc hall) and sees only its own observation, and three
-    seconds in one of the other side's peasants dies."""
+    seconds in one of the other side's peasants dies. With `decided`, the env decides the game then (a duel's strength
+    ratio): its replies say done with the env's result, the game's own observation has none, and the clock stops."""
 
     ENDPOINTS = {OBSERVE: "/rts/observe", STEP: "/rts/step", DEBUG: "/rts/debug", NOTE: "/rts/note",
                  FILE: "/rts/file"}
 
-    def __init__(self, seconds=30):
-        self.world, self.seconds = fake_server.SyntheticWorld.echo_isles_start(), seconds
+    def __init__(self, seconds=30, decided=None):
+        self.world, self.seconds, self.decided = fake_server.SyntheticWorld.echo_isles_start(), seconds, decided
         self.world.units[2001] = {**self.world.units[1001], "unit_id": 2001, "type_id": "opeo", "owner": 1,
                                   "x": 5000.0, "y": -2800.0}
         self.paths, self.steps, self.notes, self.files = [], [], [], {}
@@ -184,6 +185,8 @@ class SlotEnv:
         if name == "observe":
             return self.state()
         self.steps.append(body["actions"])
+        if self.state()["done"]:
+            return {**self.state(), "rejected": {"1": []}, "placements": {"1": []}, "elapsed_ms": 0}
         rejected = self.world.act(1, body["actions"].get("1", []))
         self.world.advance(body["ms"])
         return {**self.state(), "rejected": {"1": rejected}, "placements": {"1": []}, "elapsed_ms": body["ms"]}
@@ -193,8 +196,10 @@ class SlotEnv:
         obs = {**self.world.observe(1), "game_time_seconds": self.world.game_time_ms / 1000}
         if dying:
             obs["events"] = [{"kind": "death", "unit_id": 1001, "type_id": "hpea", "owner": 0}]
-        done = obs["game_time_seconds"] >= self.seconds
-        return {"observations": {"1": obs}, "player_id": "1", "done": done, "result": "time_limit" if done else None,
+        decided = self.decided is not None and obs["game_time_seconds"] >= self.decided
+        done = decided or obs["game_time_seconds"] >= self.seconds
+        return {"observations": {"1": obs}, "player_id": "1", "done": done,
+                "result": "victory" if decided else "time_limit" if done else None,
                 "player_slots": [{"player_id": "0", "player_kind": "agent", "player_name": "other", "faction": "human",
                                   "team": 1},
                                  {"player_id": "1", "player_kind": "agent", "player_name": "wc3", "faction": "orc",
@@ -225,6 +230,20 @@ async def test_wc3agent_plays_its_player_slot_with_the_prompt_as_its_goal(monkey
     assert all(f"THIS GAME IS A TEST OF ONE THING. {goal}" in m for m in models.macro)
     assert any(re.search(r"enemy peasant\d+ died", m) for m in models.macro)
     assert not any(re.search(r"your peasant\d+ died", m) for m in models.macro)
+
+
+async def test_wc3agent_stops_once_the_env_decides_its_game(monkeypatch):
+    agent = player()
+    models, slot = Models(), SlotEnv(decided=5)
+    monkeypatch.setattr(agent.os, "environ", {**agent.os.environ, "LITELLM_BASE_URL": models.url,
+                                              "LITELLM_API_KEY": "sk-test", "WC3_MICRO_MODEL": "off"})
+    request = TaskRequest(task_id="t", context_id="c", parts=(TextPart(text="Win the duel."),),
+                          config=agent.WC3Config(model="anthropic/claude-sonnet-5-5"),
+                          mcp_servers={"wc3": {"url": slot.url}})
+    result = await asyncio.wait_for(agent.WC3Player().run(request), 60)
+    assert result.outcome is TaskOutcome.SUCCEEDED, result.error
+    assert slot.world.game_time_ms < 30000 and slot.state()["result"] == "victory"
+    assert slot.files == {"wc3agent-report.html": "text/html", "wc3agent-session.zip": "application/zip"}
 
 
 def test_the_micro_transport_fills_wc3agents_record():
