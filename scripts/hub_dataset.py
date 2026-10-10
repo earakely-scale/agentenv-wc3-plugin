@@ -82,6 +82,12 @@ FEATURED = (   # the Space's "Start here", by episode id, each with what to watc
      "Lasts the full 30 minutes against the normal AI for a draw, though its army trails from minute 12."),
     ("wc3-v1-duels/duels-undead-deepseek-v4p1-flash-s1-msjysvkm",
      "Beats Warcraft's own attack-move with the same Undead army in 54 seconds, keeping 79% of its army."),
+    ("wc3-v1-duels-commander/duels-commander-undead-gpt-5.4-mini-s1-n2omxmm7",
+     "The commander style: GPT-5.4 mini groups its whole Undead army in one order and attack-moves it at the enemy "
+     "base. It wins in 61 seconds, keeping 75% of its army, a duel it lost on the raw tools."),
+    ("wc3-v1-duels-wc3agent/duels-macro-micro-nightelf-s2-6ff8zp1c",
+     "wc3agent: DeepSeek V4.1 Flash plans while Claude Haiku 4.5 answers each group's menu every second. It wins the "
+     "Night Elf mirror in 59 seconds; wc3agent's own report is linked."),
     ("wc3-v1-drills/drills-hero-in-danger-deepseek-v4p1-flash-cqelp2cl",
      "Keeps a badly hurt hero alive with enemies on top of it: uses one of its items, spends its skill points and "
      "ends at 79% health."),
