@@ -6,6 +6,7 @@ import io
 import json
 import re
 import types
+import zipfile
 from pathlib import Path
 
 import pyarrow as pa
@@ -138,6 +139,11 @@ def test_the_check_stops_a_path_or_host_of_this_machine_in_any_file(hub):
     pq.write_table(pa.Table.from_pylist([{"error": "connect to proxy.example.scale.com failed"}]), sink)
     with pytest.raises(ValueError, match="scale.com"):
         hub.check({"episodes/x.parquet": sink.getvalue()})
+    session = io.BytesIO()
+    with zipfile.ZipFile(session, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("calls.jsonl", '{"base_url": "https://proxy.example.scale.com"}' * 50)
+    with pytest.raises(ValueError, match=r"sessions/x.zip/calls.jsonl"):
+        hub.check({"sessions/x.zip": session.getvalue()})
 
 
 def test_a_runs_files_are_kept_under_its_episode_id_and_its_row_names_them(hub, monkeypatch):
@@ -157,7 +163,13 @@ def test_a_runs_files_are_kept_under_its_episode_id_and_its_row_names_them(hub, 
                      "w3g/wc3-v1-duels/t-abc.w3g.json": b'{"setup": {"seed": 1}, "ai_difficulty": 0}',
                      "transcripts/wc3-v1-duels/t-abc.json": b"wc3-g-1-p0-wc3-llm-transcript.json"}
     assert columns == {"replay": "replays/wc3-v1-duels/t-abc.html", "timeline": "timelines/wc3-v1-duels/t-abc.json",
-                       "w3g": "w3g/wc3-v1-duels/t-abc.w3g", "transcript": "transcripts/wc3-v1-duels/t-abc.json"}
+                       "w3g": "w3g/wc3-v1-duels/t-abc.w3g", "transcript": "transcripts/wc3-v1-duels/t-abc.json",
+                       "report": None, "session": None}
+    saved[-1:] = [{"kind": "agent_files", "name": name, "artifact_id": name, "version": 1}
+                  for name in ("wc3-g-1-p0-wc3agent-report.html", "wc3-g-1-p0-wc3agent-session.zip")]
+    files, columns = hub.run_files("@local/~/runs/x/t-abc", "wc3-v1-duels-wc3agent/t-abc", easy)
+    assert files["reports/wc3-v1-duels-wc3agent/t-abc.html"] == b"wc3-g-1-p0-wc3agent-report.html"
+    assert columns["session"] == "sessions/wc3-v1-duels-wc3agent/t-abc.zip" and columns["transcript"] is None
 
 
 def write_parquet(path: Path, rows: list[dict]) -> None:
@@ -167,7 +179,8 @@ def write_parquet(path: Path, rows: list[dict]) -> None:
 
 def test_the_space_lists_every_run_in_order_and_loads_replays_from_the_dataset_tag(hub, tmp_path, monkeypatch):
     data = tmp_path / "dataset"
-    files = {"replay": "replays/x.html", "timeline": "timelines/x.json", "w3g": "w3g/x.w3g", "transcript": None}
+    files = {"replay": "replays/x.html", "timeline": "timelines/x.json", "w3g": "w3g/x.w3g", "transcript": None,
+             "report": None, "session": None}
     base = {"outcome": "loss", "reward": 0.0, "score_share": 0.3, "game_seconds": 60.0, "turns": 10, "cost_usd": 0.1,
             "orders": 9, "orders_refused": 1, "units_killed": 0, "style": "raw", "micro_model": None, **files}
     ladder = {"map": "Echo Isles", "race": "human", "seed": 1, "opponent_race": "orc"}

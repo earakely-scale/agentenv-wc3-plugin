@@ -193,7 +193,9 @@ async function play(run) {
     el("span", {class: "chip", text: money(run.cost_usd)})].filter(Boolean));
   const links = [["Video", run.video && fileUrl(run.video)], ["Transcript", run.transcript && blobUrl(run.transcript)],
                  ["Timeline JSON", run.timeline && blobUrl(run.timeline)], [".w3g replay", run.w3g && fileUrl(run.w3g)],
-                 ["Replay file", run.replay && fileUrl(run.replay)]];
+                 ["Replay file", run.replay && fileUrl(run.replay)],
+                 ["wc3agent's report", run.report && fileUrl(run.report)],
+                 ["wc3agent's session", run.session && fileUrl(run.session)]];
   $("r-links").replaceChildren(...links.filter(([, u]) => u).map(([t, u]) => el("a", {href: u, target: "_blank", rel: "noopener", text: t})));
   const facts = [`${race(run.race)} on ${run.map}`, `against ${run.opponent}`, `seed ${run.seed}`];
   if (run.orders != null) facts.push(`${run.orders} orders${run.orders_refused ? `, ${run.orders_refused} refused by the game` : ""}`);

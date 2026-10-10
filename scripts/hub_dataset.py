@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -93,8 +94,11 @@ SAVED = {   # a run's match files that the dataset keeps, by kind and name endin
     ("replay", ".w3g"): "w3g/{id}.w3g",
     ("replay", ".w3g.json"): "w3g/{id}.w3g.json",
     ("agent_files", "-wc3-llm-transcript.json"): "transcripts/{id}.json",
+    ("agent_files", "-wc3agent-report.html"): "reports/{id}.html",
+    ("agent_files", "-wc3agent-session.zip"): "sessions/{id}.zip",
 }
-COLUMNS = {"replays": "replay", "timelines": "timeline", "w3g": "w3g", "transcripts": "transcript"}
+COLUMNS = {"replays": "replay", "timelines": "timeline", "w3g": "w3g", "transcripts": "transcript",
+           "reports": "report", "sessions": "session"}
 FOLDERS = ("tasks", "episodes", "references", "raw", "runs", "bundles", "assets", *COLUMNS)
 LEAKS = re.compile(rb"/home/|/Users/|scale\.com|amazonaws|\bi-0[0-9a-f]{8,}\b|arakelyan", re.IGNORECASE)
 
@@ -255,7 +259,7 @@ def reference_row(s: Spec, tasks: set[str], r: dict) -> dict:
 
 def run_files(instance: str, episode_id: str, task: list[dict]) -> tuple[dict[str, bytes], dict[str, str | None]]:
     """A run's files the dataset keeps (its HTML replay, timeline, .w3g with its startup options, and wc3-llm's
-    untrimmed transcript) under its episode id, and the columns that point to them. The map's video is left out:
+    untrimmed transcript, or wc3agent's report and session) under its episode id, and the columns that point to them. The map's video is left out:
     the HTML replay plays the same pictures. The startup options get back the AI level `task` started the game
     with, which wc3env leaves out when it is easy (0)."""
     record = find_task_instance(instance)
@@ -356,13 +360,21 @@ def card_text(plugin: str) -> str:
 
 
 def check(files: dict[str, bytes]) -> None:
-    """agentenv-hf's key check, then this machine's paths and hosts, which no record should carry out."""
+    """agentenv-hf's key check, then this machine's paths and hosts, which no record should carry out. A zip's
+    members are checked as files of their own: the zip's bytes hide what it compresses."""
+    files = files | {f"{path}/{name}": content for path, z in files.items() if path.endswith(".zip")
+                     for name, content in unzipped(z).items()}
     scan(files, known_values())
     for path, content in files.items():
         if path.endswith(".parquet"):
             content = json.dumps(pq.read_table(io.BytesIO(content)).to_pylist(), default=str).encode()
         if found := LEAKS.search(content):
             raise ValueError(f"{path} holds {found[0].decode(errors='replace')!r}")
+
+
+def unzipped(content: bytes) -> dict[str, bytes]:
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        return {i.filename: z.read(i) for i in z.infolist()}
 
 
 def build(runs_dir: Path, out: Path, plugin: str) -> dict[str, bytes]:
