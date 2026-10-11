@@ -87,7 +87,7 @@ Each set is a bundle per style, and a task is the same game in every style:
 | duels | `wc3-v1-duels`: 26 runs | `wc3-v1-duels-commander`: 40 runs | `wc3-v1-duels-wc3agent`: 6 runs |
 
 Every run comes with:
-- its video in the game's own picture (all but the six `drill-shopping` runs{DRIFTED}, see
+- its video in the game's own picture (all but the six `drill-shopping` runs and one commander duel, see
   [How the videos were made](#how-the-videos-were-made));
 - its replay in the browser, with the video beside the env's map;
 - its timeline;
@@ -154,7 +154,7 @@ The budgets played 26 of the 48 raw duels and 40 of the commander ones. On the 2
 against 0: in the commander style it groups its whole army and attack-moves it at the enemy base, as Warcraft does.
 DeepSeek won 3 against 3, and Haiku 1 against 2 and a draw. wc3agent, the only player with a model for the fights,
 wins the most, at $1.85 a duel against DeepSeek's $0.07 raw and $0.13 commander. Read the duels with two caveats,
-both in [Limitations](#limitations): four wins came from razing the opponent's only building, and 13 commander duels
+both in [Limitations](#limitations): six wins came from razing the opponent's only building, and 13 commander duels
 ended early.
 
 The plugin's [docs/evals](https://github.com/earakely-scale/agentenv-wc3-plugin/tree/v0.5.0/docs/evals) read these
@@ -196,11 +196,13 @@ Beside the tables, each run's files are under its `episode_id` (`<bundle>/<run>`
 
 | Folder | Runs | What a file is |
 |---|---:|---|
-| `videos/` | 160 | the game's own picture as an MP4 (960×540), rendered from the run's replay: the camera follows the agent's fights and key moments, and its plans show in the game as it wrote them. Ladder games play at 8×, drills at 2×, duels at the game's pace. |
-| `replays/` | 163 | the replay in a browser: one HTML file with the whole game in it. It plays the run's video beside the env's map (every unit any player sees), the event feed, the agent's plans and both sides' momentum, scrubbable. It finds the video at `../../videos/`, as in this repo. |
-| `timelines/` | 163 | the same game as JSON: every frame's units, events and notes, to analyse or redraw a game without playing it |
-| `w3g/` | 163 | the game's own replay (`.w3g`), which plays in Warcraft III 1.29, with its startup options (`.w3g.json`). wc3env saves those without the AI level when it is easy (0), and a playback then fields the normal AI. These files have it back. |
-| `transcripts/` | 103 | `wc3-llm`'s untrimmed transcript: every message and tool call, where `messages` holds what the model was sent (from env v34) |
+| `videos/` | 313 | the game's own picture as an MP4 (960×540), rendered from the run's replay: the camera follows the agent's fights and key moments, and its plans show in the game as it wrote them. Ladder games play at 8×, drills at 2×, duels at the game's pace. |
+| `replays/` | 320 | the replay in a browser: one HTML file with the whole game in it. It plays the run's video beside the env's map (every unit any player sees), the event feed, the agent's plans and both sides' momentum, scrubbable. It finds the video at `../../videos/`, as in this repo. |
+| `timelines/` | 320 | the same game as JSON: every frame's units, events and notes, to analyse or redraw a game without playing it |
+| `w3g/` | 320 | the game's own replay (`.w3g`), which plays in Warcraft III 1.29, with its startup options (`.w3g.json`). wc3env saves those without the AI level when it is easy (0), and a playback then fields the normal AI. These files have it back. |
+| `transcripts/` | 254 | `wc3-llm`'s untrimmed transcript: every message and tool call, where `messages` holds what the model was sent (from env v34) |
+| `reports/` | 2 | wc3agent's own report of a duel (HTML), for its two seed-2 duels |
+| `sessions/` | 2 | wc3agent's session of a duel (zip): its model calls, actions, outcomes, transcript and summary |
 
 And:
 - `bundles/<bundle>/`: the bundles that `agent-env hf run` plays.
@@ -309,16 +311,21 @@ picture on:
 
 **Every published video is checked against the game.** Its playback must end on the score the live game's own
 timeline last showed for the run's lead player; both are read from the game's observations, so the check is exact.
-All 160 do. A playback that drifted would not be published, since it would show a game the agent didn't play.
-- **The one cause of drift found, now fixed.** Six playbacks first drifted, all of games where the easy AI was set:
-  wc3env saves a replay's startup without an AI level of 0, so they played back against the normal AI. With the
-  level restored from the task, all six end in sync.
-- **The render's own record.** `videos/<run>.mp4.json`, next to each video, has the render's pace and final scores.
+313 of the 314 rendered do. A playback that drifted is not published, since it would show a game the agent didn't
+play.
+- **The AI level, fixed.** Six playbacks first drifted, all of games where the easy AI was set: wc3env saves a
+  replay's startup without an AI level of 0, so they played back against the normal AI. With the level restored from
+  the task, all six end in sync.
+- **One playback drifts, cause unknown.** Commander Haiku's orc duel on seed 3 plays back to the same victory but
+  ends half a second early, at 31.65 game seconds against 32.15, with 26,528 points against the live game's 26,535.
+  A second render ended the same way. Its replay page shows the env's map alone.
+- **The render's own record.** `videos/<run>.mp4.json`, next to each video (and for the drifted run, alone), has the
+  render's pace and final scores.
 
-**The three `drill-shopping` runs have no video.** Their staging lets the game run 460 seconds first, a minute at a
-time, and the game plays those minute-long steps of a replay back short: about 422 seconds instead of 460. The
-playback therefore can't reach the drill's start in step with the game that was played. Their replay pages show the
-env's map alone.
+**The six `drill-shopping` runs have no video,** three in each style. Their staging lets the game run 460 seconds
+first, a minute at a time, and the game plays those minute-long steps of a replay back short: about 422 seconds
+instead of 460. The playback therefore can't reach the drill's start in step with the game that was played, so they
+weren't rendered. Their replay pages show the env's map alone.
 
 ## Limitations
 
@@ -326,9 +333,9 @@ env's map alone.
   one ladder task each. The raw duels stopped at 26 of 48 and the commander duels at 40, and wc3agent played six
   duels: seed 1 of each race and seed 2 of the human and night elf mirrors.
 - **A duel can be won by the base.** On odd seeds each army starts nearer the enemy's base than the enemy army is.
-  Four wins (three commander, one raw, all in the orc mirror) came from attack-moving at the opponent's Great Hall:
-  the armies passed each other, the hall fell, and Warcraft's melee rule defeated the player with no buildings. The
-  duel's goal asks for the enemy army, but the grade counts the game's result.
+  Six wins (five commander, one raw, all in the orc mirror) came from attack-moving at the opponent's Great Hall, its
+  only building: the hall fell, and Warcraft's melee rule defeated the player with no buildings. In five of them the
+  enemy army was untouched. The duel's goal asks for the enemy army, but the grade counts the game's result.
 - **Some players stopped early.** In 13 commander duels the player stopped giving orders more than 15 game seconds
   before the end, and lost each. Haiku reached the $0.50 cap in 8 of its 13: each commander turn returns the whole
   page. DeepSeek's turns came back empty: `wc3-llm` allowed 4,096 output tokens a turn, DeepSeek's reasoning ran past

@@ -84,12 +84,13 @@ ordered units one by one, 130 orders a duel, and lost all 8.
 
 **Two kinds of ending come from elsewhere, and they account for most of DeepSeek's and Haiku's losses:**
 - **The base.** On odd seeds each army starts on the far side of the middle, nearer the enemy's base than the enemy
-  army is. Three commander wins (DeepSeek's orc seeds 1 and 3, GPT-5.4 mini's orc seed 1) and one raw win (Haiku's
-  orc seed 1) came from attack-moving at the opponent's Great Hall, its only building. The armies passed each other,
-  the hall fell at about 30 seconds, and Warcraft's melee rule defeated the player with no buildings and removed its
-  army; no unit was killed. The duel's goal asks for the enemy army, but the game's result is a win and the grade
-  counts it as one. Without these wins GPT-5.4 mini has 4 of 8 against 0, DeepSeek 2 of 9 against 3, and Haiku 1
-  of 9 against 1 and a draw.
+  army is. Two paired commander wins (DeepSeek's and GPT-5.4 mini's orc seed 1) and one raw win (Haiku's orc seed 1)
+  came from attack-moving at the opponent's Great Hall, its only building. The armies passed each other, the hall
+  fell at about 30 seconds, and Warcraft's melee rule defeated the player with no buildings and removed its army; no
+  unit was killed. The duel's goal asks for the enemy army, but the game's result is a win and the grade counts it as
+  one. Without these wins GPT-5.4 mini has 4 of 8 against 0, DeepSeek 2 of 9 against 3, and Haiku 1 of 9 against 1
+  and a draw. Over all 40 commander duels the hall ended five wins, all in the orc mirror, and in four of them the
+  enemy army was untouched.
 - **Stopping early.** In 13 commander duels the player stopped more than 15 game seconds before the end, and lost
   all 13 (4 of the 26 raw duels). Haiku reached the $0.50 cap in 8 of its 13 commander duels (1 of 9 raw): every
   commander turn returns the whole page, and its turns cost $0.015 against $0.004 on the raw tools. DeepSeek's turns

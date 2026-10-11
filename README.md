@@ -922,8 +922,8 @@ extensions and `/live`, gives agentenv-game-env its spectator card and match fil
   - A human player slot, and wc3agent's decision-panel replay.
 - **A duel can be won by the base.** On odd seeds each army starts nearer the enemy's base than the enemy army is,
   and razing the opponent's only building wins by Warcraft's melee rule, though the duel's goal asks for the enemy
-  army. Four duel wins came that way. Invulnerable town halls in the duel's staging would close it; the published
-  duels were played without.
+  army. Six duel wins, all in the orc mirror, came that way. Invulnerable town halls in the duel's staging would
+  close it; the published duels were played without.
 - **Battle.net on the Linux host.** Its installer and launcher run under Wine in a container, but on a host with no
   GPU the login page's embedded browser doesn't draw (its renderer restarts in a loop, with Mesa's software Vulkan
   and DXVK too), so the game's download still needs Windows. The rest of the setup runs on Linux.
