@@ -202,7 +202,7 @@ Beside the tables, each run's files are under its `episode_id` (`<bundle>/<run>`
 | `w3g/` | 320 | the game's own replay (`.w3g`), which plays in Warcraft III 1.29, with its startup options (`.w3g.json`). wc3env saves those without the AI level when it is easy (0), and a playback then fields the normal AI. These files have it back. |
 | `transcripts/` | 254 | `wc3-llm`'s untrimmed transcript: every message and tool call, where `messages` holds what the model was sent (from env v34) |
 | `reports/` | 2 | wc3agent's own report of a duel (HTML), for its two seed-2 duels |
-| `sessions/` | 2 | wc3agent's session of a duel (zip): its model calls, actions, outcomes, transcript and summary |
+| `sessions/` | 2 | wc3agent's session of a duel (zip): its model calls, actions, system prompt, pinned goal, transcript and summary |
 
 And:
 - `bundles/<bundle>/`: the bundles that `agent-env hf run` plays.
