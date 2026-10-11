@@ -1,5 +1,6 @@
 """`rts_grade` on synthetic summaries (today's, without player slots, and one with them), the smoke rubric against the
-script the smoke task was graded by before it, and as a step reading a served env's data/get."""
+script the smoke task was graded by before it, and as a step reading a served env's data/get; `rts_summary` keeping
+that data/get."""
 
 import pytest
 from agent_env.task_step.registry import get_task_step_registry
@@ -8,7 +9,7 @@ from agentenv_protocol import AgentEnvEnvironment, DataPart, client, environment
 from conftest import STEPS
 from test_steps import deployed, run_context
 
-from agentenv_rts.grade import RTSGradeTaskStep, VoidMatch
+from agentenv_rts.grade import RTSGradeTaskStep, RTSSummaryTaskStep, VoidMatch
 
 pytestmark = pytest.mark.anyio
 
@@ -306,6 +307,19 @@ async def test_the_step_grades_what_data_get_reports_with_the_runs_overrides():
     assert set(overridden.metadata["verifications"]) == {"wc3:bob"}
     assert "army_ratio" in by_name(overridden.metadata["verifications"]["wc3:bob"]["results"])
     assert grade.rubric == "outcome" and grade.player_names is None
+
+
+async def test_rts_summary_keeps_what_data_get_reports_for_a_task_another_step_grades(local_stores):
+    data = {"id": "summary", "type": "rts_summary", "version": None, "env_id": "wc3", "timeout_seconds": 60,
+            "fail_task_on_error": True, "depends_on": [{"task_step_id": "finish"}]}
+    assert STEPS["rts_summary"] == "agentenv_rts.grade:RTSSummaryTaskStep"
+    registered = get_task_step_registry()["rts_summary"]
+    assert registered is RTSSummaryTaskStep and registered.from_dict(data).to_dict() == data
+    defaults = registered.from_dict({"id": "summary", "type": "rts_summary", "env_id": "wc3"})
+    assert (defaults.timeout_seconds, defaults.fail_task_on_error) == (300, False)
+    async with deployed(FakeSummary(DUEL)) as record:
+        context = await defaults.execute(run_context(record))
+    assert context.metadata["rts_summary"] == {"summary": DUEL} and "verifications" not in context.metadata
 
 
 async def test_todays_env_is_graded_under_the_verifier_id_alone():

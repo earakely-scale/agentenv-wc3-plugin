@@ -2,7 +2,8 @@
 player gets its own verification, scored by agent-env's weighted average, so runs, evals and the hub read it as they
 read any verifier's; a failed gate outweighs every criterion and zeroes it. The default rubric is the outcome alone: a
 win 1, a draw 0.5, a loss 0, where a game nobody won by its time limit is a draw; a match that never got an outcome is
-void and fails the step rather than reading as a loss."""
+void and fails the step rather than reading as a loss. A task graded on the outcome alone can use agentenv-game-env's
+grade_match instead, with `rts_summary` keeping the summary that rts_grade keeps."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from agent_env.entity_refs import EntityRef
+from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.task_step import TaskStep
 from agent_env.task_step.task_steps.verifiers.scoring import ScoreAggregator, aggregate_score
@@ -229,6 +231,18 @@ def _number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _deployed(context: TaskStepContext, env_id: str) -> DeployedEnv:
+    deployed = next((d for d in context.deployed_envs if d.env_id == env_id), None)
+    if deployed is None:
+        raise RuntimeError(f"env {env_id!r} is not deployed in this run")
+    return deployed
+
+
+async def summary_of(deployed: DeployedEnv, timeout: int) -> dict:
+    """The env's summary of its game: its `data/get`."""
+    return (await client.get_data(deployed.mcp_url.removesuffix("/mcp"), timeout=timeout)).parts[0].data
+
+
 class RTSGradeTaskStep(TaskStep):
     """Grade the players of a deployed RTS env's finished game: `rubric` picks the preset criteria, `weights` reweighs
     them (0 drops one, a weight adds one from another preset), `targets` sets full credit, `checks` adds metric
@@ -323,12 +337,9 @@ class RTSGradeTaskStep(TaskStep):
 
     async def execute(self, context: TaskStepContext) -> TaskStepContext:
         step = self.from_dict({**self.to_dict(), **self.step_param_overrides(context)})
-        deployed = next((d for d in context.deployed_envs if d.env_id == step.env_id), None)
-        if deployed is None:
-            raise RuntimeError(f"env {step.env_id!r} is not deployed in this run")
+        deployed = _deployed(context, step.env_id)
         try:
-            summary = (await client.get_data(deployed.mcp_url.removesuffix("/mcp"),
-                                             timeout=step.timeout_seconds)).parts[0].data
+            summary = await summary_of(deployed, step.timeout_seconds)
         except Exception as e:
             log.warning("rts_grade: env %r did not answer data/get: %r", step.env_id, e)
             keys = ([step.verifier_id] if step.player_names is None
@@ -342,4 +353,34 @@ class RTSGradeTaskStep(TaskStep):
         for key, rows in graded.items():
             verifications[key] = {"results": rows, "score": aggregate_score(rows, ScoreAggregator.WEIGHTED_AVERAGE)}
             log.info("rts_grade %s: %d criteria, score %.3f", key, len(rows), verifications[key]["score"])
+        return context
+
+
+class RTSSummaryTaskStep(TaskStep):
+    """Keep a deployed RTS env's summary of its finished game (its `data/get`: each player slot's result, metrics,
+    orders and spend) in the run's `metadata["rts_summary"]`, by this step's id, as rts_grade does, for a task another
+    step grades (agentenv-game-env's grade_match): sweeps and datasets read it. A summary the env can't give fails
+    only this step, since the grade doesn't depend on it."""
+
+    type: ClassVar[str] = "rts_summary"
+    entity_refs = (EntityRef.env("env_id"),)
+
+    def __init__(self, id: str, version: int | None, env_id: str, timeout_seconds: int = 300,
+                 depends_on: list | None = None, fail_task_on_error: bool = False):
+        super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
+        self.env_id, self.timeout_seconds = env_id, timeout_seconds
+
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "env_id": self.env_id, "timeout_seconds": self.timeout_seconds}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> RTSSummaryTaskStep:
+        return cls(**{**cls._base_from_dict(data), "fail_task_on_error": data.get("fail_task_on_error", False)},
+                   env_id=data["env_id"], **({"timeout_seconds": data["timeout_seconds"]}
+                                             if "timeout_seconds" in data else {}))
+
+    async def execute(self, context: TaskStepContext) -> TaskStepContext:
+        summary = await summary_of(_deployed(context, self.env_id), self.timeout_seconds)
+        context.metadata.setdefault("rts_summary", {})[self.id] = summary
+        log.info("rts_summary: %s's game, %s game seconds", self.env_id, summary.get("game_time_seconds"))
         return context

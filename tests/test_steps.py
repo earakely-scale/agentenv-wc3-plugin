@@ -19,6 +19,7 @@ from agent_env.task.task import Task
 from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.registry import get_task_step_registry
 from agentenv_game import LICENSE
+from agentenv_game.grade import GradeMatchTaskStep
 from agentenv_game.steps import (
     AddLicenseTaskStep,
     AddPlayerSlotTaskStep,
@@ -32,7 +33,7 @@ from agentenv_protocol.types import WELL_KNOWN_PATH
 from click.testing import CliRunner
 from conftest import ONE_AGENT, slot_request
 
-from agentenv_rts.grade import RTSGradeTaskStep
+from agentenv_rts.grade import RTSGradeTaskStep, RTSSummaryTaskStep
 from agentenv_wc3 import cli
 from agentenv_wc3.license import LICENSE_SECRETS, license_from_secrets, read_license
 from agentenv_wc3.server import WC3Env
@@ -241,6 +242,26 @@ async def test_a_game_without_a_replay_keeps_its_other_files_and_says_why(env_va
     assert any("save_match_files: no replay" in m for m in caplog.messages)
 
 
+async def test_grade_match_grades_wc3s_match_as_rts_grade_does_with_rts_summary_beside_it(env_vars, license_dir,
+                                                                                          local_stores):
+    async with deployed(WC3Env()) as record:
+        context = await fill_and_close(await open_match(record, time_limit_seconds=60))
+        await FinishMatchTaskStep(id="finish", version=None, env_id="wc3").execute(context)
+        await RTSSummaryTaskStep(id="summary", version=None, env_id="wc3").execute(context)
+        await GradeMatchTaskStep(id="grade", version=None, env_id="wc3", verifier_id="wc3").execute(context)
+        await RTSGradeTaskStep(id="before", version=None, env_id="wc3", verifier_id="before",
+                               gates=["game_ran"]).execute(context)
+        await RTSGradeTaskStep(id="gated", version=None, env_id="wc3", verifier_id="gated").execute(context)
+    verifications = context.metadata["verifications"]
+    assert verifications["wc3"]["score"] == verifications["before"]["score"] == 0.5
+    assert verifications["gated"]["score"] == 0.0   # rts_grade's agent_played gate: this agent gave no orders
+    outcome, *scores = verifications["wc3"]["results"]
+    assert outcome["evidence"].startswith("a draw: the match ended without deciding this player (the time limit")
+    assert [s["name"] for s in scores] == ["score", "units_killed", "army"]
+    [player] = [s for s in context.metadata["rts_summary"]["summary"]["player_slots"] if s["player_kind"] == "agent"]
+    assert player["result"] == "time_limit"
+
+
 @pytest.mark.parametrize("task", sorted(p.stem for p in (BUNDLE / "tasks").glob("*.json")))
 def test_every_bundle_task_loads_is_graded_and_saves_its_match_files(local_stores, task):
     import json
@@ -258,11 +279,15 @@ def test_every_bundle_task_loads_is_graded_and_saves_its_match_files(local_store
     assert {s["agent_name"] for s in steps if s["type"] == "prompt_agent"} <= playing
     assert all(s["env_ids"] == [] for s in steps if s["type"] == "deploy_agent")
     assert all(not ({"match", "player slot"} & set(s["depends_on"])) for s in steps if s["type"] == "prompt_agent")
-    grade = by_type["rts_grade"]
-    expected = (("smoke", "smoke") if task == "smoke" else ("checks", "drill") if task.startswith("drill-")
-                else ("dense", "duel") if task.startswith("duel") else ("dense", task) if task.startswith("broadcast")
-                else ("outcome", "duel") if task.startswith("mirror-") else ("outcome", "wc3"))
-    assert grade["id"] == "grade" and (grade.get("rubric", "outcome"), grade["verifier_id"]) == expected
+    grade = next(s for s in steps if s["id"] == "grade")
+    rubric = (("smoke", "smoke") if task == "smoke" else ("checks", "drill") if task.startswith("drill-")
+              else ("dense", "duel") if task.startswith("duel") else ("dense", task) if task.startswith("broadcast")
+              else ("outcome", "duel") if task.startswith("mirror-") else None)
+    if rubric is None:   # the outcome alone: game-env's grade_match, with the summary rts_grade would keep beside it
+        assert (grade["type"], grade["verifier_id"]) == ("grade_match", "wc3")
+        assert by_type["rts_summary"]["depends_on"] == [by_type["finish_match"]["id"]]
+    else:
+        assert (grade["type"], grade.get("rubric", "outcome"), grade["verifier_id"]) == ("rts_grade", *rubric)
     assert by_type["finish_match"]["id"] in grade["depends_on"]   # every match is played out before it is graded
     plays = [s for s in steps if s["type"] == "prompt_agent"]
     if task != "smoke":

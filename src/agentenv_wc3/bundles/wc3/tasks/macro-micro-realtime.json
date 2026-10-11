@@ -108,10 +108,17 @@
     ]
   },
   {
-    "id": "grade",
-    "type": "rts_grade",
+    "id": "summary",
+    "type": "rts_summary",
     "env_id": "wc3",
-    "rubric": "outcome",
+    "depends_on": [
+      "finish"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "grade_match",
+    "env_id": "wc3",
     "verifier_id": "wc3",
     "depends_on": [
       "finish"

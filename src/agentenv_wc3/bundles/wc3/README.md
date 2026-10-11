@@ -17,11 +17,11 @@ Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once),
 `wc3-llm` plays with any chat model agent-env's model endpoint serves: the `prompt_agent` step's `model`, or
 `agent-env run --model`. `agent-env wc3 setup --agent` builds and registers it with the other agents.
 
-`rts_grade` (rubric `outcome`) grades a game on its outcome: a win 1, a draw 0.5, a loss 0, where a game nobody has
-won by the time limit is a draw. The game's score, army and kills are reported beside it with no weight. A gate zeroes
-the grade when the agent gave no orders, and a match with no outcome (cancelled, failed, or its engine down) is void:
-the grade step fails rather than reading as a loss. A full game's play step tolerates a failed agent, so its game is
-still played out and graded. `smoke` is graded by the `smoke` rubric.
+agentenv-game-env's `grade_match` grades a full game on its outcome: a win 1, a draw 0.5, a loss 0, where a game
+nobody has won by the time limit is a draw. The game's score, units killed and army are reported beside it with no
+weight, and `rts_summary` keeps the env's summary of the game for sweeps. A match with no outcome (cancelled, or
+failed with its engine) is void: the grade step fails rather than reading as a loss. A full game's play step tolerates
+a failed agent, so its game is still played out and graded. `smoke` is graded by `rts_grade`'s `smoke` rubric.
 
 - `macro-micro-quick`, `macro-micro` and `macro-micro-realtime`: the `wc3-macro-micro` agent (wc3env's wc3agent:
   a macro model plans, a micro model controls the army) plays through the env's `urn:rts` session, Haiku 4.5 for both

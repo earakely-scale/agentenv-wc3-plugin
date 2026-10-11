@@ -294,15 +294,19 @@ costs about $1.20 (there is nothing to fight, so the micro model is never asked)
   and the timeline as JSON, to recut or analyse a game without playing it again. `macro-micro-realtime` keeps the
   game's own video, with chapters, and a highlight reel in place of the timeline; its HTML replay plays the video
   beside the map once `agent-env wc3 recordings` puts both in one folder.
-- **Grading:** `rts_grade` grades each agent. The full games use the `outcome` rubric:
+- **Grading:** the full games (`vs-ai`, `vs-ai-quick` and the `macro-micro` tasks, and the ladder) are graded by
+  agentenv-game-env's `grade_match`, on the outcome alone:
   - a win 1, a draw 0.5, a loss 0; a win needs every enemy defeated, and a game nobody has won by the time limit is
     a draw;
-  - the game's score, army and kills are kept beside the grade, for the record, but don't count;
-  - the grade is 0 if the agent gave no orders;
-  - a match with no outcome (cancelled, failed, or its game engine down) is void: the grade step fails, so the run
+  - the game's score, units killed and army are kept beside the grade, for the record, but don't count;
+  - a match with no outcome (cancelled, or failed with its game engine) is void: the grade step fails, so the run
     shows failed rather than a loss;
-  - an agent that fails mid-game has its game played out, and keeps its outcome.
+  - an agent that fails mid-game has its game played out, and keeps its outcome. So does an agent that gave no
+    orders at all, which `rts_grade`'s gate scored 0;
+  - `rts_summary` keeps the env's summary of the game beside the grade (each player slot's result, metrics, orders
+    and spend), for sweeps and the Hub dataset.
 
+  The rest use `rts_grade`: the duels its `outcome` rubric with two of wc3agent's measures for the record;
   `duel-quick` and `broadcast-smoke` add the score, army, kills, buildings, tier, expansions and hero level
   (`dense`); drills use their own checks; `smoke` checks that the game ran to its limit and was played out.
 
@@ -325,7 +329,9 @@ is built from a few steps; the ones from agentenv-game-env are documented in ful
 | `prompt_agent` | agent-env | One per agent: the prompt, and the model it plays on. It lasts the whole game |
 | `finish_match` | agentenv-game-env | After every play step: plays the match out to its end, with no more orders from its agents |
 | `save_broadcast` | agentenv-game-env | With `start_broadcast`, after `finish_match`: keeps the broadcast's video |
-| `rts_grade` | this plugin | Grades each agent with a rubric, weights, targets and checks |
+| `grade_match` | agentenv-game-env | Grades each agent on the match's outcome, with its scores for the record ([Grading on the outcome](#grading-on-the-outcome-grade_match-and-rts_summary)) |
+| `rts_summary` | this plugin | With `grade_match`: keeps the env's summary of the game, which sweeps and the Hub dataset read |
+| `rts_grade` | this plugin | Grades each agent with a rubric, weights, targets and checks on wc3agent's metrics |
 | `save_match_files` | agentenv-game-env | Keeps the match's files: the `.w3g`, the map's MP4, the HTML replay, the timeline JSON, and on request the game's video and highlights |
 
 A game runs as this DAG:
@@ -334,7 +340,7 @@ A game runs as this DAG:
 deploy ─┬─► open_lobby ─┬─► add_player_slot (the AI) ──────────────────┐
         │               └─► add_player_slot (an agent) ◄─ deploy_agent ┤
         └─► add_license ───────────────────────────────────────────────┴─► close_lobby ─► stage ─► play (per agent)
-                                                         ─► finish_match ─► rts_grade ─► save_match_files
+                                    ─► finish_match ─► grade_match and rts_summary, or rts_grade ─► save_match_files
    optional: close_lobby (or stage) ─► start_broadcast ─► play;  finish_match ─► save_broadcast
 ```
 
@@ -766,6 +772,24 @@ Harness time, not the agents': `apply_server_config` sends the ops in order, aft
   `enemy` (its opponents') also feed `army_kept_percent` and `enemy_army_destroyed_percent`.
 - **`warmup_seconds`** (up to 600) lets the game run before the ops.
 
+### Grading on the outcome: `grade_match` and `rts_summary`
+
+A game graded on its outcome alone uses agentenv-game-env's
+[`grade_match`](https://github.com/earakely-scale/agentenv-game-env#grade_match), which reads only the match and
+its lobby: a win 1, a draw 0.5, a loss 0, and WC3's scores (`score`, `units_killed`, `army`) as rows for the record,
+or counted as a share against the best opponent's with `weights`. Beside it, `rts_summary` keeps the env's `data/get`
+in the run's `metadata["rts_summary"]`, as `rts_grade` does: the sweep report and the Hub dataset read each player
+slot's result, metrics, orders and spend from it.
+
+```json
+{"id": "summary", "type": "rts_summary", "env_id": "wc3", "depends_on": ["finish"]},
+{"id": "grade", "type": "grade_match", "env_id": "wc3", "verifier_id": "wc3", "depends_on": ["finish"]}
+```
+
+On the stored real-game runs, `grade_match` reads the same outcome as `rts_grade` for all 493 graded players, and
+gives the same grade for all 254 that `rts_grade` graded on the outcome. It has no gate: an agent that gave no orders
+is graded on its outcome, where `rts_grade` scores it 0.
+
 ### Grading: `rts_grade`
 
 - **`rubric`:** `outcome` (the default), `dense`, `checks` or `smoke`.
@@ -868,7 +892,7 @@ and orders only its own side; an `omniscient` slot's session observes every play
 | AgentEnv piece | Here |
 |---|---|
 | Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level), and its match, `urn:game:match/v1` (the start gate, the play-out, each player's outcome and scores, the spectator view at `/spectators` and the match's files); six MCP tools; `data/get` (the result, and per player slot its result and wc3agent's metrics); the extensions `urn:game:license/v1` and `urn:wc3:stage/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; and `/live` |
-| Task steps | `add_license`, `open_lobby`, `add_player_slot`, `close_lobby`, `finish_match`, `cancel_match`, `save_match_files`, `start_broadcast` and `save_broadcast`, from agentenv-game-env; `rts_grade`, in `agentenv_rts/grade.py` |
+| Task steps | `add_license`, `open_lobby`, `add_player_slot`, `close_lobby`, `finish_match`, `cancel_match`, `grade_match`, `save_match_files`, `start_broadcast` and `save_broadcast`, from agentenv-game-env; `rts_grade` and `rts_summary`, in `agentenv_rts/grade.py` |
 | Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
 | CLI | `agent-env wc3 check`, `setup` (`--fake`, `--agent`), `license` (`import`, `show`), `serve`, `watch`, `recordings`, `drills import`, `sweep` (`generate`, `run`, `report`) |
@@ -888,7 +912,7 @@ and orders only its own side; an `omniscient` slot's session observes every play
 | `recording.py` | A match's recording by kind: the MP4 of the map from the timeline (Pillow and ffmpeg), the HTML replay, the timeline, the game's video and highlights, written to a folder for the env's match files |
 | `display.py` | The game's own picture from an X display: one ffmpeg writes the match's video and the live JPEG stream |
 | `highlights.py` | A match's major moments on its video's clock: chapters embedded in the video and a highlight reel (ffmpeg) |
-| `grade.py` | `rts_grade`: grades each agent from the env's `data/get` summary with a rubric set in the task (`outcome`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets and gates ([the design](docs/task-design.md#rts_grade-judgement)) |
+| `grade.py` | `rts_grade`: grades each agent from the env's `data/get` summary with a rubric set in the task (`outcome`, `dense`, `checks` on wc3agent's metrics, `smoke`), its weights, targets and gates ([the design](docs/task-design.md#rts_grade-judgement)); `rts_summary`: keeps that summary for a task `grade_match` grades |
 | `choices.py` | Unit-level decisions as choice questions any chat model answers, in Jev's shape |
 
 A game supplies an adapter from its observations to the timeline (here `agentenv_wc3/frames.py`), serves the session
