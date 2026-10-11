@@ -21,7 +21,7 @@ classifiers = [
 dependencies = [
     "agentenv-framework>=0.9.1298",
     "agentenv-framework-protocol>=0.1.275,<0.2",
-    "agentenv-game-env @ https://github.com/earakely-scale/agentenv-game-env/archive/8a335fa3917f88eb9c698920c12e494f3cc29bb9.tar.gz",
+    "agentenv-game-env @ https://github.com/earakely-scale/agentenv-game-env/archive/81ef9f2bf724aca2ba3a94212c8d539eb171c189.tar.gz",
     "agentenv-hf @ https://github.com/earakely-scale/agentenv-hf-plugin/archive/refs/tags/v0.3.0.tar.gz",
     "httpx>=0.27,<1",
     "mcp>=1.25,<2",

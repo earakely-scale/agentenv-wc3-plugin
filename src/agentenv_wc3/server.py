@@ -54,6 +54,7 @@ from agentenv_game import (
     MatchFile,
     MatchFiles,
     MatchReport,
+    Moves,
     PlayerKind,
     PlayerSlot,
     PlayerSlotLimits,
@@ -1217,7 +1218,7 @@ class WC3Env(AgentEnvGameEnv):
     @match_report
     def report(self) -> MatchReport:
         """The match as the game sees it: over once every agent's game is, or at the time limit; its clock; each
-        player slot's result and scores."""
+        player slot's result and scores; and each agent's moves, the orders it sent."""
         over, limit = self.game_over, self.scenario["time_limit_seconds"]
         rate = (1.0 if self.begun and not over else 0) if self.scenario["mode"] == "realtime" else None
         return MatchReport(
@@ -1226,7 +1227,8 @@ class WC3Env(AgentEnvGameEnv):
             progress=[Counter(name="game", unit="seconds", value=round(self._seconds(), 1), limit=limit, rate=rate)],
             outcomes={str(x["slot"]): OUTCOMES[r] for x in self.players
                       if (r := self._result_of(x["slot"])) in OUTCOMES},
-            scores={str(x["slot"]): self._scores(x["slot"]) for x in self.players} if self.metrics and self.obs else {})
+            scores={str(x["slot"]): self._scores(x["slot"]) for x in self.players} if self.metrics and self.obs else {},
+            moves={str(slot): Moves(made=sent) for slot, sent in self.orders_sent.items()})
 
     def _ending(self) -> str:
         """How the game ended, in words: who won, a draw, or the time limit; and whether finish played it out."""

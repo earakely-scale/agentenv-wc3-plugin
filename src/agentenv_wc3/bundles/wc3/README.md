@@ -19,8 +19,9 @@ Every task deploys the env registered as `wc3` (run `agent-env wc3 setup` once),
 
 agentenv-game-env's `grade_match` grades a full game on its outcome: a win 1, a draw 0.5, a loss 0, where a game
 nobody has won by the time limit is a draw. The game's score, units killed and army are reported beside it with no
-weight, and `rts_summary` keeps the env's summary of the game for sweeps. A match with no outcome (cancelled, or
-failed with its engine) is void: the grade step fails rather than reading as a loss. A full game's play step tolerates
+weight, and `rts_summary` keeps the env's summary of the game for sweeps. A gate zeroes the grade when the agent sent
+no orders (the match counts them as its moves), and a match with no outcome (cancelled, or failed with its engine) is
+void: the grade step fails rather than reading as a loss. A full game's play step tolerates
 a failed agent, so its game is still played out and graded. `smoke` is graded by `rts_grade`'s `smoke` rubric.
 
 - `macro-micro-quick`, `macro-micro` and `macro-micro-realtime`: the `wc3-macro-micro` agent (wc3env's wc3agent:

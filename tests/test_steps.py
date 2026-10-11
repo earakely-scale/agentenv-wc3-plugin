@@ -253,11 +253,12 @@ async def test_grade_match_grades_wc3s_match_as_rts_grade_does_with_rts_summary_
                                gates=["game_ran"]).execute(context)
         await RTSGradeTaskStep(id="gated", version=None, env_id="wc3", verifier_id="gated").execute(context)
     verifications = context.metadata["verifications"]
-    assert verifications["wc3"]["score"] == verifications["before"]["score"] == 0.5
-    assert verifications["gated"]["score"] == 0.0   # rts_grade's agent_played gate: this agent gave no orders
-    outcome, *scores = verifications["wc3"]["results"]
+    assert verifications["wc3"]["score"] == verifications["gated"]["score"] == 0.0   # this agent gave no orders
+    assert verifications["before"]["score"] == 0.5
+    outcome, *scores, played = verifications["wc3"]["results"]
     assert outcome["evidence"].startswith("a draw: the match ended without deciding this player (the time limit")
     assert [s["name"] for s in scores] == ["score", "units_killed", "army"]
+    assert (played["name"], played["result"], played["evidence"]) == ("played", False, "made 0, missed 0")
     [player] = [s for s in context.metadata["rts_summary"]["summary"]["player_slots"] if s["player_kind"] == "agent"]
     assert player["result"] == "time_limit"
 

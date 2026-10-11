@@ -301,8 +301,9 @@ costs about $1.20 (there is nothing to fight, so the micro model is never asked)
   - the game's score, units killed and army are kept beside the grade, for the record, but don't count;
   - a match with no outcome (cancelled, or failed with its game engine) is void: the grade step fails, so the run
     shows failed rather than a loss;
-  - an agent that fails mid-game has its game played out, and keeps its outcome. So does an agent that gave no
-    orders at all, which `rts_grade`'s gate scored 0;
+  - the grade is 0 if the agent gave no orders: WC3 counts each agent's orders as its moves, and `grade_match`'s
+    `played` gate zeroes a player that made none;
+  - an agent that fails mid-game has its game played out, and keeps its outcome;
   - `rts_summary` keeps the env's summary of the game beside the grade (each player slot's result, metrics, orders
     and spend), for sweeps and the Hub dataset.
 
@@ -787,8 +788,8 @@ slot's result, metrics, orders and spend from it.
 ```
 
 On the stored real-game runs, `grade_match` reads the same outcome as `rts_grade` for all 493 graded players, and
-gives the same grade for all 254 that `rts_grade` graded on the outcome. It has no gate: an agent that gave no orders
-is graded on its outcome, where `rts_grade` scores it 0.
+gives the same grade for all 254 that `rts_grade` graded on the outcome. WC3's match counts each agent's orders as its
+moves, so `grade_match`'s `played` gate zeroes an agent that sent none, as `rts_grade`'s `agent_played` gate does.
 
 ### Grading: `rts_grade`
 
@@ -891,7 +892,7 @@ and orders only its own side; an `omniscient` slot's session observes every play
 
 | AgentEnv piece | Here |
 |---|---|
-| Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level), and its match, `urn:game:match/v1` (the start gate, the play-out, each player's outcome and scores, the spectator view at `/spectators` and the match's files); six MCP tools; `data/get` (the result, and per player slot its result and wc3agent's metrics); the extensions `urn:game:license/v1` and `urn:wc3:stage/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; and `/live` |
+| Environment | `src/agentenv_wc3/server.py`, an `AgentEnvGameEnv` (agentenv-game-env): its lobby, `urn:game:lobby/v1` (WC3's settings, races, teams and one AI level), and its match, `urn:game:match/v1` (the start gate, the play-out, each player's outcome, scores and moves (the orders it sent), the spectator view at `/spectators` and the match's files); six MCP tools; `data/get` (the result, and per player slot its result and wc3agent's metrics); the extensions `urn:game:license/v1` and `urn:wc3:stage/v1`; the session `urn:rts:observe/v1`, `urn:rts:step/v1`, `urn:rts:debug/v1` and `urn:rts:note/v1`; and `/live` |
 | Task steps | `add_license`, `open_lobby`, `add_player_slot`, `close_lobby`, `finish_match`, `cancel_match`, `grade_match`, `save_match_files`, `start_broadcast` and `save_broadcast`, from agentenv-game-env; `rts_grade` and `rts_summary`, in `agentenv_rts/grade.py` |
 | Agents | `agents/wc3-llm`: `wc3-llm`; `agents/wc3-player`: `wc3-macro-micro`; `agents/wc3-scripted`: `wc3-scripted` |
 | Tasks | `src/agentenv_wc3/bundles/wc3/` |
