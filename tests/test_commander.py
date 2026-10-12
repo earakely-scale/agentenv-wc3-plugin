@@ -5,6 +5,7 @@ import asyncio
 import json
 import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from click.testing import CliRunner
 from test_steps import deployed, fill_and_close, open_match
 from wc3agent.game.catalog import Catalog
 from wc3agent.game.mapinfo import MapInfo
+from wc3agent.micro.agent import Pending
 from wc3env.data import MAPS, REFERENCE
 
 from agentenv_rts.session import MICRO, RemoteSession
@@ -102,6 +104,13 @@ def test_the_players_agent_answers_the_micro_questions_in_place_of_a_model(comma
         commander_module.timed_call(request, commander.micro.key, {})
     assert inbox.pending() == []
     assert commander_module.timed_call(request, "", {}, jev=lambda *a: "jev") == "jev"   # an undelegated micro
+
+
+def test_a_step_leaves_the_micro_questions_still_out_for_a_later_tick(commander, obs):
+    commander.delegate()
+    commander.micro.pending[("army", "hfoo")] = Pending(Future(), None, {}, {})
+    commander.submitted([], [], {}, obs["game_time_seconds"], obs)
+    assert list(commander.micro.pending) == [("army", "hfoo")]
 
 
 @pytest.mark.anyio

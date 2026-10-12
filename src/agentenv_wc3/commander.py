@@ -268,7 +268,8 @@ class Commander:
 
     def submitted(self, actions: list[dict], turns: list, info: dict, at: float, obs: dict) -> None:
         """The step's outcome, as wc3agent's play loop records it: a building's acknowledged site, what the game took,
-        then the micro's and outcomes' bookkeeping on the new observation."""
+        then the micro's and outcomes' bookkeeping on the new observation. The micro's calls still out stay out: its
+        answers land on a later tick, and an agent's come only after this advance."""
         for site in info.get("placements") or ():
             if 0 <= site.get("index", -1) < len(actions):
                 args = actions[site["index"]]["arguments"]
@@ -277,7 +278,6 @@ class Commander:
         refused = {r.get("index") for r in rejected}
         self.macro_memory.submitted(actions, at, turns, rejected)
         self.micro.memory.record(at, [a for i, a in enumerate(actions) if i not in refused])
-        self.micro.finish(obs)
         self.macro_memory.outcomes.finish(obs["game_time_seconds"])
         self.macro_memory.outcomes.drain()
 
