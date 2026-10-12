@@ -59,7 +59,8 @@ class Spec:
     player_step: str = "play"
     prompt: str | None = PROMPT
     style: str = "raw"
-    agent: dict | None = None   # {"id": an A2A agent, "env": its settings}: plays instead of the template's
+    agent: dict | None = None   # {"id": an A2A agent, "env": its settings}: plays instead of the template's; env
+    # alone gives the template's agent settings, in any style
 
     @classmethod
     def load(cls, path: Path) -> Spec:
@@ -73,10 +74,11 @@ class Spec:
             raise ValueError("a sweep needs at least one model")
         if spec.style not in STYLE_ENVS:
             raise ValueError(f"style must be one of {', '.join(STYLE_ENVS)}, not {spec.style!r}")
-        if spec.agent is not None and (not isinstance(spec.agent, dict) or not spec.agent.get("id")
-                                       or set(spec.agent) - {"id", "env"}):
-            raise ValueError('an agent is {id = "<A2A agent>", env = {NAME = "value"}}')
-        if spec.agent is not None and spec.style != "raw":
+        if spec.agent is not None and (not isinstance(spec.agent, dict) or set(spec.agent) - {"id", "env"}
+                                       or not (spec.agent.get("id") or spec.agent.get("env"))):
+            raise ValueError('an agent is {id = "<A2A agent>", env = {NAME = "value"}}, or env alone for the '
+                             "template's agent")
+        if spec.agent is not None and spec.agent.get("id") and spec.style != "raw":
             raise ValueError("an agent of its own plays through the env's session, not a style's tools: leave style "
                              "out")
         for race in spec.races or ():
@@ -194,8 +196,9 @@ def task_of(spec: Spec, template: list[dict], c: dict, name: str) -> list[dict]:
                 step["env_id"] = STYLE_ENVS[spec.style]
         play["prompt"] = for_style(play["prompt"], c["race"], spec.style)
     if spec.agent:
-        agent_step["a2a_agent_id"] = spec.agent["id"]
         agent_step["env_vars"].update(spec.agent.get("env") or {})
+    if spec.agent and spec.agent.get("id"):
+        agent_step["a2a_agent_id"] = spec.agent["id"]
         if skill(c["template"]) or opponent is None:   # a drill's or duel's goal is pinned; a full game is its own
             play["prompt"] = goal_of(play["prompt"], c["race"])
             agent_step["env_vars"]["WC3_GOAL"] = "prompt"

@@ -1,0 +1,13 @@
+# The commander duels of sweeps/duels-commander.toml with DeepSeek V4.1 Flash, its groups fought by wc3agent's micro
+# with OpenAI's Decisions API (gpt-6-luna) as the micro model: the agent calls it (WC3_MICRO_MODEL) and answers the
+# env's micro questions, so the env still calls no model. Without it, code and attack-move fight for the groups.
+# agent-env wc3 sweep generate sweeps/duels-commander-decisions.toml runs/duels-commander-decisions
+# agent-env wc3 sweep run runs/duels-commander-decisions --budget <dollars>
+name = "duels-commander-decisions"
+template = ["mirror-human", "mirror-orc", "mirror-undead", "mirror-nightelf"]
+models = ["fireworks_ai/deepseek-v4p1-flash"]
+seeds = [1, 2]
+prompt = ""
+max_cost_usd = 0.5
+style = "commander"
+agent = {env = {WC3_MICRO_MODEL = "decisions/gpt-6-luna"}}

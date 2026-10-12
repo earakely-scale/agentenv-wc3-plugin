@@ -1181,7 +1181,7 @@ class WC3Env(AgentEnvGameEnv):
     @player_slot_card
     def player_card(self, slot: PlayerSlot) -> EnvironmentCard:
         """An agent's player slot: its MCP tools, and the urn:rts session a program plays it through (observe, step,
-        debug, note, file), both at the slot's address."""
+        debug, note, file, and micro where the style asks it), both at the slot's address."""
         card = self._served_card()
         session = [e for e in card.capabilities.extensions or ()
                    if e.uri in (OBSERVE, STEP, DEBUG, NOTE, FILE, MICRO)]

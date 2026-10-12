@@ -162,6 +162,11 @@ def test_a_sweep_plays_its_tasks_in_a_style_or_with_an_agent_of_its_own(tmp_path
     play = next(s for s in steps if s["id"] == "play")
     assert {s["env_id"] for s in steps if "env_id" in s} == {"wc3-commander"} and manifest["style"] == "commander"
     assert "fight with the group's name" in play["prompt"] and "act queues orders" not in play["prompt"]
+    template_agent = next(s for s in steps if s["type"] == "deploy_agent" and s["agent_name"] == "wc3")
+    steps, _ = generated('style = "commander"\nagent = {env = {WC3_MICRO_MODEL = "decisions/x"}}')
+    agent = next(s for s in steps if s["type"] == "deploy_agent" and s["agent_name"] == "wc3")
+    assert agent["a2a_agent_id"] == template_agent["a2a_agent_id"] and "WC3_GOAL" not in agent["env_vars"]
+    assert agent["env_vars"]["WC3_MICRO_MODEL"] == "decisions/x" and next(s for s in steps if s["id"] == "play") == play
     steps, manifest = generated('agent = {id = "wc3-macro-micro", env = {WC3_MICRO_MODEL = "anthropic/h"}}')
     agent = next(s for s in steps if s["type"] == "deploy_agent" and s["agent_name"] == "wc3")
     play = next(s for s in steps if s["id"] == "play")
@@ -170,6 +175,7 @@ def test_a_sweep_plays_its_tasks_in_a_style_or_with_an_agent_of_its_own(tmp_path
     steps, _ = generated('agent = {id = "wc3-macro-micro"}\nmaps = ["(2)EchoIsles.w3x"]', '"vs-ai"')
     assert "WC3_GOAL" not in next(s for s in steps if s["type"] == "deploy_agent")["env_vars"]
     for extra, problem in (('style = "zerg"', "style must be one of"), ('agent = {name = "x"}', "an agent is"),
+                           ('agent = {env = {}}', "an agent is"),
                            ('style = "commander"\nagent = {id = "x"}', "leave style out")):
         (tmp_path / "spec.toml").write_text(f'name = "s"\ntemplate = "vs-ai"\nmodels = ["m/x"]\n{extra}\n')
         with pytest.raises(ValueError, match=problem):
