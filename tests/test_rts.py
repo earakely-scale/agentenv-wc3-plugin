@@ -749,6 +749,52 @@ def test_any_chat_model_answers_choice_questions_in_jevs_shape():
     assert checked["contract_valid"] is True
 
 
+def test_a_decisions_model_answers_choice_questions_in_jevs_shape_with_its_probabilities():
+    seen = []
+
+    class Endpoint(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+            body = json.dumps({"model": "gpt-6-luna", "answers": [
+                {"type": "choice", "name": "Footman 1", "choice": "Attack Grunt 2", "confidence": 0.4,
+                 "probabilities": [{"value": "Attack Grunt 2", "probability": 0.5},
+                                   {"value": "Wait for now", "probability": 0.3},
+                                   {"value": "Move back", "probability": 0.2}]},
+                {"type": "refusal", "name": "Footman 2"}],
+                "usage": {"input_tokens": 700, "output_tokens": 0}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Endpoint)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        payload = {"model": "jev-latest", "state": {"format": "readable-units-v7"}, "questions": QUESTIONS}
+        response, record = choices.answer(payload, base_url=f"http://127.0.0.1:{server.server_port}/v1",
+                                          api_key="k", model="decisions/gpt-6-luna")
+    finally:
+        server.shutdown()
+    path, body = seen[0]
+    assert path == "/openai/v1/decisions" and body["model"] == "gpt-6-luna"
+    assert json.loads(body["input"]) == {"format": "readable-units-v7"}
+    assert body["questions"][0] == {"name": "Footman 1", "type": "choice", "instructions": "Pick.", "choices": [
+        {"value": "Attack Grunt 2", "description": "Attack"}, {"value": "Wait for now", "description": "Stay idle."},
+        {"value": "Move back", "description": "Move"}]}
+    footman = response["answers"]["Footman 1"]
+    assert (footman["choice"], footman["confidence"]) == ("Attack Grunt 2", 0.4)
+    assert footman["probabilities"] == {"Attack Grunt 2": 0.5, "Wait for now": 0.3, "Move back": 0.2}
+    assert response["answers"]["Footman 2"]["choice"] == "Attack Grunt 2" and record["fallbacks"] == 1   # refused
+    assert response["usage"] == {"input_tokens": 700, "output_tokens": 0}
+    jev = pytest.importorskip("wc3agent.models.jev")
+    checked = {"request": payload, "status": 200, "response": response}
+    jev.validate_choice_response(checked)
+    assert checked["contract_valid"] is True
+
+
 async def ended(step) -> tuple[dict, dict, dict, str | None]:
     """A 60-second game whose agent stopped after 5 s, ended by `step` (finish_match or cancel_match): the summary,
     the run's metadata once graded, what a move after the end gets, and why grading found the match void."""

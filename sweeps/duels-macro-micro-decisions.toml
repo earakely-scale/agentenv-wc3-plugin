@@ -1,0 +1,13 @@
+# The wc3agent duels of sweeps/duels-macro-micro.toml with OpenAI's Decisions API (gpt-6-luna) as wc3agent's micro
+# model in place of Haiku 4.5: Jev's kind of model, which answers each unit's menu in one pass with a probability for
+# each option, for $0.10 a million input tokens and nothing for output. DeepSeek V4.1 Flash is still the macro model.
+# Haiku's micro cost about $1.50 a duel; the cap here is $1.
+# agent-env wc3 sweep generate sweeps/duels-macro-micro-decisions.toml runs/duels-macro-micro-decisions
+# agent-env wc3 sweep run runs/duels-macro-micro-decisions --budget <dollars>
+name = "duels-macro-micro-decisions"
+template = ["mirror-human", "mirror-orc", "mirror-undead", "mirror-nightelf"]
+models = ["fireworks_ai/deepseek-v4p1-flash"]
+seeds = [1, 2]
+prompt = ""
+max_cost_usd = 1.0
+agent = {id = "wc3-macro-micro", env = {WC3_MICRO_MODEL = "decisions/gpt-6-luna"}}

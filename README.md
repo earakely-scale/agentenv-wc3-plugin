@@ -663,7 +663,7 @@ prompt is wc3agent's goal, which it keeps first in every macro request.
 | Setting | Where | Default |
 |---|---|---|
 | Macro model | the `prompt_agent` step's `model` | `anthropic/claude-sonnet-5-5` |
-| Micro model | `WC3_MICRO_MODEL` in the `deploy_agent` step's `env_vars` | `anthropic/claude-haiku-4-5` |
+| Micro model | `WC3_MICRO_MODEL` in the `deploy_agent` step's `env_vars`: any chat model, `decisions/gpt-6-luna` for OpenAI's Decisions API (Jev's kind of model, through the LiteLLM proxy's pass-through to OpenAI), `jev` for TypeSafe's Jev, `off` for none | `anthropic/claude-haiku-4-5` |
 | Stop playing once the game has cost this much (USD); `finish_match` then plays it out | `WC3_MAX_COST_USD` (a sweep sets it to `max_cost_usd`) | no cap |
 | Macro reasoning effort | `WC3_MACRO_REASONING` | `low` |
 | Game seconds between macro turns | `WC3_TURN_SECONDS` (5 or more) | `5` |

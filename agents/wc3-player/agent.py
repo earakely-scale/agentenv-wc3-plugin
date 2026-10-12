@@ -7,8 +7,10 @@ env's urn:rts session (remote.py), stepped or in realtime as the match says; at 
 Models come from agent-env's model endpoint (LITELLM_BASE_URL, LITELLM_API_KEY), priced as LiteLLM prices each call:
 - macro: the prompt_agent step's model, e.g. anthropic/claude-sonnet-5-5; WC3_MACRO_REASONING (default low). A Claude
   model's system prompt and newest message are cached, as wc3agent caches them on Anthropic's own API.
-- micro: WC3_MICRO_MODEL, default anthropic/claude-haiku-4-5, asked through the same endpoint; `jev` (or a
-  `jev-...` model name) plays TypeSafe's Jev instead, with TYPESAFE_API_KEY; `off` plays without micro.
+- micro: WC3_MICRO_MODEL, default anthropic/claude-haiku-4-5, asked through the same endpoint;
+  `decisions/gpt-6-luna` asks OpenAI's Decisions API, Jev's kind of model, through the endpoint's pass-through to
+  OpenAI, priced from its tokens (the pass-through reports no cost); `jev` (or a `jev-...` model name) plays
+  TypeSafe's Jev instead, with TYPESAFE_API_KEY; `off` plays without micro.
 WC3_TURN_SECONDS (default 5, at least 5) is the game time between macro requests; WC3_MAX_GAME_SECONDS stops
 playing that much game time from now (default: the match's time limit); WC3_MAX_COST_USD stops once the game has cost
 that much (the task's finish_match then plays it out). Its report (wc3agent's report.html) and session (calls,
@@ -62,6 +64,7 @@ RATES = {
     "anthropic/claude-sonnet-5-5": {"input": 2.0, "cached": 0.20, "cache_write": 2.5, "output": 10.0},
     "openai/gpt-6-sol": {"input": 2.0, "cached": 0.20, "cache_write": 2.0, "output": 10.0},
     "openai/gpt-6-luna": {"input": 0.10, "cached": 0.01, "cache_write": 0.125, "output": 0.50},
+    "decisions/gpt-6-luna": {"input": 0.10, "cached": 0.0, "cache_write": 0.0, "output": 0.0},
 }
 TRAJECTORY_LIMIT = 3000
 STEP_WAIT_SECONDS = 900   # longer than lockstep's stall_seconds (600): a step waits for the slowest player's move

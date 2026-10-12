@@ -27,8 +27,9 @@ a failed agent, so its game is still played out and graded. `smoke` is graded by
 - `macro-micro-quick`, `macro-micro` and `macro-micro-realtime`: the `wc3-macro-micro` agent (wc3env's wc3agent:
   a macro model plans, a micro model controls the army) plays through the env's `urn:rts` session, Haiku 4.5 for both
   models against the easy AI for 5 minutes, then Sonnet 5.5 macro with Haiku 4.5 micro against the normal AI, for 20
-  minutes stepped or 10 in realtime. `WC3_MICRO_MODEL` in the `deploy_agent` step picks the micro model (`jev` for
-  TypeSafe's Jev); the `prompt_agent` model is the macro model. `agent-env wc3 setup --agent` registers the agent.
+  minutes stepped or 10 in realtime. `WC3_MICRO_MODEL` in the `deploy_agent` step picks the micro model
+  (`decisions/gpt-6-luna` for OpenAI's Decisions API, `jev` for TypeSafe's Jev); the `prompt_agent` model is the
+  macro model. `agent-env wc3 setup --agent` registers the agent.
 
 Every task plays its match out before grading it (`finish_match`: the game runs to its end once its agents have
 stopped). Each player is a player slot of the env's lobby: `open_lobby` opens it, an `add_player_slot` step fills a
