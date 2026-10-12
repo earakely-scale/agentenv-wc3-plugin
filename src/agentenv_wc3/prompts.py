@@ -28,9 +28,9 @@ COMMANDER_HOW_TO_PLAY = (
     "(guide shows it again). The loop: get_state shows this turn's page (economy, base, heroes, army and groups, what "
     "you can do now and what not yet, the enemies you see, how your last orders went); command gives orders, one per "
     "line in the guide's language, by the names the page uses; advance lets 1-60 game seconds pass (a few in fights, "
-    "longer while the economy runs) and returns the new page. Groups fight on their own by attack-move; to direct a "
-    "fight unit by unit, call fight with the group's name and answer with choose. When the game refuses an order, the "
-    "page says why; don't repeat it unchanged.")
+    "longer while the economy runs) and returns the new page. Groups fight on their own (by attack-move, or with a "
+    "micro model where the guide says so); to direct a fight unit by unit, call fight with the group's name and "
+    "answer with choose. When the game refuses an order, the page says why; don't repeat it unchanged.")
 
 
 def for_style(prompt: str, race: str, style: str) -> str:

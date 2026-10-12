@@ -25,6 +25,7 @@ SYSTEM = (
 )
 KEEP_WORDS = ("continue", "keep", "stay idle", "wait")
 DECISIONS = "decisions/"
+DECISIONS_PRICE = 0.10   # dollars a million input tokens; output is free
 MAX_TOKENS = 1500
 RETRIES = 2
 
@@ -87,6 +88,14 @@ def post(base_url: str, path: str, api_key: str, body: dict, timeout: float) -> 
     if response.status != 200:
         raise RuntimeError(f"HTTP {response.status}: {raw.replace(api_key, '[REDACTED]')[:300]}")
     return json.loads(raw), cost
+
+
+def cost_of(model: str, usage: dict) -> float:
+    """A call's dollars: as LiteLLM reported them, else, for the Decisions API (whose pass-through reports none), its
+    input tokens at DECISIONS_PRICE."""
+    if "litellm_cost" in usage:
+        return float(usage["litellm_cost"])
+    return usage.get("input_tokens", 0) * DECISIONS_PRICE / 1e6 if model.startswith(DECISIONS) else 0.0
 
 
 def fallback(criteria: dict[str, str]) -> str:

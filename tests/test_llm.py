@@ -1,6 +1,7 @@
 """The wc3-llm agent (agents/wc3-llm): a model's tool loop over the env's MCP tools on the fake game, with the model
 answered by a stand-in that plays get_state and advance, stops once early, and says the result at GAME OVER."""
 
+import asyncio
 import importlib.util
 import json
 import sys
@@ -8,8 +9,10 @@ from pathlib import Path
 
 import httpx
 import pytest
-from test_steps import deployed
+from test_steps import deployed, fill_and_close, open_match
 
+from agentenv_wc3 import commander as commander_module
+from agentenv_wc3.commander import CommanderEnv
 from agentenv_wc3.server import WC3Env
 
 pytestmark = pytest.mark.anyio
@@ -63,6 +66,46 @@ async def test_a_model_plays_the_game_through_the_tools(env_vars):
     first = sent[0]
     assert first[0]["content"][0]["cache_control"] == {"type": "ephemeral"}   # the system prompt
     assert first[-1]["content"][0]["cache_control"] == {"type": "ephemeral"}   # and the newest message
+
+
+async def test_with_a_micro_model_it_plays_each_advance_a_second_at_a_time_and_answers_the_micro(env_vars,
+                                                                                                 license_dir,
+                                                                                                 monkeypatch):
+    agent, asked = llm(), []
+    turns = iter([calling("get_state", 1), calling("advance", 2, seconds=3), {"content": "Done."}])
+
+    async def complete(http, base, key, model, chat, tools):
+        return next(turns), {}, 0.0
+
+    def answer(payload, *, base_url, api_key, model, timeout=30.0):
+        asked.append((payload, model))
+        return {"answers": {}, "usage": {"input_tokens": 2000, "output_tokens": 0}}, {}
+
+    agent.complete = complete
+    monkeypatch.setattr(agent.choices, "answer", answer)
+    env = CommanderEnv()
+    async with deployed(env) as record:
+        await fill_and_close(await open_match(record, time_limit_seconds=60))
+        url = record.environment_url + "/players/0/mcp"
+        player = agent.Player("fireworks_ai/deepseek-v4p1-flash", {"url": url},
+                              {**ENDPOINT, "WC3_MICRO_MODEL": "decisions/gpt-6-luna"}, 3)
+        commander, got = env.commanders[0], []
+
+        async def wc3agent_asks():   # what wc3agent's micro does once a group fights: ask, and wait for the answer
+            while commander.inbox is None:
+                await asyncio.sleep(0.01)
+            got.append(await asyncio.to_thread(commander_module.timed_call, {"state": {}, "questions": {}},
+                                               commander.micro.key, {}))
+
+        asking = asyncio.create_task(wc3agent_asks())
+        await player.play("Win.")
+        await asyncio.wait_for(asking, 5)
+    pages = [m["content"] for m in player.transcript if m["role"] == "tool"]
+    assert pages[1].startswith("Advanced 0:00 → 0:03.") and env.stats["advances"] == 3
+    assert got == [{"answers": {}, "usage": {"input_tokens": 2000, "output_tokens": 0}}]
+    assert asked == [({"state": {}, "questions": {}}, "decisions/gpt-6-luna")]
+    assert player.stats["micro_calls"] == 1 and player.stats["micro_cost_usd"] == pytest.approx(0.0002)
+    assert "YOUR AGENT'S MICRO MODEL" in pages[0]
 
 
 async def test_the_spectators_see_its_model_and_plans(env_vars):

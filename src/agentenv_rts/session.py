@@ -6,6 +6,9 @@ session, rather than through MCP tools an LLM reads. The env keeps the game; the
 - `urn:rts:step/v1` {"actions": {slot: [action]}, "ms"} → {"observations", "done", "rejected": {slot: [...]},
   "placements": {slot: [...]}, "elapsed_ms"}
 - `urn:rts:debug/v1` {"op", "args"} → the game's debug op result; an env may refuse ops it doesn't allow
+- `urn:rts:micro/v1` {"answers": {question id: Jev-shaped response}} → {"questions": [{"id", "request"}]}: where an
+  env asks a player's own agent its fast unit-level questions (Jev's `{state, questions}`) instead of a model, as
+  the commander style does; the first call turns that on, and each call answers some and lists those still waiting
 - `urn:rts:note/v1` {"slot", "kind", "text", "data"} → {} : what a player tells the spectators. `plan` is its current
   plan in a sentence or two, `player` names it (text: "Claude Sonnet 5.5 + Haiku 4.5"), `stats` gives its running
   costs (data: {"cost_usd", "decisions", "tokens"})
@@ -28,6 +31,7 @@ DEBUG = "urn:rts:debug/v1"
 NOTE = "urn:rts:note/v1"
 NOTE_KINDS = ("plan", "player", "stats")
 FILE = "urn:rts:file/v1"
+MICRO = "urn:rts:micro/v1"
 CARD_PATH = "/.well-known/agent-env.json"
 
 
@@ -91,6 +95,10 @@ class RemoteSession:
         """Leave a file with the match (its agent's report, say), which the match's files then keep."""
         return self.call(FILE, {"name": name, "base64": base64.b64encode(content).decode(),
                                 "content_type": content_type})
+
+    def micro(self, answers: dict[str, dict] | None = None) -> list[dict]:
+        """Answer the env's micro questions by id, and get those still waiting: [{"id", "request"}]."""
+        return self.call(MICRO, {"answers": answers or {}})["questions"]
 
     def call(self, uri: str, params: dict) -> dict:
         endpoint = self.endpoints().get(uri)

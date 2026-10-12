@@ -8,6 +8,12 @@ last KEEP are trimmed, and the system prompt and the newest message are marked f
 for its history once (Anthropic models through LiteLLM; other providers ignore the marks). Spectators see its model
 as its name, what it writes between tool calls as its plan, and its running cost (urn:rts:note/v1). With
 WC3_MAX_COST_USD it stops playing once a game has cost that much (the task's finish_match then plays the game out).
+
+With WC3_MICRO_MODEL (`decisions/gpt-6-luna`, OpenAI's Decisions API, or any chat model) it also answers the env's
+micro questions (urn:rts:micro/v1), where the env asks them, as the commander style does: wc3agent's micro then
+asks it, for each fighting group, what it would ask Jev. It plays each of the model's advances a game second at a
+time, answering the questions waiting after each; the model reads the page of the last second. The micro's spend
+counts toward the cost cap.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 
 import httpx
 from agentenv_protocol.a2a_agent import (
@@ -33,6 +40,7 @@ from agentenv_protocol.a2a_agent import (
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from agentenv_rts import choices
 from agentenv_rts.session import RemoteSession, SessionError
 from agentenv_rts.timeline import model_name
 
@@ -51,6 +59,7 @@ MODEL_SECONDS = 420   # one model turn, long reasoning included; a call that han
 STEP_WAIT_SECONDS = 900   # a tool call; longer than lockstep's stall_seconds (600), which an advance can wait out
 TRAJECTORY_LIMIT = 2000
 TRANSCRIPT = "wc3-llm-transcript.json"   # every message untrimmed, left with the match's agent_files
+ADVANCED = re.compile(r"^Advanced (\S+) → ")
 
 
 class LLMConfig(AgentConfig):
@@ -129,6 +138,9 @@ class Player:
         self.session = RemoteSession(server["url"].rstrip("/").removesuffix("/mcp"), headers=server.get("headers"))
         self.stats = {"turns": 0, "tool_calls": 0, "nudges": 0, "input_tokens": 0, "output_tokens": 0,
                       "cached_tokens": 0, "cost_usd": 0.0, "stopped_at_cost_cap": False}
+        self.micro_model = environ.get("WC3_MICRO_MODEL") or None
+        if self.micro_model:
+            self.stats.update(micro_model=self.micro_model, micro_calls=0, micro_cost_usd=0.0)
         self.chat: list[dict] = []
         self.transcript: list[dict] = []   # copies: trim shortens the chat's own messages
         self.reply, self.named = "", False
@@ -175,6 +187,12 @@ class Player:
                 ClientSession(read, write) as mcp, httpx.AsyncClient(timeout=model_timeout) as http:
             await mcp.initialize()
             tools = tools_of((await mcp.list_tools()).tools)
+            if self.micro_model:
+                try:   # asks the env for its micro questions from now on, before the model reads its guide
+                    await asyncio.to_thread(self.session.micro)
+                except SessionError as e:
+                    log.warning("no micro here, the model plays alone: %s", e)
+                    self.micro_model = None
             idle = 0   # replies in a row without a tool call
             while self.stats["turns"] < self.max_turns:
                 if self.stats["cost_usd"] >= self.max_cost:
@@ -206,7 +224,8 @@ class Player:
                 trim(self.chat)
                 if not self.named:   # after its first tool calls, which start the game if none has
                     self.named = True
-                    await self.note("player", model_name(self.model))
+                    await self.note("player", model_name(self.model) + (
+                        f" + {model_name(self.micro_model)}" if self.micro_model else ""))
                 await self.report()
             await self.report()
 
@@ -221,7 +240,45 @@ class Player:
             args = json.loads(function.get("arguments") or "{}")
         except ValueError as e:
             return f"Error: the arguments are not JSON ({e})"
+        if self.micro_model and function["name"] == "advance" and args.get("seconds", 5) in range(1, 61):
+            return await self.advance(mcp, args.get("seconds", 5))
         return result_text(await mcp.call_tool(function["name"], args))
+
+    async def advance(self, mcp: ClientSession, seconds: int) -> str:
+        """The model's advance, a game second at a time, with the env's micro questions answered after each: the
+        page of the last second, headed from where the advance began."""
+        first = text = ""
+        for _ in range(seconds):
+            result = await mcp.call_tool("advance", {"seconds": 1})
+            text = result_text(result)
+            if result.isError or not ADVANCED.match(text):
+                return text
+            first = first or ADVANCED.match(text)[1]
+            await self.micro()
+            if "GAME OVER" in text:
+                break
+        return ADVANCED.sub(f"Advanced {first} → ", text, count=1)
+
+    async def micro(self) -> None:
+        """Answer the env's waiting micro questions with the micro model, each in its own thread."""
+        questions = await asyncio.to_thread(self.session.micro)
+
+        def answer(question: dict) -> tuple[str, dict, float] | None:
+            try:
+                response, _ = choices.answer(question["request"], base_url=self.base, api_key=self.key,
+                                             model=self.micro_model)
+            except (RuntimeError, OSError, ValueError) as e:
+                log.warning("micro question %s: %s", question["id"], e)
+                return None
+            return question["id"], response, choices.cost_of(self.micro_model, response.get("usage") or {})
+
+        answered = [a for a in await asyncio.gather(*(asyncio.to_thread(answer, q) for q in questions)) if a]
+        for _, _, cost in answered:
+            self.stats["micro_calls"] += 1
+            self.stats["micro_cost_usd"] += cost
+            self.stats["cost_usd"] += cost
+        if answered:
+            await asyncio.to_thread(self.session.micro, {qid: response for qid, response, _ in answered})
 
     def count(self, usage: dict, cost: float) -> None:
         self.stats["turns"] += 1

@@ -4,17 +4,22 @@ id, a commander reads wc3agent's turn page (named units, what it can do now and 
 went), writes orders in wc3agent's language (`build peasant1 Farm`, `group army footman1 footman2 attack at X Y:
 take camp 3`) and lets code act between its turns: wc3agent's reflexes (creep escape, loot, regrouping stragglers,
 idle fighters joining the army, skill points, gold workers), and Warcraft's own attack-move for its groups, unless
-it takes a fight over with wc3agent's unit menus (`fight`, `choose`). The game, clock, staging, grading and
-recording are the raw style's: only the player's side differs."""
+it takes a fight over with wc3agent's unit menus (`fight`, `choose`). A player's agent may also answer wc3agent's
+micro questions itself, with a fast model of its own (urn:rts:micro/v1): wc3agent's micro then asks it, between the
+game seconds of each advance, what it would ask Jev, and its groups fight as wc3agent's do. The env calls no model.
+The game, clock, staging, grading and recording are the raw style's: only the player's side differs."""
 
 from __future__ import annotations
 
+import itertools
 import threading
+import time
+import weakref
 from functools import partial
 from pathlib import Path
 from typing import Annotated
 
-from agentenv_protocol import tool
+from agentenv_protocol import extension, tool
 from pydantic import Field
 from wc3agent.agent import Agent
 from wc3agent.game.abilities import describe_abilities
@@ -23,9 +28,12 @@ from wc3agent.game.featurize import describe, system_prompt
 from wc3agent.game.mapinfo import MapInfo
 from wc3agent.game.orders import Orders
 from wc3agent.macro.memory import MacroMemory
+from wc3agent.micro import agent as micro_agent
 from wc3agent.micro.agent import MicroAgent
 from wc3agent.micro.request import Menu, build_request, map_response
 from wc3env.data import MAPS, REFERENCE
+
+from agentenv_rts.session import MICRO
 
 from . import render
 from .bridge import WorkerError
@@ -43,6 +51,17 @@ seconds, then the group is back on its objective.
 THE TOOLS: get_state shows this turn's page; command takes orders, one per line, as above (lines that are not
 orders are your plan, and ignored); advance plays the game on, 1 to 60 seconds, and returns the new page; fight and
 choose direct a group's fight; lookup gives any type's stats; guide shows this guide again."""
+AGENT_MICRO = """\
+IN THIS ENV YOUR AGENT'S MICRO MODEL FIGHTS FOR YOUR GROUPS, as this guide says micro does: while a group fights,
+each of its units gets an action every game second, and code acts for them as above. To fight a group unit by unit
+yourself, call fight with its name: each unit's options right now, numbered; then choose a number for each unit.
+Your picks hold for a few seconds, then the micro model is back.
+
+THE TOOLS: get_state shows this turn's page; command takes orders, one per line, as above (lines that are not
+orders are your plan, and ignored); advance plays the game on, 1 to 60 seconds, and returns the new page; fight and
+choose direct a group's fight; lookup gives any type's stats; guide shows this guide again."""
+ANSWER_SECONDS = 120   # how long a micro question waits for the player's agent; the game is paused meanwhile
+INBOXES: weakref.WeakValueDictionary[str, Inbox] = weakref.WeakValueDictionary()   # a delegated micro's key → its inbox
 PAGE = {   # wc3agent's page speaks of a micro model; here code and Warcraft fight for the groups
     "GROUPS (micro owns these units until a direct order or reassignment)":
         "GROUPS (on their objectives until a direct order or reassignment; fight takes a group's fight over)",
@@ -55,6 +74,50 @@ def page_text(text: str) -> str:
     for theirs, ours in PAGE.items():
         text = text.replace(theirs, ours)
     return text
+
+
+class Inbox:
+    """One player's micro questions, asked of its agent instead of a model: wc3agent's micro submits each (a group's
+    units of one type, Jev's {state, questions}) from its thread pool, which waits here until the agent answers it
+    through urn:rts:micro/v1, or ANSWER_SECONDS pass."""
+
+    def __init__(self):
+        self.lock, self.ids = threading.Lock(), itertools.count(1)
+        self.waiting: dict[str, tuple[dict, threading.Event, list]] = {}
+
+    def ask(self, request: dict, record: dict) -> dict:
+        qid, answered, response = f"q{next(self.ids)}", threading.Event(), []
+        with self.lock:
+            self.waiting[qid] = (request, answered, response)
+        started = time.perf_counter()
+        record.update(request=request, question_id=qid)
+        if not answered.wait(ANSWER_SECONDS):
+            with self.lock:
+                self.waiting.pop(qid, None)
+            raise TimeoutError(f"the player's agent did not answer micro question {qid} in {ANSWER_SECONDS} s")
+        record.update(status=200, response=response[0], latency_ms=round((time.perf_counter() - started) * 1000, 3))
+        return response[0]
+
+    def answer(self, answers: dict[str, dict]) -> None:
+        with self.lock:
+            for qid, response in answers.items():
+                if (question := self.waiting.pop(qid, None)) is not None:
+                    question[2].append(response)
+                    question[1].set()
+
+    def pending(self) -> list[dict]:
+        with self.lock:
+            return [{"id": qid, "request": request} for qid, (request, _, _) in self.waiting.items()]
+
+
+def timed_call(request: dict, key: str, record: dict, *, jev=micro_agent.timed_call) -> dict:
+    """wc3agent's micro transport: to the player's agent when its micro is delegated (its key names an inbox), to Jev
+    otherwise."""
+    inbox = INBOXES.get(key)
+    return inbox.ask(request, record) if inbox is not None else jev(request, key, record)
+
+
+micro_agent.timed_call = timed_call
 
 
 class Commander:
@@ -73,6 +136,16 @@ class Commander:
         self.turn = 0
         self.guided = False
         self.menus: dict[str, tuple[float, list[tuple[int, Menu]]]] = {}   # group → (game time, its menus)
+        self.inbox: Inbox | None = None   # the agent's micro, once it answers (delegate)
+
+    def delegate(self) -> Inbox:
+        """The player's agent answers wc3agent's micro questions from now on: the micro asks, between the seconds of
+        each advance, and holds the actions its answers pick, as it does Jev's."""
+        if self.inbox is None:
+            self.inbox = Inbox()
+            self.micro.key = f"agent:{id(self)}"
+            INBOXES[self.micro.key] = self.inbox
+        return self.inbox
 
     def see(self, obs: dict) -> None:
         self.macro_memory.update(obs)
@@ -85,11 +158,12 @@ class Commander:
             own = obs.get("units") or []
             memory.race = memory.race or self.race
             memory.home = memory.map.home(own[0]) if own else memory.map.starts[0]
-        return system_prompt(memory) + "\n\n" + NO_MICRO
+        return system_prompt(memory) + "\n\n" + (NO_MICRO if self.inbox is None else AGENT_MICRO)
 
     def page(self, obs: dict) -> str:
         """This turn's page; the feedback it shows is told once."""
-        text = page_text(describe(self.macro_memory, obs))
+        text = describe(self.macro_memory, obs)
+        text = text if self.inbox is not None else page_text(text)
         self.macro_memory.consume()
         return text
 
@@ -189,7 +263,7 @@ class Commander:
         Agent.adopt_idle_fighters(self, obs)
         actions, turns = actions + released, turns + list(released_turns)
         micro, _ = self.micro.act(obs, self.macro_memory.control, self.macro_memory.hall, self.macro_memory.tech,
-                                  wait=True, start=not actions)
+                                  wait=self.inbox is None, start=not actions)
         return actions + micro, turns + [None] * len(micro)
 
     def submitted(self, actions: list[dict], turns: list, info: dict, at: float, obs: dict) -> None:
@@ -302,6 +376,18 @@ class CommanderEnv(WC3Env):
             return (f"Queued {len(actions)} action{'s' if len(actions) != 1 else ''} for your next advance"
                     + (":\n" + "\n".join(f"  {self._describe(a)}" for a in actions) if actions else "."))
         return await self._run(body)
+
+    @extension(MICRO, description="A player's micro questions, answered by its own agent instead of a model: "
+                                  "wc3agent's micro asks one per fighting group and unit type, in Jev's shape "
+                                  "({state, questions}), between the game seconds of each advance. Send answers by "
+                                  "question id, as Jev answers ({answers: {unit: {choice}}}), and get the questions "
+                                  "still waiting. The first call has the env ask this player's agent from then on.")
+    async def session_micro(self, answers: dict | None = None) -> dict:
+        self.stats["extension_calls"] += 1
+        player = self._session_player()
+        inbox = self._commander(player["slot"] if player is not None else self.lead).delegate()
+        inbox.answer(answers or {})
+        return {"questions": inbox.pending()}
 
     @tool()
     async def advance(self, seconds: Annotated[int, Field(ge=1, le=MAX_ADVANCE_SECONDS, description=(

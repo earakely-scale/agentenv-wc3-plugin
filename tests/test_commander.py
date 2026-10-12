@@ -1,18 +1,24 @@
 """The commander style: wc3agent's interface as MCP tools (commander.py), on wc3env's sample of a real observation;
 the entry that picks a style; setup building a style's image; sweeps generating a style's or another agent's tasks."""
 
+import asyncio
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
 import wc3env
 from agentenv_protocol.agent_env_environment import _discover_tools
 from click.testing import CliRunner
+from test_steps import deployed, fill_and_close, open_match
 from wc3agent.game.catalog import Catalog
 from wc3agent.game.mapinfo import MapInfo
 from wc3env.data import MAPS, REFERENCE
 
+from agentenv_rts.session import MICRO, RemoteSession
 from agentenv_wc3 import cli, styles, sweep
+from agentenv_wc3 import commander as commander_module
 from agentenv_wc3.commander import Commander, CommanderEnv, page_text
 from agentenv_wc3.server import WC3Env
 
@@ -74,6 +80,38 @@ def test_a_groups_fight_is_a_numbered_menu_per_unit_and_picks_become_its_actions
         commander.choose("army", {"footman1": 2}, obs)
     with pytest.raises(ValueError, match="no group 'navy'"):
         commander.fight("navy", obs)
+
+
+def test_the_players_agent_answers_the_micro_questions_in_place_of_a_model(commander, obs, monkeypatch):
+    assert commander.micro.key == "" and "IN THIS ENV THERE IS NO MICRO MODEL" in commander.guide(obs)
+    inbox = commander.delegate()
+    assert commander.delegate() is inbox and commander.micro.key.startswith("agent:")
+    assert "YOUR AGENT'S MICRO MODEL FIGHTS FOR YOUR GROUPS" in commander.guide(obs)
+    request, record, got = {"state": {"time_seconds": 3}, "questions": {}}, {}, []
+    asking = threading.Thread(target=lambda: got.append(commander_module.timed_call(request, commander.micro.key,
+                                                                                   record)))
+    asking.start()
+    while not (waiting := inbox.pending()):
+        time.sleep(0.01)
+    assert waiting == [{"id": "q1", "request": request}]
+    inbox.answer({"q1": {"answers": {}}, "q9": {"answers": {}}})   # an id no longer waiting is ignored
+    asking.join(5)
+    assert got == [{"answers": {}}] and record["question_id"] == "q1" and record["status"] == 200
+    monkeypatch.setattr(commander_module, "ANSWER_SECONDS", 0.05)
+    with pytest.raises(TimeoutError, match="did not answer micro question q2"):
+        commander_module.timed_call(request, commander.micro.key, {})
+    assert inbox.pending() == []
+    assert commander_module.timed_call(request, "", {}, jev=lambda *a: "jev") == "jev"   # an undelegated micro
+
+
+@pytest.mark.anyio
+async def test_the_micro_extension_turns_on_the_agents_micro_at_its_player_slot(env_vars, license_dir):
+    env = CommanderEnv()
+    async with deployed(env) as record:
+        await fill_and_close(await open_match(record, time_limit_seconds=60))
+        session = RemoteSession(record.environment_url + "/players/0")
+        assert MICRO in await asyncio.to_thread(session.endpoints) and env.commanders[0].inbox is None
+        assert await asyncio.to_thread(session.micro) == [] and env.commanders[0].inbox is not None
 
 
 def test_the_page_says_code_and_attack_move_fight_for_groups_not_a_micro_model():

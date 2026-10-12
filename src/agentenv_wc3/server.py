@@ -102,7 +102,7 @@ from agentenv_rts import recording as rts_recording
 from agentenv_rts.checks import OPS, known_metric
 from agentenv_rts.checks import metric as metric_of
 from agentenv_rts.lockstep import Lockstep
-from agentenv_rts.session import DEBUG, FILE, NOTE, NOTE_KINDS, OBSERVE, STEP
+from agentenv_rts.session import DEBUG, FILE, MICRO, NOTE, NOTE_KINDS, OBSERVE, STEP
 from agentenv_rts.timeline import Timeline
 
 from . import frames, metrics, refusals, render
@@ -1184,7 +1184,7 @@ class WC3Env(AgentEnvGameEnv):
         debug, note, file), both at the slot's address."""
         card = self._served_card()
         session = [e for e in card.capabilities.extensions or ()
-                   if e.uri in (OBSERVE, STEP, DEBUG, NOTE, FILE)]
+                   if e.uri in (OBSERVE, STEP, DEBUG, NOTE, FILE, MICRO)]
         return EnvironmentCard(name=f"{card.name}/{slot.player_id}",
                                additionalInterfaces=[EnvironmentInterface(url=MCP_PATH, transport=MCP_TRANSPORT)],
                                capabilities=EnvironmentCapabilities(operations=[], extensions=session))
