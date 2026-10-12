@@ -142,6 +142,19 @@ def telling(run_log, remote: RemoteSession, slot: int, made: dict):
     return SpectatorLog
 
 
+def forgetting(track_units):
+    """wc3agent's MacroMemory._track_units, which also drops from its groups a member it has never observed and
+    doesn't see now: a summoned unit (an orc Far Seer's wolves), which joins its summoner's group from the summon
+    event, and gone before any observation showed it. wc3agent would keep it in the group for good, and its macro view
+    then fails to name it (a KeyError in featurize.group_lines) every macro turn."""
+    def _track_units(self, obs):
+        track_units(self, obs)
+        here = {u["unit_id"] for u in obs["units"]}
+        for group in self.control.groups.values():
+            group["ids"] -= {uid for uid in group["ids"] if uid not in here and uid not in self.known_units}
+    return _track_units
+
+
 def playing(agent_class, goal: str, slot: int):
     """wc3agent's Agent with the task's goal when the run gives none, and its player number: observations carry
     the game's own ids, and wc3agent's macro memory takes its own to be 0."""
@@ -181,6 +194,7 @@ def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Pa
     """Play the env's game to its end with wc3agent; wc3agent's summary of it, with the files kept in the env."""
     from wc3agent import play as runner
     from wc3agent.agent import Agent
+    from wc3agent.macro.memory import MacroMemory
     from wc3agent.micro import agent as micro
     from wc3agent.models import cost
     from wc3agent.models.chat import ChatModel
@@ -195,6 +209,7 @@ def play_game(config: WC3Config, servers: dict, environ: dict[str, str], out: Pa
     base_url, key = endpoint(environ)
     cost.RATES.update(RATES)
     cost.cost = litellm_priced(cost.cost)
+    MacroMemory._track_units = forgetting(MacroMemory._track_units)
     macro = litellm_chat(ChatModel, config.model, key, base_url, environ.get("WC3_MACRO_REASONING", "low"))
     cap, made = float(environ.get("WC3_MAX_COST_USD") or "inf"), {}
     micro_model = environ.get("WC3_MICRO_MODEL") or DEFAULT_MICRO

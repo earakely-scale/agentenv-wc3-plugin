@@ -246,6 +246,17 @@ async def test_wc3agent_stops_once_the_env_decides_its_game(monkeypatch):
     assert slot.files == {"wc3agent-report.html": "text/html", "wc3agent-session.zip": "application/zip"}
 
 
+def test_a_group_member_never_observed_and_gone_leaves_the_group():
+    class Memory:
+        known_units = {1: {"unit_id": 1}, 4: {"unit_id": 4}}
+        groups = {"army": {"ids": {1, 2, 3, 4}}}
+        control = type("Control", (), {"groups": groups})
+
+    tracked = []
+    player().forgetting(lambda memory, obs: tracked.append(obs))(Memory(), {"units": [{"unit_id": 3}]})
+    assert tracked and Memory.groups["army"]["ids"] == {1, 3, 4}   # 2: summoned, never seen, gone
+
+
 def test_the_micro_transport_fills_wc3agents_record():
     sys.path.insert(0, str(PLAYER))
     from remote import chat_micro
