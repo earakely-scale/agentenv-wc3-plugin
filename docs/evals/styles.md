@@ -179,3 +179,45 @@ few to rank the two: the macro model also plays each duel differently from run t
 The first orc duel's agent stopped 21 game seconds in, on a wc3agent bug: a summoned unit (a Far Seer's wolf) gone
 before any observation showed it stays in its group, and wc3agent's macro view then fails naming it every turn. The
 agent now drops such members, and the table has the orc duel replayed with it ($0.09 lost with the crash).
+
+## The commander style with the Decisions API as the agent's micro model
+
+Played on 2026-10-12. Sweep [`duels-commander-decisions`](../../sweeps/duels-commander-decisions.toml): the 6 duels
+above in the commander style, with DeepSeek V4.1 Flash, capped at $0.50 a duel. Its groups were fought by wc3agent's
+micro with the Decisions API (`gpt-6-luna`) as the micro model. The env still calls no model: `wc3-llm`, given
+`WC3_MICRO_MODEL=decisions/gpt-6-luna`, turns on the env's micro questions (`urn:rts:micro/v1`) and plays each of the
+model's advances a game second at a time. After each second it answers the questions wc3agent's micro asked, the
+ones it would ask Jev: one per fighting group and unit type. Beside it, the same spec without the micro model played
+the same duels as a baseline, `duels-commander-nomicro`, where code and Warcraft's attack-move fight for the groups.
+Both were played side by side. The older commander duels above came before `wc3-llm`'s fix for DeepSeek's empty
+turns, so they aren't the baseline.
+
+| Duel | No micro | Decisions micro | Units killed | Game seconds | Cost, no micro / micro (of it the micro) |
+|---|---|---|---|---|---|
+| human, seed 1 | won | won | 19 / 16 | 100 / 89 | $0.29 / $0.36 ($0.11) |
+| orc, seed 1 | won | won | 16 / 14 | 68 / 65 | $0.33 / $0.27 ($0.09) |
+| undead, seed 1 | won | won | 10 / 17 | 48 / 67 | $0.15 / $0.24 ($0.08) |
+| night elf, seed 1 | won | lost | 9 / 11 | 39 / 65 | $0.06 / $0.29 ($0.08) |
+| human, seed 2 | drawn | won | 14 / 21 | 150 / 93 | $0.44 / $0.35 ($0.09) |
+| night elf, seed 2 | won | lost | 9 / 7 | 39 / 74 | $0.08 / $0.21 ($0.07) |
+| **points** | **5.5 of 6** | **4 of 6** | | | **$0.23 / $0.29 a duel** |
+
+**The micro ran end to end, for about a quarter of the cost.** The agent answered 140 to 209 micro questions a duel,
+for $0.07 to $0.11, about $0.0005 a question. Every win came after a fight (14 to 21 units killed with the micro).
+
+**It didn't help in these six.** It won the human duel that attack-move drew at the time limit, and lost both night
+elf duels that attack-move won in 39 game seconds. In night elf seed 1 without the micro, the army's strength stayed
+near 1,600 while the enemy's fell from 1,507 to 754. With it, the army's fell from 1,843 to 265 over a minute while
+the enemy's only fell from 1,617 to 731; the last pages show the group "awaiting micro reply" rather than "on
+attack-move".
+
+Two things differ from wc3agent's own run above, where the same micro model won all 6:
+- **The macro model fights too.** DeepSeek called `fight` and `choose` on most turns in both runs. Its picks hold
+  its units for a few seconds, so its picks and the micro's take turns over the same units.
+- **Nothing is under the micro.** Without it, every group fights on attack-move. With it, a unit waiting on its
+  question keeps its last order.
+
+Six duels are too few to tell these apart from the macro model's own variation: the night elf seed 1 duel with the
+micro met the enemy army 4 seconds earlier. The commander keeps none of the micro's records (its picks, and which of
+them the game took), so the run can't show which of the two lost the night elf duels. Keeping them with the match's
+files is the next step.
