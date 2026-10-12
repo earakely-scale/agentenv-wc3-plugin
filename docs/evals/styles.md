@@ -18,7 +18,8 @@ each with the raw sweep's models, caps and seeds, except where said.
 In short: the commander style lifts the weaker models in the drills (Haiku passes 9 of 25 against 3, GPT-5.4 mini 7
 against 2) and keeps every model in a ladder game longer, but it doesn't fight better. In the duels GPT-5.4 mini goes
 from 0 of 8 to 5 of 8 by attack-moving as Warcraft does. wc3agent, the only style with a model for the fights, wins 4
-of its 6 duels, at 14 to 26 times the cost of DeepSeek's commander and raw duels.
+of its 6 duels, at 14 to 26 times the cost of DeepSeek's commander and raw duels. With OpenAI's Decisions API as its
+micro model in place of Haiku, it [won all 6, at $0.20 a duel](#wc3agent-with-the-decisions-api-as-its-micro-model).
 
 ## Drills
 
@@ -144,3 +145,37 @@ moves a column by 17 points.
 The four seed-1 duels were played before a fix to the agent. wc3agent then kept running after the env decided a duel,
 until the task's 30-minute timeout, so their reports and transcripts were not kept. The env decides the duel, so
 their grades stand. The two seed-2 duels have both.
+
+## wc3agent with the Decisions API as its micro model
+
+Played on 2026-10-12. Sweep [`duels-macro-micro-decisions`](../../sweeps/duels-macro-micro-decisions.toml): the same 6
+duels with DeepSeek V4.1 Flash as the macro model, and OpenAI's Decisions API (`gpt-6-luna`) as the micro model in
+place of Haiku 4.5. The Decisions API is Jev's kind of model: it answers each unit's menu in one pass, with a
+probability for each option, and writes no text, for $0.10 a million input tokens and nothing for output. Agent
+`wc3-macro-micro` takes it as `WC3_MICRO_MODEL=decisions/gpt-6-luna`, through the LiteLLM proxy's pass-through to
+OpenAI. The cap was $1 a duel; $1.21 of model spend in all.
+
+| Duel | Haiku micro | Decisions micro | Units killed, Haiku / Decisions | Cost, Haiku / Decisions |
+|---|---|---|---|---|
+| human, seed 1 | lost | won | 7 / 15 | $1.77 / $0.20 |
+| orc, seed 1 | won | won | 26 / 20 | $2.12 / $0.26 |
+| undead, seed 1 | won | won | 13 / 18 | $2.14 / $0.23 |
+| night elf, seed 1 | won | won | 13 / 13 | $2.04 / $0.15 |
+| human, seed 2 | lost | won | 8 / 20 | $1.48 / $0.22 |
+| night elf, seed 2 | won | won | 12 / 13 | $1.53 / $0.15 |
+| **won** | **4 of 6** | **6 of 6** | | **$1.85 / $0.20 a duel** |
+
+**The micro model was nearly all of wc3agent's cost, and the Decisions API cuts it about tenfold.** With Haiku, the
+micro calls cost $1.46 and $1.52 in the two duels whose sessions were kept, against $0.014 and $0.021 for the macro
+model. With the Decisions API they cost $0.13 to $0.25 a duel, and the macro model $0.008 to $0.019. A micro call took
+0.22 s at the median, against about 1.2 s for Haiku, and the agent made more of them: 300 to 460 a duel.
+
+**It won both human duels Haiku lost, by fighting.** It killed 15 and 20 units there, against Haiku's 7 and 8. Every
+win came after a fight (13 to 20 units killed, 48 to 85 game seconds), none from razing the Great Hall. Replayed on 30
+of Haiku's recorded micro calls, the Decisions API chose the same option for 38 of 44 units; where it chose
+otherwise, it cast a spell (Roar, Mana Burn, Faerie Fire, Heal) where Haiku kept attacking. Six duels are still too
+few to rank the two: the macro model also plays each duel differently from run to run.
+
+The first orc duel's agent stopped 21 game seconds in, on a wc3agent bug: a summoned unit (a Far Seer's wolf) gone
+before any observation showed it stays in its group, and wc3agent's macro view then fails naming it every turn. The
+agent now drops such members, and the table has the orc duel replayed with it ($0.09 lost with the crash).
