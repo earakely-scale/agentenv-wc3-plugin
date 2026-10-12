@@ -202,14 +202,14 @@ turns, so they aren't the baseline.
 | night elf, seed 2 | won | lost | 9 / 7 | 39 / 74 | $0.08 / $0.21 ($0.07) |
 | **points** | **5.5 of 6** | **4 of 6** | | | **$0.23 / $0.29 a duel** |
 
-**The micro ran end to end, for about a quarter of the cost.** The agent answered 140 to 209 micro questions a duel,
+**The micro ran end to end, for 30% of the cost.** The agent answered 140 to 209 micro questions a duel,
 for $0.07 to $0.11, about $0.0005 a question. Every win came after a fight (14 to 21 units killed with the micro).
 
 **It didn't help in these six.** It won the human duel that attack-move drew at the time limit, and lost both night
 elf duels that attack-move won in 39 game seconds. In night elf seed 1 without the micro, the army's strength stayed
 near 1,600 while the enemy's fell from 1,507 to 754. With it, the army's fell from 1,843 to 265 over a minute while
-the enemy's only fell from 1,617 to 731; the last pages show the group "awaiting micro reply" rather than "on
-attack-move".
+the enemy's only fell from 1,617 to 731; a late page shows the group "awaiting micro reply" where the other
+shows "on attack-move".
 
 Two things differ from wc3agent's own run above, where the same micro model won all 6:
 - **The macro model fights too.** DeepSeek called `fight` and `choose` on most turns in both runs. Its picks hold
